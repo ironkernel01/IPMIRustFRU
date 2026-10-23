@@ -1,0 +1,12 @@
+.scratch/
+target/
+tools/**/.venv/
+__pycache__/
+
+# Licensed, vendor and third-party inputs: never committed (owner directive 10-23-2026)
+References/
+
+# Owner directive 10-23-2026: kept local, never committed
+Documentation/captured_sdr.md
+Documentation/product.md
+vectors/sbc_ab.vec

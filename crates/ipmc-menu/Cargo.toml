@@ -1,0 +1,7 @@
+[package]
+name = "ipmc-menu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ipmc-defs = { path = "../ipmc-defs" }

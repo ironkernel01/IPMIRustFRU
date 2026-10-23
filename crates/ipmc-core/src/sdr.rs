@@ -1,0 +1,571 @@
+//! sdr.rs - the Device SDR repository of this IPMC and its reservation state.
+//!
+//! Eight records, built once from the IPMC_SDR_*_NAME defines and the IPMB address:
+//! one type 02h compact sensor record for each mandatory sensor 0..6 (VITA 46.11 Table 10.2-1)
+//! and one type 12h management controller device locator record (VITA 46.11 Rule 6.2-7). Record
+//! IDs run 0..=7 in that order, so the locator record is the last one and its ID is 7.
+//!
+//! Layouts are from IPMI v2.0 rev 1.1 (E7 markup): Table 43-2 (type 02h), Table 43-8 (type 12h),
+//! section 43.15 (type/length byte); byte numbers below are 0-based from the first byte of the
+//! record, so Table 43-2 "byte 6" is index 5. The captured SBC IPMC (vectors/sbc_ab.vec) is the
+//! second oracle; every place this file differs from its records is listed here:
+//!
+//! - Entity instance 60h (device-relative, Rule 6.4.3-5); the capture has 00h.
+//! - Sensor initialization 01h (scanning on at power-up, events off) and capabilities 43h (auto
+//!   re-arm, no hysteresis, no thresholds, no events from the sensor: a Tier-1 IPMC generates
+//!   none, Rule 7-4); the capture has 00h and 68h, whose threshold-access field 10b is reserved.
+//! - Assertion and deassertion event masks 0000h (no events) and the reading mask LS byte first
+//!   (Table 43-2: "LS byte first"); the capture writes the masks MS byte first and the reading
+//!   mask 0000h.
+//! - Units 1 is C0h (Table 43-2: bits 7:6 "write as 11b"), share count 1; the capture has 00h and 0.
+//! - The record length byte counts exactly the bytes that follow (27 + N for a compact record,
+//!   11 + N for the locator); the capture's compact records carry two extra 00h bytes after the
+//!   ID string, its locator record one, and the length byte counts them.
+//! - The type 12h record: both follow the Table 43-8 layout (three reserved bytes before the
+//!   entity ID); ours has global initialization 01b (events off), device capabilities 0Bh and
+//!   entity instance 60h where the capture has 00h, 3Dh and 00h.
+
+use crate::fru_state::State;
+use crate::identity::DEVICE_IDENTITY;
+use crate::sensor::{
+    EVENT_TYPE_LIMIT, EVENT_TYPE_PREDICTIVE_FAILURE, EVENT_TYPE_SENSOR_SPECIFIC, EVENT_TYPE_STATE,
+    SENSOR_FRU_HEALTH, SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE,
+    SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS, SENSOR_SYSTEM_IPMB_LINK,
+    SENSOR_TYPE_FRU_HEALTH, SENSOR_TYPE_FRU_STATE, SENSOR_TYPE_FRU_TEMPERATURE,
+    SENSOR_TYPE_FRU_VOLTAGE, SENSOR_TYPE_PAYLOAD_TEST_RESULTS, SENSOR_TYPE_PAYLOAD_TEST_STATUS,
+    SENSOR_TYPE_SYSTEM_IPMB_LINK, TEMP_FLAG_LC, TEMP_FLAG_LNC, TEMP_FLAG_UC, TEMP_FLAG_UNC,
+    TEMP_FLAG_UNR,
+};
+use ipmc_wire::Builder;
+
+/// SENSOR_COUNT -- the mandatory sensors on FRU 0, sensor numbers 0..=6 (Table 10.2-1; sensor 7,
+/// Payload Mode, is Tier-3 only).
+pub const SENSOR_COUNT: usize = 7;
+/// RECORD_COUNT -- one compact record per sensor and the locator record.
+pub const RECORD_COUNT: usize = SENSOR_COUNT + 1;
+/// NO_NEXT_RECORD -- the "no next record" value of Get Device SDR (IPMI v2.0 section 33.12).
+pub const NO_NEXT_RECORD: u16 = 0xFFFF;
+
+/// SDR_VERSION -- 51h: sensor model version 1.5, BCD with the LS digit in bits 7:4 (Table 43-2).
+const SDR_VERSION: u8 = 0x51;
+/// RECORD_TYPE_COMPACT -- compact sensor record (Table 43-2).
+const RECORD_TYPE_COMPACT: u8 = 0x02;
+/// RECORD_TYPE_MC_LOCATOR -- management controller device locator record (Table 43-8).
+const RECORD_TYPE_MC_LOCATOR: u8 = 0x12;
+/// HEADER_LEN -- record ID (2 bytes), version, type, length (Table 43-2 "RECORD HEADER").
+pub const HEADER_LEN: usize = 5;
+/// ID_LEN_MAX -- the ID string is 16 bytes at most (Tables 43-2 and 43-8).
+const ID_LEN_MAX: usize = 16;
+/// COMPACT_FIXED_LEN -- bytes of a compact record before the ID string (Table 43-2: bytes 1..=32).
+const COMPACT_FIXED_LEN: usize = 32;
+/// RECORD_MAX -- the longest record: a compact record with a 16-byte ID string.
+pub const RECORD_MAX: usize = COMPACT_FIXED_LEN + ID_LEN_MAX;
+
+/// ENTITY_ID_VPX_MODULE -- Entity ID A0h, Front Loading VPX Plug-In Module (VITA Rule 6.4.3-5).
+const ENTITY_ID_VPX_MODULE: u8 = 0xA0;
+/// ENTITY_INSTANCE_DEVICE_RELATIVE -- Entity Instance 60h, the first device-relative instance
+/// (VITA Rule 6.4.3-5; section 6.4.2: IPMCs refer to themselves with device-relative instances).
+const ENTITY_INSTANCE_DEVICE_RELATIVE: u8 = 0x60;
+/// SENSOR_INIT_SCANNING_ON -- Sensor Initialization byte, bit 0: sensor scanning enabled at
+/// power-up (Table 43-2); the other bits are 0 because no init agent configures the sensors.
+const SENSOR_INIT_SCANNING_ON: u8 = 1 << 0;
+/// SENSOR_CAPS_AUTO_REARM_NO_EVENTS -- Sensor Capabilities byte: bit 6 auto re-arm, hysteresis
+/// 00b, thresholds 00b, event message control 11b = no events from the sensor (Table 43-2).
+const SENSOR_CAPS_AUTO_REARM_NO_EVENTS: u8 = (1 << 6) | 0b11;
+/// UNITS1_RESERVED -- Sensor Units 1: bits 7:6 "reserved, write as 11b", no rate, modifier or
+/// percentage (Table 43-2).
+const UNITS1_RESERVED: u8 = 0b1100_0000;
+/// SHARE_COUNT_ONE -- Table 43-2 sensor direction/instance modifier byte: share count 1, one
+/// sensor per record, no direction, numeric modifier.
+const SHARE_COUNT_ONE: u8 = 1;
+/// LOCATOR_GLOBAL_INIT -- Table 43-8 byte 8: static controller bit 5 clear (dynamic), global
+/// initialization bits 1:0 = 01b: event message generation disabled (a Tier-1 IPMC sends none).
+const LOCATOR_GLOBAL_INIT: u8 = 0b01;
+/// DEVICE_SUPPORT_SDR_BIT -- Table 43-8 byte 9 bit 1: "controller accepts Device SDR commands";
+/// the same fact as the Device Revision "provides Device SDRs" bit of Get Device ID.
+const DEVICE_SUPPORT_SDR_BIT: u8 = 1 << 1;
+/// REVISION_SDRS_SHIFT -- Get Device ID byte 3 bit 7 is "provides Device SDRs" (Table 20-2).
+const REVISION_SDRS_SHIFT: u32 = 7;
+
+/// SensorDef -- the fixed facts of one mandatory sensor (VITA Table 10.2-1 and the sections
+/// 10.2.1..10.2.7 reading layouts).
+struct SensorDef {
+    number: u8,
+    sensor_type: u8,
+    event_type: u8,
+    /// Reading mask: bit n set when state n can be returned in Get Sensor Reading byte 4.
+    reading_mask: u16,
+    name: &'static str,
+}
+
+/// Reading masks: bit n set when state n can be returned in Get Sensor Reading byte 4 (Table 43-2
+/// reading mask), written to the record LS byte first.
+///
+/// - FRU State (Table 10.2.1-1): the Current State Mask bits of the reachable states M0, M1, M4
+///   and M6, built from `fru_state::State` (0053h); M5 and M7 are never reported.
+/// - IPMB Link (Table 10.2.2-1 byte 4): the link-state values in bits 3:0 (000Fh); the 400 kHz
+///   states of bits 5:4 are not supported, the IPMB runs at 100 kHz.
+/// - Temperature (Table 10.2.5-1 byte 4): bits 5:0 except bit 2, lower non-recoverable, which this
+///   sensor never sets (`sensor::TEMP_FLAG_LNR`; 003Bh).
+/// - Health, Voltage, Payload Test Results and Status (Tables 10.2.3-1, 10.2.4-1, 10.2.6-1,
+///   10.2.7-1): bits 1:0, states 01b and 10b (0003h).
+const MASK_FRU_STATE: u16 = State::all_mask() as u16;
+const MASK_IPMB_LINK: u16 = 0x000F;
+const MASK_TEMPERATURE: u16 =
+    (TEMP_FLAG_LNC | TEMP_FLAG_LC | TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
+const MASK_TWO_STATES: u16 = 0x0003;
+
+/// SENSORS -- sensors 0..=6 in number order; the record ID of a sensor equals its number.
+const SENSORS: [SensorDef; SENSOR_COUNT] = [
+    SensorDef {
+        number: SENSOR_FRU_STATE,
+        sensor_type: SENSOR_TYPE_FRU_STATE,
+        event_type: EVENT_TYPE_SENSOR_SPECIFIC,
+        reading_mask: MASK_FRU_STATE,
+        name: ipmc_defs::IPMC_SDR_FRU_STATE_NAME,
+    },
+    SensorDef {
+        number: SENSOR_SYSTEM_IPMB_LINK,
+        sensor_type: SENSOR_TYPE_SYSTEM_IPMB_LINK,
+        event_type: EVENT_TYPE_SENSOR_SPECIFIC,
+        reading_mask: MASK_IPMB_LINK,
+        name: ipmc_defs::IPMC_SDR_IPMB_LINK_NAME,
+    },
+    SensorDef {
+        number: SENSOR_FRU_HEALTH,
+        sensor_type: SENSOR_TYPE_FRU_HEALTH,
+        event_type: EVENT_TYPE_PREDICTIVE_FAILURE,
+        reading_mask: MASK_TWO_STATES,
+        name: ipmc_defs::IPMC_SDR_FRU_HEALTH_NAME,
+    },
+    SensorDef {
+        number: SENSOR_FRU_VOLTAGE,
+        sensor_type: SENSOR_TYPE_FRU_VOLTAGE,
+        event_type: EVENT_TYPE_LIMIT,
+        reading_mask: MASK_TWO_STATES,
+        name: ipmc_defs::IPMC_SDR_FRU_VOLTAGE_NAME,
+    },
+    SensorDef {
+        number: SENSOR_FRU_TEMPERATURE,
+        sensor_type: SENSOR_TYPE_FRU_TEMPERATURE,
+        event_type: EVENT_TYPE_SENSOR_SPECIFIC,
+        reading_mask: MASK_TEMPERATURE,
+        name: ipmc_defs::IPMC_SDR_FRU_TEMP_NAME,
+    },
+    SensorDef {
+        number: SENSOR_PAYLOAD_TEST_RESULTS,
+        sensor_type: SENSOR_TYPE_PAYLOAD_TEST_RESULTS,
+        event_type: EVENT_TYPE_PREDICTIVE_FAILURE,
+        reading_mask: MASK_TWO_STATES,
+        name: ipmc_defs::IPMC_SDR_PAYLOAD_RESULTS_NAME,
+    },
+    SensorDef {
+        number: SENSOR_PAYLOAD_TEST_STATUS,
+        sensor_type: SENSOR_TYPE_PAYLOAD_TEST_STATUS,
+        event_type: EVENT_TYPE_STATE,
+        reading_mask: MASK_TWO_STATES,
+        name: ipmc_defs::IPMC_SDR_PAYLOAD_STATUS_NAME,
+    },
+];
+
+/// Record -- one SDR record: its bytes and how many of them are used (`ipmc_wire::Builder`).
+pub type Record = Builder<RECORD_MAX>;
+
+/// EMPTY_RECORD -- a record with no byte used.
+const EMPTY_RECORD: Record = Builder::with_len(0);
+
+/// push_id_string -- the type/length byte and the ID string (8-bit ASCII, section 43.15):
+/// 2..=16 bytes, checked when a record is built in a const item.
+const fn push_id_string(record: &mut Record, text: &str) {
+    record.push_type_length_ascii(text, 2, ID_LEN_MAX);
+}
+
+/// start_record -- the record header: ID (LS byte first), version, type and a length placeholder.
+const fn start_record(id: u16, record_type: u8) -> Record {
+    let mut record = EMPTY_RECORD;
+    record.push_all(&id.to_le_bytes());
+    record.push(SDR_VERSION);
+    record.push(record_type);
+    record.push(0);
+    record
+}
+
+/// finish_record -- the record length byte: the bytes that follow the header (Table 43-2 byte 5).
+const fn finish_record(mut record: Record) -> Record {
+    record.bytes[HEADER_LEN - 1] = (record.len() - HEADER_LEN) as u8;
+    record
+}
+
+/// compact_record -- the type 02h record of `def` owned by the controller at `owner_address`
+/// (the 8-bit IPMB address: bits 7:1 are the 7-bit slave address, bit 0 = 0 "IPMB slave address",
+/// Table 43-2 byte 6).
+const fn compact_record(id: u16, owner_address: u8, def: &SensorDef) -> Record {
+    let mut r = start_record(id, RECORD_TYPE_COMPACT);
+    r.push(owner_address); // 5: sensor owner ID
+    r.push(0); // 6: channel 0, FRU inventory device owner LUN 0, sensor owner LUN 0
+    r.push(def.number); // 7: sensor number
+    r.push(ENTITY_ID_VPX_MODULE); // 8
+    r.push(ENTITY_INSTANCE_DEVICE_RELATIVE); // 9
+    r.push(SENSOR_INIT_SCANNING_ON); // 10
+    r.push(SENSOR_CAPS_AUTO_REARM_NO_EVENTS); // 11
+    r.push(def.sensor_type); // 12
+    r.push(def.event_type); // 13
+    r.push_all(&0u16.to_le_bytes()); // 14..=15: assertion event mask, no events
+    r.push_all(&0u16.to_le_bytes()); // 16..=17: deassertion event mask, no events
+    r.push_all(&def.reading_mask.to_le_bytes()); // 18..=19: reading mask
+    r.push(UNITS1_RESERVED); // 20: sensor units 1
+    r.push(0); // 21: base unit, none
+    r.push(0); // 22: modifier unit, none
+    r.push(SHARE_COUNT_ONE); // 23: direction, ID string modifier type, share count
+    r.push(0); // 24: entity instance sharing, ID string modifier offset
+    r.push(0); // 25: positive-going hysteresis
+    r.push(0); // 26: negative-going hysteresis
+    r.push_all(&[0, 0, 0]); // 27..=29: reserved
+    r.push(0); // 30: OEM
+    push_id_string(&mut r, def.name); // 31: type/length, then the string
+    finish_record(r)
+}
+
+/// locator_record -- the type 12h management controller device locator record (Table 43-8).
+const fn locator_record(id: u16, owner_address: u8) -> Record {
+    let capabilities = DEVICE_IDENTITY.additional_support
+        | (((DEVICE_IDENTITY.device_revision >> REVISION_SDRS_SHIFT) & 1) * DEVICE_SUPPORT_SDR_BIT);
+    let mut r = start_record(id, RECORD_TYPE_MC_LOCATOR);
+    r.push(owner_address); // 5: device slave address
+    r.push(0); // 6: channel 0 (the System IPMB)
+    r.push(LOCATOR_GLOBAL_INIT); // 7: power state notification, global initialization
+    r.push(capabilities); // 8: device capabilities, as Get Device ID reports them
+    r.push_all(&[0, 0, 0]); // 9..=11: reserved
+    r.push(ENTITY_ID_VPX_MODULE); // 12: entity ID of the FRU this device manages
+    r.push(ENTITY_INSTANCE_DEVICE_RELATIVE); // 13
+    r.push(0); // 14: OEM
+    push_id_string(&mut r, ipmc_defs::IPMC_SDR_IPMC_NAME); // 15: type/length, then the string
+    finish_record(r)
+}
+
+/// build_records -- the eight records: sensors 0..=6 as record IDs 0..=6, the locator as 7.
+const fn build_records(owner_address: u8) -> [Record; RECORD_COUNT] {
+    let mut records = [EMPTY_RECORD; RECORD_COUNT];
+    let mut i = 0;
+    while i < SENSOR_COUNT {
+        assert!(
+            SENSORS[i].number as usize == i,
+            "the sensor table is in number order"
+        );
+        records[i] = compact_record(i as u16, owner_address, &SENSORS[i]);
+        i += 1;
+    }
+    records[SENSOR_COUNT] = locator_record(SENSOR_COUNT as u16, owner_address);
+    records
+}
+
+// Builds every record once at compile time: an ID string outside 2..=16 bytes, a record past
+// RECORD_MAX or an out-of-order sensor table fails the build here.
+const _: [Record; RECORD_COUNT] = build_records(0x82);
+// ipmi_defs.h IPMC_SDR_IPMC_NAME: the locator record fits one Get Device SDR response, the
+// response data less the 2-byte next record ID (Table 35-3), so a "whole record" read works.
+const _: () = assert!(
+    locator_record(0, 0x82).len() + NO_NEXT_RECORD.to_le_bytes().len()
+        <= crate::ipmb::IPMB_RESPONSE_DATA_MAX,
+    "IPMC_SDR_IPMC_NAME is too long for the locator record to fit one Get Device SDR response"
+);
+
+/// Byte positions (0-based) of the fields `describe` reads back: the sensor number, sensor type
+/// and event/reading type of a compact record (Table 43-2 bytes 8, 13, 14), the ID string
+/// type/length byte of a compact record (byte 32) and of a locator record (Table 43-8 byte 16).
+const IDX_RECORD_TYPE: usize = 3;
+const IDX_SENSOR_NUMBER: usize = 7;
+const IDX_SENSOR_TYPE: usize = 12;
+const IDX_EVENT_TYPE: usize = 13;
+const IDX_COMPACT_ID_TL: usize = COMPACT_FIXED_LEN - 1;
+const IDX_LOCATOR_ID_TL: usize = 15;
+/// LENGTH_MASK -- type/length byte bits 4:0 hold the string length; bit 5 is reserved (section 43.15).
+const LENGTH_MASK: u8 = 0x1F;
+
+/// SensorInfo -- the sensor fields of a compact record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SensorInfo {
+    /// Sensor number.
+    pub number: u8,
+    /// Sensor type code.
+    pub sensor_type: u8,
+    /// Event/reading type code.
+    pub event_type: u8,
+}
+
+/// RecordInfo -- a record decoded for the console listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordInfo<'a> {
+    /// Record ID.
+    pub id: u16,
+    /// SDR record type (02h compact sensor, 12h management controller device locator).
+    pub record_type: u8,
+    /// Whole record length in bytes.
+    pub length: usize,
+    /// The sensor fields; None for the locator record.
+    pub sensor: Option<SensorInfo>,
+    /// The ID string bytes.
+    pub name: &'a [u8],
+}
+
+/// SdrRepository -- the records and the reservation counter.
+#[derive(Clone, Copy, Debug)]
+pub struct SdrRepository {
+    records: [Record; RECORD_COUNT],
+    /// The latest reservation ID handed out; 0 before the first Reserve Device SDR Repository.
+    reservation: u16,
+}
+
+impl SdrRepository {
+    /// new -- the repository for the controller at `owner_address` (8-bit IPMB address).
+    pub const fn new(owner_address: u8) -> SdrRepository {
+        SdrRepository {
+            records: build_records(owner_address),
+            reservation: 0,
+        }
+    }
+
+    /// record_count -- the number of records (Get Device SDR Info "SDR count").
+    pub const fn record_count(&self) -> usize {
+        RECORD_COUNT
+    }
+
+    /// sensor_count -- the number of sensors (Get Device SDR Info "sensor count").
+    pub const fn sensor_count(&self) -> usize {
+        SENSOR_COUNT
+    }
+
+    /// set_record_byte -- test hook: changes byte `index` of record `id` (no effect when either is
+    /// out of range), to build a damaged repository for the self test.
+    #[cfg(test)]
+    pub(crate) fn set_record_byte(&mut self, id: usize, index: usize, value: u8) {
+        if let Some(byte) = self
+            .records
+            .get_mut(id)
+            .and_then(|record| record.bytes.get_mut(index))
+        {
+            *byte = value;
+        }
+    }
+
+    /// locator_record_id -- the record ID of the management controller device locator record.
+    pub const fn locator_record_id(&self) -> u16 {
+        SENSOR_COUNT as u16
+    }
+
+    /// resolve -- the stored record ID a requested ID names: 0000h is the first record and FFFFh
+    /// the last (IPMI v2.0 section 33.12); None when no record has that ID.
+    pub fn resolve(&self, requested: u16) -> Option<u16> {
+        match requested {
+            0 => Some(0),
+            NO_NEXT_RECORD => Some(self.locator_record_id()),
+            id if usize::from(id) < RECORD_COUNT => Some(id),
+            _ => None,
+        }
+    }
+
+    /// record -- the bytes of record `id`.
+    pub fn record(&self, id: u16) -> Option<&[u8]> {
+        self.records
+            .get(usize::from(id))
+            .map(|record| record.as_bytes())
+    }
+
+    /// describe -- record `id` decoded: type, length, sensor fields and ID string; None when there
+    /// is no such record or its bytes are shorter than the layout (cannot happen for a built one).
+    pub fn describe(&self, id: u16) -> Option<RecordInfo<'_>> {
+        let bytes = self.record(id)?;
+        let record_type = *bytes.get(IDX_RECORD_TYPE)?;
+        let (sensor, tl_index) = if record_type == RECORD_TYPE_COMPACT {
+            let sensor = SensorInfo {
+                number: *bytes.get(IDX_SENSOR_NUMBER)?,
+                sensor_type: *bytes.get(IDX_SENSOR_TYPE)?,
+                event_type: *bytes.get(IDX_EVENT_TYPE)?,
+            };
+            (Some(sensor), IDX_COMPACT_ID_TL)
+        } else {
+            (None, IDX_LOCATOR_ID_TL)
+        };
+        let name_len = usize::from(*bytes.get(tl_index)? & LENGTH_MASK);
+        Some(RecordInfo {
+            id,
+            record_type,
+            length: bytes.len(),
+            sensor,
+            name: bytes.get(tl_index + 1..tl_index + 1 + name_len)?,
+        })
+    }
+
+    /// next_id -- the record ID after `id`, NO_NEXT_RECORD (FFFFh) after the last.
+    pub fn next_id(&self, id: u16) -> u16 {
+        match id.checked_add(1) {
+            Some(next) if usize::from(next) < RECORD_COUNT => next,
+            _ => NO_NEXT_RECORD,
+        }
+    }
+
+    /// reserve -- hands out the next reservation ID: it increments and skips 0, which is reserved
+    /// (IPMI v2.0 Table 35-4: "0000h reserved"). Any earlier ID stops being valid.
+    pub fn reserve(&mut self) -> u16 {
+        self.reservation = self.reservation.checked_add(1).unwrap_or(1);
+        self.reservation
+    }
+
+    /// reservation_valid -- `id` is the current reservation.
+    pub fn reservation_valid(&self, id: u16) -> bool {
+        id != 0 && id == self.reservation
+    }
+
+    /// reservation -- the latest reservation ID handed out (0 = none yet).
+    pub fn reservation(&self) -> u16 {
+        self.reservation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OWNER: u8 = 0x82;
+
+    /// Sensor 0, hand-written from Table 43-2 for "FRU State" (9 characters): ID 0000h, version
+    /// 51h, type 02h, length 27 + 9 = 24h; owner 82h; LUN 00h; sensor 00h; entity A0h, 60h; init
+    /// 01h; capabilities 43h; type F0h; event/reading type 6Fh; masks 0000h, 0000h, 0053h (LS byte
+    /// first); units 1 C0h, 00h, 00h; share count 01h; 00h; hysteresis 00h, 00h; reserved 00h x 3;
+    /// OEM 00h; type/length C9h; "FRU State".
+    const SENSOR0: [u8; 41] = [
+        0x00, 0x00, 0x51, 0x02, 0x24, 0x82, 0x00, 0x00, 0xA0, 0x60, 0x01, 0x43, 0xF0, 0x6F, 0x00,
+        0x00, 0x00, 0x00, 0x53, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xC9, b'F', b'R', b'U', b' ', b'S', b't', b'a', b't', b'e',
+    ];
+
+    /// Locator, from Table 43-8 for "IPMC" (4 characters): ID 0007h, 51h, 12h, length 11 + 4 =
+    /// 0Fh; slave address 82h; channel 00h; global init 01h; capabilities 0Bh (sensor, device
+    /// SDRs, FRU inventory); reserved 00h x 3; entity A0h, 60h; OEM 00h; C4h; "IPMC".
+    const LOCATOR: [u8; 20] = [
+        0x07, 0x00, 0x51, 0x12, 0x0F, 0x82, 0x00, 0x01, 0x0B, 0x00, 0x00, 0x00, 0xA0, 0x60, 0x00,
+        0xC4, b'I', b'P', b'M', b'C',
+    ];
+
+    fn repo() -> SdrRepository {
+        SdrRepository::new(OWNER)
+    }
+
+    #[test]
+    fn sensor_zero_and_the_locator_are_byte_exact() {
+        let r = repo();
+        assert_eq!(r.record(0).unwrap(), &SENSOR0);
+        assert_eq!(r.record(7).unwrap(), &LOCATOR);
+    }
+
+    #[test]
+    fn records_parse_back_field_by_field() {
+        // (sensor number, type, event/reading type, reading mask, ID string) from VITA Table
+        // 10.2-1 and the reading tables, written out here, not read from SENSORS.
+        let expect: [(u8, u8, u8, u16, &str); 7] = [
+            (0, 0xF0, 0x6F, 0x0053, "FRU State"),
+            (1, 0xF1, 0x6F, 0x000F, "IPMB Link"),
+            (2, 0xF2, 0x04, 0x0003, "FRU Health"),
+            (3, 0x02, 0x05, 0x0003, "FRU Voltage"),
+            (4, 0xF3, 0x6F, 0x003B, "FRU Temperature"),
+            (5, 0xF4, 0x04, 0x0003, "Payload Results"),
+            (6, 0xF5, 0x03, 0x0003, "Payload Status"),
+        ];
+        let r = repo();
+        for (id, (number, ty, ev, mask, name)) in expect.into_iter().enumerate() {
+            let b = r.record(id as u16).unwrap();
+            assert_eq!(u16::from_le_bytes([b[0], b[1]]), id as u16, "record ID");
+            assert_eq!((b[2], b[3]), (0x51, 0x02));
+            assert_eq!(
+                usize::from(b[4]),
+                b.len() - 5,
+                "length byte counts the rest"
+            );
+            assert_eq!(usize::from(b[4]), 27 + name.len());
+            assert_eq!(b[5], OWNER, "sensor owner is our IPMB address");
+            assert_eq!((b[6], b[7]), (0, number));
+            assert_eq!((b[8], b[9]), (0xA0, 0x60));
+            assert_eq!((b[10], b[11]), (0x01, 0x43));
+            assert_eq!((b[12], b[13]), (ty, ev));
+            assert_eq!(&b[14..18], &[0, 0, 0, 0], "no event masks");
+            assert_eq!(u16::from_le_bytes([b[18], b[19]]), mask);
+            assert_eq!(&b[20..23], &[0xC0, 0, 0]);
+            assert_eq!(b[23], 1);
+            assert_eq!(&b[24..31], &[0; 7]);
+            assert_eq!(b[31], 0xC0 | name.len() as u8);
+            assert_eq!(&b[32..], name.as_bytes());
+        }
+    }
+
+    #[test]
+    fn record_ids_are_consecutive_from_zero_and_chain_ends_at_ffff() {
+        let r = repo();
+        assert_eq!((r.record_count(), r.sensor_count()), (8, 7));
+        let mut id = r.resolve(0).unwrap();
+        let mut seen = vec![id];
+        loop {
+            let next = r.next_id(id);
+            if next == NO_NEXT_RECORD {
+                break;
+            }
+            seen.push(next);
+            id = next;
+        }
+        assert_eq!(seen, (0..8).collect::<Vec<u16>>());
+        assert_eq!(r.locator_record_id(), 7);
+    }
+
+    #[test]
+    fn resolve_maps_first_and_last_and_rejects_unknown_ids() {
+        let r = repo();
+        assert_eq!(r.resolve(0x0000), Some(0));
+        assert_eq!(r.resolve(0xFFFF), Some(7));
+        assert_eq!(r.resolve(5), Some(5));
+        assert_eq!(r.resolve(8), None);
+        assert_eq!(r.resolve(0x0100), None);
+        assert!(r.record(8).is_none());
+    }
+
+    #[test]
+    fn reservation_increments_skips_zero_on_wrap_and_invalidates_the_old_id() {
+        let mut r = repo();
+        assert_eq!(r.reservation(), 0);
+        assert!(!r.reservation_valid(0), "0000h is never a reservation");
+        assert_eq!(r.reserve(), 1);
+        assert!(r.reservation_valid(1));
+        assert_eq!(r.reserve(), 2);
+        assert!(!r.reservation_valid(1), "the earlier ID is stale");
+        assert!(r.reservation_valid(2));
+        r.reservation = u16::MAX;
+        assert_eq!(r.reserve(), 1, "wraps past 0");
+        assert!(!r.reservation_valid(0));
+    }
+
+    #[test]
+    fn describe_reads_the_fields_back() {
+        let r = repo();
+        let info = r.describe(4).unwrap();
+        assert_eq!((info.id, info.record_type, info.length), (4, 0x02, 47));
+        assert_eq!(
+            info.sensor,
+            Some(SensorInfo {
+                number: 4,
+                sensor_type: 0xF3,
+                event_type: 0x6F
+            })
+        );
+        assert_eq!(info.name, b"FRU Temperature");
+        let locator = r.describe(7).unwrap();
+        assert_eq!((locator.record_type, locator.length), (0x12, 20));
+        assert_eq!((locator.sensor, locator.name), (None, &b"IPMC"[..]));
+        assert!(r.describe(8).is_none());
+    }
+
+    #[test]
+    fn owner_address_follows_the_ipmb_address() {
+        let r = SdrRepository::new(0x86);
+        for id in 0..RECORD_COUNT as u16 {
+            assert_eq!(r.record(id).unwrap()[5], 0x86);
+        }
+    }
+}

@@ -1,0 +1,8 @@
+[package]
+name = "ipmc-fru"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-wire = { path = "../ipmc-wire" }

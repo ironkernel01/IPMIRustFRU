@@ -1,0 +1,19 @@
+[package]
+name = "ipmc-sensors"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Additive: pulls the PAC and enables src/drivers/stm32f401/ (the ADC1, GPIO and port owners). Without it the crate
+# builds on the host with the simulation backends only.
+stm32f401 = ["dep:stm32f4", "dep:cortex-m"]
+
+[dependencies]
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-core = { path = "../ipmc-core" }
+# Portability rule of the Embedded Rust Book: a driver for an external part is written once
+# against the embedded-hal bus traits (I2c, SpiDevice) and runs on any chip that implements them.
+# Version 1.0.0 is the first stable release; no default features are used.
+embedded-hal = { version = "=1.0.0", default-features = false }
+cortex-m = { version = "=0.7.10", optional = true }
+stm32f4 = { version = "=0.16.0", features = ["stm32f401"], optional = true }

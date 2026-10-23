@@ -1,0 +1,88 @@
+//! gpio.rs - the board's digital pins: the power-enable output and the four inputs.
+//! Implements `DigitalInputs` and `PowerSwitch`.
+//!
+//! The pins are the board's choice: the board support hands them in as a `GpioMap` (ipmc-nucleo-f401re
+//! bsp/board_pins.rs, listed in Documentation/nucleo_f401re_pinout.md); this module holds no
+//! board pin.
+//!
+//! Ownership: the pins are claimed through `ports` (owner name "board_io"), one handle per pin;
+//! this module never touches a port register directly. Only the groups the source switches make
+//! hardware are claimed: `init` takes a flag for the inputs and one for the power output, and a
+//! group that is not claimed is never configured or driven (a simulated power group leaves
+//! PWR_EN alone).
+
+use crate::hal::{DigitalInputs, Input, PowerSwitch, SourceError};
+
+use super::ports::{self, PinId, Pins, PortError, Pull, Speed};
+
+const OWNER: &str = "board_io";
+
+/// GpioMap -- the board's pin assignment for the digital signals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GpioMap {
+    /// PWR_EN, push-pull output, active high.
+    pub power_enable: PinId,
+    /// Pin of each input, indexed by `Input::index`; pulled-up inputs.
+    pub inputs: [PinId; Input::COUNT],
+}
+
+/// BoardIo -- the claimed pins; a slot is None when its group is not hardware.
+pub struct BoardIo {
+    pwr_en: Option<Pins>,
+    inputs: [Option<Pins>; Input::COUNT],
+}
+
+/// init -- claims and configures the pins of the hardware groups.
+///
+/// 1. `power`: the enable pin: claim, drive low and select push-pull before the pin
+///    becomes an output, so the supplies never see a glitch high (`Pins::output` orders the
+///    writes).
+/// 2. `inputs`: claim the four input pins as pulled-up inputs.
+///
+/// A group with its flag false is not touched. Fails with the first `PortError` (a pin already
+/// claimed, or a pin number above 15).
+pub fn init(map: &GpioMap, inputs: bool, power: bool) -> Result<BoardIo, PortError> {
+    let mut io = BoardIo {
+        pwr_en: None,
+        inputs: core::array::from_fn(|_| None),
+    };
+    if power {
+        let pwr_en = ports::claim_pin(OWNER, map.power_enable)?;
+        pwr_en.output(false, false, Speed::Low);
+        io.pwr_en = Some(pwr_en);
+    }
+    if inputs {
+        for (slot, pin) in io.inputs.iter_mut().zip(map.inputs.iter()) {
+            let pins = ports::claim_pin(OWNER, *pin)?;
+            pins.input(Pull::Up);
+            *slot = Some(pins);
+        }
+    }
+    Ok(io)
+}
+
+impl DigitalInputs for BoardIo {
+    fn level_high(&mut self, input: Input) -> Result<bool, SourceError> {
+        let pins = self
+            .inputs
+            .get(input.index())
+            .and_then(Option::as_ref)
+            .ok_or(SourceError::Unavailable)?;
+        Ok(pins.read() != 0)
+    }
+}
+
+impl PowerSwitch for BoardIo {
+    /// set_enable -- drives the output; `Err(Unavailable)` when the power group is not hardware.
+    fn set_enable(&mut self, on: bool) -> Result<(), SourceError> {
+        let pin = self.pwr_en.as_ref().ok_or(SourceError::Unavailable)?;
+        pin.set_all(on);
+        Ok(())
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.pwr_en
+            .as_ref()
+            .is_some_and(|pin| pin.output_levels() != 0)
+    }
+}

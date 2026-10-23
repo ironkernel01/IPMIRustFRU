@@ -1,0 +1,605 @@
+// console.rs - UART command line: the firmware's command tables and handlers on the ipmc-menu engine.
+//
+// The engine (crates/ipmc-menu) owns line editing, matching, help and the prompt; this file owns
+// the command tree and the handlers. Each handler calls the module that owns the behaviour
+// (bsp::led, bsp::uart, ipmc_core::addr).
+// Command tree (documented in crates/ipmc-menu/MenuDocumentation.md):
+//   SYS  : STATUS, RESET, VERSION      LED : ON, OFF, BLINK [HZ], AUTO, STATUS
+//   IPMB : ADDR, STATS, STATE
+//   SENSORS : SHOW, SDR, TRACE {OFF|EVENTS|ALL}     POWER : ON, OFF, CLEAR, STATUS
+//   FRU  : SHOW, DUMP {OFFSET} {COUNT}
+//   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
+//   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
+// The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
+// IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; FRU SHOW, FRU DUMP and SENSORS SDR live
+// in data_cmds.rs.
+
+use core::fmt;
+
+use cortex_m::peripheral::SCB;
+use ipmc_core::addr::AddrInfo;
+use ipmc_core::trace::Trace;
+use ipmc_menu::{
+    report_line_error, Args, CmdError, CmdResult, Command, EditEvent, Group, LineEditor, Menu,
+    MenuError, MenuOutput,
+};
+
+use crate::bsp::clock::{ClockFault, ClockInfo};
+use crate::bsp::led::{self, Shown};
+use crate::bsp::reset_cause::ResetCause;
+use crate::bsp::{systick, uart};
+use crate::data_cmds;
+use crate::ipmb_link::{self, IpmbLink};
+use crate::sensing::{self, Sensing};
+
+/// Context -- values captured at start-up that the banner and `SYS STATUS` report. This is the context
+/// value every command handler receives.
+pub struct Context {
+    reset_cause: ResetCause,
+    clock: ClockInfo,
+    clock_fault: Option<ClockFault>,
+    /// Sensor monitor and its backends; the SENSORS, POWER and SIM handlers use it.
+    pub(crate) sensing: Sensing,
+    /// IPMB link layer; the IPMB STATS and IPMB STATE handlers read it.
+    pub(crate) ipmb: &'static mut IpmbLink,
+}
+
+/// ConsoleTrace -- console sink of the trace hook, shared by the sensors and the IPMB link:
+/// one line per call, the newline becomes CR LF in `uart::print`.
+pub(crate) struct ConsoleTrace;
+
+impl Trace for ConsoleTrace {
+    fn line(&mut self, args: fmt::Arguments) {
+        out!("{}\n", args);
+    }
+}
+
+/// Menu output on the console UART. `\n` becomes CR LF inside `uart::print`.
+struct UartOut;
+
+impl MenuOutput for UartOut {
+    fn write_str(&mut self, s: &str) {
+        out!("{}", s);
+    }
+}
+
+/// Centihertz in one hertz.
+const CHZ_PER_HZ: u32 = 100;
+
+type ConsoleCommand = Command<Context>;
+
+// ---- command tables (MenuBuilder FUNCTION:COMMAND:DESCRIPTION) ----
+
+/// Top-level commands: aliases that work without entering a group.
+static TOP_COMMANDS: [ConsoleCommand; 2] = [
+    Command {
+        syntax: "STATUS",
+        help: "Alias of SYS STATUS",
+        handler: cmd_status,
+    },
+    Command {
+        syntax: "RESET",
+        help: "Alias of SYS RESET",
+        handler: cmd_reset,
+    },
+];
+
+static SYS_COMMANDS: [ConsoleCommand; 3] = [
+    Command {
+        syntax: "STATUS",
+        help: "Uptime, clocks, geographic address, LED, last reset cause",
+        handler: cmd_status,
+    },
+    Command {
+        syntax: "RESET",
+        help: "System reset",
+        handler: cmd_reset,
+    },
+    Command {
+        syntax: "VERSION",
+        help: "Firmware and core library versions",
+        handler: cmd_version,
+    },
+];
+
+static LED_COMMANDS: [ConsoleCommand; 5] = [
+    Command {
+        syntax: "ON",
+        help: "LD2 on",
+        handler: cmd_led_on,
+    },
+    Command {
+        syntax: "OFF",
+        help: "LD2 off",
+        handler: cmd_led_off,
+    },
+    Command {
+        syntax: "BLINK [HZ]",
+        help: "LD2 blink at the given rate in Hz; the limits print with LED STATUS",
+        handler: cmd_led_blink,
+    },
+    Command {
+        syntax: "AUTO",
+        help: "LD2 back to the heartbeat / IPMB activity pattern",
+        handler: cmd_led_auto,
+    },
+    Command {
+        syntax: "STATUS",
+        help: "LD2 mode, rate and the accepted blink rate limits",
+        handler: cmd_led_status,
+    },
+];
+
+static IPMB_COMMANDS: [ConsoleCommand; 3] = [
+    Command {
+        syntax: "ADDR",
+        help: "Geographic address, IPMB address, parity and NVMRO with their sources",
+        handler: cmd_ipmb_addr,
+    },
+    Command {
+        syntax: "STATS",
+        help: "Per-bus receive, error, transmit, resend and replay counters",
+        handler: ipmb_link::cmd_ipmb_stats,
+    },
+    Command {
+        syntax: "STATE",
+        help:
+            "Per-bus fitted, mode and enable state, the transmit policy and the link sensor bytes",
+        handler: ipmb_link::cmd_ipmb_state,
+    },
+];
+
+static SENSORS_COMMANDS: [ConsoleCommand; 3] = [
+    Command {
+        syntax: "SHOW",
+        help: "Rails, die temperature, inputs, power state, FRU state, Tier-1 readings and their data bytes",
+        handler: sensing::cmd_sensors_show,
+    },
+    Command {
+        syntax: "SDR",
+        help: "The Device SDR records: sensor number, type, event/reading type, ID string",
+        handler: data_cmds::cmd_sensors_sdr,
+    },
+    Command {
+        syntax: "TRACE {LEVEL}",
+        help: "Sensor trace level OFF, EVENTS (changes) or ALL (changes and samples)",
+        handler: sensing::cmd_sensors_trace,
+    },
+];
+
+static POWER_COMMANDS: [ConsoleCommand; 4] = [
+    Command {
+        syntax: "ON",
+        help: "Assert PWR_EN and wait for PGOOD",
+        handler: sensing::cmd_power_on,
+    },
+    Command {
+        syntax: "OFF",
+        help: "Release PWR_EN and clear a latched fault",
+        handler: sensing::cmd_power_off,
+    },
+    Command {
+        syntax: "CLEAR",
+        help: "Clear a latched power fault",
+        handler: sensing::cmd_power_clear,
+    },
+    Command {
+        syntax: "STATUS",
+        help: "Power state, PWR_EN, latched fault",
+        handler: sensing::cmd_power_status,
+    },
+];
+
+static SIM_COMMANDS: [ConsoleCommand; 4] = [
+    Command {
+        syntax: "RAIL {N} {MV}",
+        help: "Simulated rail N (0 = VDDA) in millivolts; no argument lists them",
+        handler: sensing::cmd_sim_rail,
+    },
+    Command {
+        syntax: "TEMP {DC}",
+        help: "Simulated die temperature in tenths of a degree C",
+        handler: sensing::cmd_sim_temp,
+    },
+    Command {
+        syntax: "FAULT {NAME} {STATE}",
+        help: "Assert (ON) or clear (OFF) a simulated input; no argument lists them",
+        handler: sensing::cmd_sim_fault,
+    },
+    Command {
+        syntax: "SHOW",
+        help: "Source of every group and the simulated values",
+        handler: sensing::cmd_sim_show,
+    },
+];
+
+static FRU_COMMANDS: [ConsoleCommand; 2] = [
+    Command {
+        syntax: "SHOW",
+        help: "FRU image decoded: common header, board and product areas, checksums",
+        handler: data_cmds::cmd_fru_show,
+    },
+    Command {
+        syntax: "DUMP {OFFSET} {COUNT}",
+        help: "Hex dump of the FRU image; default offset 0 and the rest of the area",
+        handler: data_cmds::cmd_fru_dump,
+    },
+];
+
+static GROUPS: [Group<Context>; 7] = [
+    Group {
+        name: "SYS",
+        description: "System status, reset and version",
+        commands: &SYS_COMMANDS,
+    },
+    Group {
+        name: "LED",
+        description: "LD2 control",
+        commands: &LED_COMMANDS,
+    },
+    Group {
+        name: "IPMB",
+        description: "IPMB address and bus state",
+        commands: &IPMB_COMMANDS,
+    },
+    Group {
+        name: "SENSORS",
+        description: "Voltage rails, die temperature, inputs and Tier-1 readings",
+        commands: &SENSORS_COMMANDS,
+    },
+    Group {
+        name: "POWER",
+        description: "Payload power enable",
+        commands: &POWER_COMMANDS,
+    },
+    Group {
+        name: "SIM",
+        description: "Simulated sensor inputs",
+        commands: &SIM_COMMANDS,
+    },
+    Group {
+        name: "FRU",
+        description: "FRU image and its decoded areas",
+        commands: &FRU_COMMANDS,
+    },
+];
+
+// A table fault is a build error, not a run-time surprise.
+const _: () = assert!(
+    Menu::validate_tables(&TOP_COMMANDS, &GROUPS).is_ok(),
+    "console command tables are invalid"
+);
+
+/// Console -- the console: line editor, menu and handler context.
+pub struct Console {
+    ctx: Context,
+    menu: Menu<Context>,
+    editor: LineEditor,
+}
+
+/// Centihertz printed as hertz: whole hertz alone ("50"), else two decimals ("0.01").
+struct Hz(u32);
+
+impl fmt::Display for Hz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (whole, frac) = (self.0 / CHZ_PER_HZ, self.0 % CHZ_PER_HZ);
+        if frac == 0 {
+            write!(f, "{whole}")
+        } else {
+            write!(f, "{whole}.{frac:02}")
+        }
+    }
+}
+
+/// Frequency in Hz printed as MHz with two decimals.
+struct Mhz(u32);
+
+impl fmt::Display for Mhz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let centi = (self.0 + 5_000) / 10_000;
+        write!(f, "{}.{:02} MHz", centi / 100, centi % 100)
+    }
+}
+
+impl Console {
+    /// new -- a console over the start-up values, the sensor backends and the IPMB link.
+    pub fn new(
+        reset_cause: ResetCause,
+        clock: ClockInfo,
+        clock_fault: Option<ClockFault>,
+        sensing: Sensing,
+        ipmb: &'static mut IpmbLink,
+    ) -> Self {
+        Console {
+            ctx: Context {
+                reset_cause,
+                clock,
+                clock_fault,
+                sensing,
+                ipmb,
+            },
+            menu: Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP_COMMANDS, &GROUPS),
+            editor: LineEditor::new(),
+        }
+    }
+
+    /// start_sensors -- applies the power-at-boot setting (ipmi_defs.h IPMC_POWER_AT_BOOT).
+    pub fn start_sensors(&mut self) {
+        self.ctx.sensing.start();
+    }
+
+    /// service_sensors -- takes a sensor sample when the period has elapsed, and hands every new
+    /// sample (also one a console command took) to the IPMI handlers and the FRU state machine.
+    pub fn service_sensors(&mut self) {
+        self.ctx.sensing.service();
+        if let Some(snapshot) = self.ctx.sensing.take_fresh() {
+            self.ctx.ipmb.feed_sensors(&snapshot);
+        }
+    }
+
+    /// service_link -- runs the IPMB link layer's main-loop step.
+    pub fn service_link(&mut self) {
+        self.ctx.ipmb.service();
+    }
+
+    /// banner -- prints the start-up banner (the first prompt follows from `prompt`).
+    pub fn banner(&self) {
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        out!("\n");
+        print_version();
+        out!("Build:        {}\n", profile);
+        out!("Last reset:   {}\n", self.ctx.reset_cause.text());
+        print_clock(&self.ctx);
+        print_ga(&self.ctx.ipmb.dispatch().addr);
+        let [result, detail] = self.ctx.ipmb.dispatch().self_test.bytes();
+        out!(
+            "Self test:    {:02X}h {:02X}h ({})\n",
+            result,
+            detail,
+            if self.ctx.ipmb.dispatch().self_test.passed() {
+                "passed"
+            } else {
+                "failed"
+            }
+        );
+        out!("Type HELP or ? for commands.\n");
+    }
+
+    /// prompt -- prints the root prompt.
+    pub fn prompt(&self) {
+        self.menu.write_prompt(&mut UartOut);
+    }
+
+    /// poll -- consumes received bytes: the editor reports what to echo, the menu runs complete
+    /// lines. One call handles at most IPMC_CONSOLE_BYTES_PER_POLL bytes and runs at most one
+    /// command line (it returns right after one), so the main loop services sensor sampling
+    /// (and, in Phase 6, the IPMB link) every iteration however much the console receives.
+    /// Blocking console output is a known cost: a command that prints a lot holds the loop for
+    /// its transmit time (86.8 us per byte at 115200 baud). The Phase 6 link scheduler accounts
+    /// for that against the 227 ms IPMB response deadline (VITA 46.11 Rule 4.1.1-11); bytes that
+    /// arrive meanwhile wait in the UART RX ring (IPMC_UART_RX_BUF).
+    pub fn poll(&mut self) {
+        for _ in 0..ipmc_defs::IPMC_CONSOLE_BYTES_PER_POLL {
+            let Some(byte) = uart::getc() else { return };
+            match self.editor.push_byte(byte) {
+                EditEvent::Echo(ch) => out!("{}", char::from(ch)),
+                EditEvent::Backspace => out!("\u{8} \u{8}"), // erase the character on screen
+                EditEvent::Line(line) => {
+                    out!("\n");
+                    self.menu.process_line(line, &mut self.ctx, &mut UartOut);
+                    self.menu.write_prompt(&mut UartOut);
+                    return;
+                }
+                EditEvent::LineTooLong => {
+                    out!("\n");
+                    report_line_error(MenuError::LineTooLong, &mut UartOut);
+                    self.menu.write_prompt(&mut UartOut);
+                    return;
+                }
+                EditEvent::None => {}
+            }
+        }
+    }
+}
+
+fn print_version() {
+    out!(
+        "{} v{} (ipmc-core v{})\n",
+        ipmc_defs::IPMC_FW_NAME,
+        env!("CARGO_PKG_VERSION"),
+        ipmc_core::CORE_VERSION
+    );
+}
+
+fn print_clock(ctx: &Context) {
+    let c = &ctx.clock;
+    out!("Clock source: {}\n", c.source.text());
+    if let Some(fault) = ctx.clock_fault {
+        out!("Clock fault:  {}\n", fault.text());
+    }
+    out!("SYSCLK:       {}\n", Mhz(c.sysclk_hz));
+    out!("HCLK (AHB):   {}\n", Mhz(c.hclk_hz));
+    out!("PCLK1 (APB1): {}\n", Mhz(c.pclk1_hz));
+    out!("PCLK2 (APB2): {}\n", Mhz(c.pclk2_hz));
+}
+
+fn print_ga(g: &AddrInfo) {
+    out!(
+        "GA raw pins (at start-up): GA4..GA0={:05b} GAP={} NVMRO={} (1 = high)\n",
+        g.ga_pin_levels(),
+        u8::from(g.gap_pin_high()),
+        u8::from(g.nvmro_pin_high())
+    );
+    out!(
+        "GA value:     {}{} ({})\n",
+        g.ga,
+        if g.valid { "" } else { " (invalid)" },
+        g.ga_source.text()
+    );
+    out!("HW address:   0x{:02X}\n", g.hw_address);
+    out!("IPMB address: 0x{:02X}\n", g.ipmb_address);
+    out!("GA parity:    {}\n", if g.parity_ok { "OK" } else { "BAD" });
+    out!(
+        "NVMRO:        {} ({})\n",
+        if g.nvmro_asserted {
+            "asserted"
+        } else {
+            "deasserted"
+        },
+        g.nvmro_source.text()
+    );
+}
+
+// ---- handlers ----
+
+fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    let s = systick::seconds();
+    out!(
+        "Uptime:       {}d {:02}:{:02}:{:02}\n",
+        s / 86_400,
+        (s / 3_600) % 24,
+        (s / 60) % 60,
+        s % 60
+    );
+    print_clock(ctx);
+    print_ga(&ctx.ipmb.dispatch().addr);
+    print_led();
+    out!("Last reset:   {}\n", ctx.reset_cause.text());
+    let e = uart::counters();
+    out!(
+        "UART errors:  rx overflow={} tx timeout={} overrun={}\n",
+        e.rx_overflow,
+        e.tx_timeout,
+        e.overrun
+    );
+    Ok(())
+}
+
+fn cmd_reset(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    out!("Resetting\n");
+    uart::flush();
+    SCB::sys_reset()
+}
+
+fn cmd_version(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    print_version();
+    Ok(())
+}
+
+fn cmd_ipmb_addr(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    print_ga(&ctx.ipmb.dispatch().addr);
+    Ok(())
+}
+
+/// print_led -- one line with the LED mode and rate (SYS STATUS and LED STATUS).
+fn print_led() {
+    let shown = led::shown();
+    let chz = led::rate_chz(shown);
+    let (mode, auto) = match shown {
+        Shown::Heartbeat => ("heartbeat", true),
+        Shown::Activity => ("activity", true),
+        Shown::On => ("on", false),
+        Shown::Off => ("off", false),
+        Shown::Blink(_) => ("blink", false),
+        Shown::Fault(_) => ("fault blink", false),
+    };
+    out!(
+        "LED (LD2):    {} ({})",
+        mode,
+        if auto { "auto" } else { "manual" }
+    );
+    if chz != 0 {
+        out!(", {} Hz", Hz(chz));
+    }
+    out!("\n");
+}
+
+fn cmd_led_status(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    print_led();
+    out!(
+        "Blink limits: {} to {} Hz (ipmi_defs.h IPMC_LED_RATE_MIN_CHZ, IPMC_LED_RATE_MAX_CHZ)\n",
+        Hz(led::RATE_MIN_CHZ),
+        Hz(led::RATE_MAX_CHZ)
+    );
+    Ok(())
+}
+
+fn cmd_led_auto(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    led::set_auto();
+    out!("OK: LED auto\n");
+    Ok(())
+}
+
+fn cmd_led_on(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    led::set_on();
+    out!("OK: LED on\n");
+    Ok(())
+}
+
+fn cmd_led_off(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    led::set_off();
+    out!("OK: LED off\n");
+    Ok(())
+}
+
+/// Parses "5", "0.5", ".25" into centihertz. Digits past the second decimal are rejected.
+fn parse_rate_chz(s: &str) -> Option<u32> {
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if whole.is_empty() && frac.is_empty() {
+        return None;
+    }
+    if frac.len() > 2
+        || !whole
+            .bytes()
+            .chain(frac.bytes())
+            .all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole_val = if whole.is_empty() {
+        0
+    } else {
+        whole.parse::<u32>().ok()?
+    };
+    let frac_val = if frac.is_empty() {
+        0
+    } else {
+        frac.parse::<u32>().ok()?
+    };
+    let frac_chz = if frac.len() == 1 {
+        frac_val * 10
+    } else {
+        frac_val
+    };
+    whole_val.checked_mul(100)?.checked_add(frac_chz)
+}
+
+fn cmd_led_blink(_ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+    let arg = args.text_at(0)?;
+    match parse_rate_chz(arg) {
+        Some(chz) if (led::RATE_MIN_CHZ..=led::RATE_MAX_CHZ).contains(&chz) => {
+            led::set_blink_chz(chz);
+            out!("OK: LED blink {} Hz\n", Hz(chz));
+            Ok(())
+        }
+        Some(_) => {
+            out!(
+                "Error: rate must be between {} and {} Hz\n",
+                Hz(led::RATE_MIN_CHZ),
+                Hz(led::RATE_MAX_CHZ)
+            );
+            Err(CmdError::Reported)
+        }
+        None => {
+            out!(
+                "Error: '{}' is not a number (example: led blink 2.5)\n",
+                arg
+            );
+            Err(CmdError::Reported)
+        }
+    }
+}

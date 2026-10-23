@@ -1,0 +1,11 @@
+[package]
+name = "ipmc-emu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-core = { path = "../ipmc-core" }
+ipmc-fru = { path = "../ipmc-fru" }
+ipmc-sensors = { path = "../ipmc-sensors" }
+ipmc-wire = { path = "../ipmc-wire" }
