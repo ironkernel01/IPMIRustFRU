@@ -9,6 +9,11 @@
 // into `Link::on_frame`, runs `Link::poll`, then sends each queued response through the master
 // and reports the outcome with `on_tx_result` (PLAN 3.3a). Nothing here runs in an interrupt
 // handler.
+//
+// The FRU flash log (ipmc_fru::persist) is saved from `service`, once a Write FRU Data has been
+// quiet for IPMC_FRU_PERSIST_DELAY_MS. A save that has to erase a sector first takes both IPMB
+// slaves off the bus (`PausedErase`): the core stalls on flash during an erase, so the board stays
+// silent for that time instead of stretching SCL in the middle of a frame.
 
 use cortex_m::peripheral::{DCB, DWT, NVIC};
 use ipmc_core::addr::{self, AddrInfo};
@@ -18,18 +23,34 @@ use ipmc_core::link::{Link, LinkConfig};
 use ipmc_core::queue::Bus;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
 use ipmc_core::trace::Trace;
+use ipmc_fru::persist::{FlashError, FlashLog, LogSector, PersistError, Status};
+use ipmc_fru::FruStore;
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
+use crate::bsp::flash::Flash;
 use crate::bsp::i2c_hw::{self, I2cError, I2cPeripheral, RxConsumer};
+use crate::bsp::ipmb_common;
 use crate::bsp::ipmb_master::{self, IpmbMaster, MasterError, Recovery, SelectedMaster};
 use crate::bsp::ipmb_pins::IpmbPins;
 use crate::bsp::{fault, ga, systick, uart};
 use crate::console::{ConsoleTrace, Context};
+use crate::fru_log::FruLog;
 
 /// RX_DRAIN_MAX -- most frames one `service` pass takes from the queues: both queues full at
 /// once (2 x IPMB_RX_QUEUE_DEPTH). Frames that arrive during the pass wait for the next one.
 const RX_DRAIN_MAX: usize = 2 * (ipmc_defs::IPMB_RX_QUEUE_DEPTH as usize);
+
+/// PAUSE_WAIT_MS -- longest wait for a healthy slave to go idle before an erase (ipmi_defs.h
+/// IPMC_FRU_PAUSE_WAIT_MS, guarded in ipmc-defs): a frame in progress ends within T1 = 20 ms
+/// (VITA 46.11 Table 4.1.1-1). A slave that is still busy makes the erase fail with `Timeout`; the
+/// save is retried one delay later.
+const PAUSE_WAIT_MS: u32 = ipmc_defs::IPMC_FRU_PAUSE_WAIT_MS;
+/// FRU_ERASE_QUIET_MS -- a run-time erase starts only after this long without an IPMB frame
+/// (ipmi_defs.h IPMC_FRU_ERASE_QUIET_MS).
+const FRU_ERASE_QUIET_MS: u32 = ipmc_defs::IPMC_FRU_ERASE_QUIET_MS;
+/// FRU_PERSIST_DELAY_MS -- quiet time before a Write FRU Data is saved (ipmi_defs.h).
+const FRU_PERSIST_DELAY_MS: u32 = ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
 
 /// IpmbIo -- what the start-up code hands the link: the master, the consumer end of each bus's
 /// frame queue (None for a bus that is not fitted or whose I2C init failed) and the local fault
@@ -285,6 +306,146 @@ pub struct IpmbLink {
     bring_up: BringUp,
     /// The peripheral of a bus whose bring-up failed (taken by `init` when it succeeds).
     periph: [Option<I2cPeripheral>; FaultTracker::COUNT],
+    /// The FRU flash log (state and flash driver); the main loop saves through it.
+    fru_log: FruLog,
+    /// SysTick time of the latest frame taken from a driver queue (any frame: it is bus traffic);
+    /// None before the first. A run-time erase waits for FRU_ERASE_QUIET_MS after it.
+    last_rx_ms: Option<u32>,
+}
+
+/// BusPause -- what an erase does to one bus's slave.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BusPause {
+    /// No slave runs (bus not fitted, address unusable, or its bring-up failed): nothing to pause.
+    Absent,
+    /// The slave runs and the bus is healthy: wait up to PAUSE_WAIT_MS for it to go idle.
+    Healthy,
+    /// The slave runs but the bus is marked faulted: switch it off without waiting for idle (a
+    /// stuck line keeps BUSY set, so the wait could only time out).
+    Faulted,
+}
+
+/// pause_plan -- the `BusPause` of each bus from the running slaves and the fault trackers.
+fn pause_plan(
+    running: [bool; FaultTracker::COUNT],
+    faults: &[FaultTracker; FaultTracker::COUNT],
+) -> [BusPause; FaultTracker::COUNT] {
+    let mut plan = [BusPause::Absent; FaultTracker::COUNT];
+    for (slot, (&runs, fault)) in plan.iter_mut().zip(running.iter().zip(faults)) {
+        *slot = match (runs, fault.faulted) {
+            (false, _) => BusPause::Absent,
+            (true, false) => BusPause::Healthy,
+            (true, true) => BusPause::Faulted,
+        };
+    }
+    plan
+}
+
+/// PausedErase -- the log flash with the IPMB slaves kept off the bus during an erase. Reads and
+/// programs pass straight through (a word program stalls the core for at most 100 us).
+struct PausedErase<'a> {
+    flash: &'a mut Flash,
+    master: &'a SelectedMaster,
+    /// What to do to each bus's slave.
+    plan: [BusPause; FaultTracker::COUNT],
+}
+
+impl PausedErase<'_> {
+    /// suspend_all -- takes every running slave off its bus. Returns the buses suspended, or
+    /// Err(Timeout) after resuming those already taken when a healthy one stays busy for
+    /// PAUSE_WAIT_MS. A faulted bus is suspended without the wait.
+    fn suspend_all(&self) -> Result<[bool; FaultTracker::COUNT], FlashError> {
+        let mut paused = [false; FaultTracker::COUNT];
+        for bus in Bus::BOTH {
+            let index = tracker_index(bus);
+            match self.plan[index] {
+                BusPause::Absent => continue,
+                BusPause::Faulted => {
+                    paused[index] = i2c_hw::suspend_faulted(bus);
+                    continue;
+                }
+                BusPause::Healthy => {}
+            }
+            let start = systick::millis();
+            while !i2c_hw::suspend(bus) {
+                if systick::millis().wrapping_sub(start) >= PAUSE_WAIT_MS {
+                    // EVIDENCE: the slave stayed busy for PAUSE_WAIT_MS; give the buses back.
+                    self.resume_all(paused);
+                    return Err(FlashError::Timeout);
+                }
+            }
+            paused[index] = true;
+        }
+        Ok(paused)
+    }
+
+    /// resume_all -- gives the suspended buses back to their slaves.
+    fn resume_all(&self, paused: [bool; FaultTracker::COUNT]) {
+        for bus in Bus::BOTH {
+            if paused[tracker_index(bus)] {
+                i2c_hw::resume(bus, self.master.pins(bus));
+            }
+        }
+    }
+}
+
+impl FlashLog for PausedErase<'_> {
+    fn sector_len(&self) -> usize {
+        self.flash.sector_len()
+    }
+
+    fn read(&self, sector: LogSector, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+        self.flash.read(sector, offset, out)
+    }
+
+    fn program(
+        &mut self,
+        sector: LogSector,
+        offset: usize,
+        words: &[u32],
+    ) -> Result<(), FlashError> {
+        self.flash.program(sector, offset, words)
+    }
+
+    fn millis(&self) -> u32 {
+        self.flash.millis()
+    }
+
+    /// erase -- both slaves off, the erase, both back on, one console line with the time the
+    /// board was silent (measured with the DWT cycle counter: SysTick does not run while the
+    /// core waits on flash).
+    fn erase(&mut self, sector: LogSector) -> Result<(), FlashError> {
+        let paused = self.suspend_all()?;
+        let start = ipmb_common::now();
+        let result = self.flash.erase(sector);
+        let paused_ms = ipmb_common::now().wrapping_sub(start) / systick::cycles_per_ms().max(1);
+        self.resume_all(paused);
+        match result {
+            Ok(()) => out!(
+                "FRU log: erased sector {} at run time (IPMB paused {} ms)\n",
+                sector.name(),
+                paused_ms
+            ),
+            Err(error) => out!(
+                "FRU log: erase of sector {} failed at run time: {} (IPMB paused {} ms)\n",
+                sector.name(),
+                error.name(),
+                paused_ms
+            ),
+        }
+        result
+    }
+}
+
+/// RestoreError -- why FRU RESTORE did not restore.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreError {
+    /// The flash log is off (IPMC_FRU_PERSIST 0 or it did not start).
+    LogOff,
+    /// NVMRO is asserted: no non-volatile write (VITA 46.11 Rule 8-3, Rec 4.1.10-1).
+    Nvmro,
+    /// Erasing the log failed.
+    Failed(PersistError),
 }
 
 impl IpmbLink {
@@ -295,13 +456,17 @@ impl IpmbLink {
     /// function's frame, which is gone when `take` returns at start-up; inlined into `main`, the
     /// copy would occupy `main`'s frame, and so the stack, for as long as the firmware runs.
     #[inline(never)]
-    pub fn take(io: IpmbIo) -> Option<&'static mut IpmbLink> {
-        cortex_m::singleton!(: IpmbLink = IpmbLink::new(io))
+    pub fn take(
+        io: IpmbIo,
+        fru_log: FruLog,
+        fru_image: Option<FruStore>,
+    ) -> Option<&'static mut IpmbLink> {
+        cortex_m::singleton!(: IpmbLink = IpmbLink::new(io, fru_log, fru_image))
     }
 
     /// new -- a link in the power-up state (IPMB-A on, IPMB-B off) for the resolved address; a
     /// bus that failed its start-up gets its local fault, which disables it (Rule 9.3-10).
-    fn new(io: IpmbIo) -> Self {
+    fn new(io: IpmbIo, fru_log: FruLog, fru_image: Option<FruStore>) -> Self {
         let resolved = addr::resolve(ga::read_raw());
         let mut link = Link::new(LinkConfig::from_defs(), &resolved);
         let mut faults = [FaultTracker::default(); FaultTracker::COUNT];
@@ -317,15 +482,22 @@ impl IpmbLink {
                 }
             }
         }
+        let mut dispatch = DispatchContext::new(resolved);
+        if let Some(image) = fru_image {
+            // The stored image replaces the built one; the self test runs on it (owner decision 8).
+            dispatch.set_fru(image);
+        }
         IpmbLink {
             link,
-            dispatch: DispatchContext::new(resolved),
+            dispatch,
             master: io.master,
             rx_a: io.rx_a,
             rx_b: io.rx_b,
             faults,
             bring_up: io.bring_up,
             periph: io.periph,
+            fru_log,
+            last_rx_ms: None,
         }
     }
 
@@ -333,6 +505,82 @@ impl IpmbLink {
     /// state, latest sensor snapshot. Read by the FRU and SENSORS console commands.
     pub fn dispatch(&self) -> &DispatchContext {
         &self.dispatch
+    }
+
+    /// fru_log_status -- the flash log state for FRU STORE; None while the log is off.
+    pub fn fru_log_status(&self) -> Option<Status> {
+        self.fru_log.status()
+    }
+
+    /// fru_restore -- FRU RESTORE: saves the built image as a new record with the next sequence
+    /// number, at once (`Persist::restore`; an erase it needs pauses the IPMB as for any save), and
+    /// puts the built image in the store, rerunning the self test. A power cut at any point loads
+    /// the previous newest image or the built one. Refused while NVMRO is asserted (the live pin,
+    /// and again by the flash driver before each erase and program); Err(LogOff) while the log
+    /// is off (the store is then RAM only already).
+    pub fn fru_restore(&mut self) -> Result<(), RestoreError> {
+        if ga::nvmro_asserted() {
+            return Err(RestoreError::Nvmro);
+        }
+        let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
+        let (persist, flash) = self.fru_log.parts().ok_or(RestoreError::LogOff)?;
+        let mut paused = PausedErase {
+            flash,
+            master: &self.master,
+            plan,
+        };
+        let built = FruStore::new();
+        match persist.restore(&mut paused, built.image()) {
+            Ok(_) => {}
+            Err(PersistError::Flash(FlashError::NvmroAsserted)) => return Err(RestoreError::Nvmro),
+            Err(error) => return Err(RestoreError::Failed(error)),
+        }
+        self.dispatch.set_fru(built);
+        Ok(())
+    }
+
+    /// bus_quiet -- true when a run-time erase may start: no response waits in the egress queue
+    /// and no frame was taken from a driver queue for FRU_ERASE_QUIET_MS.
+    fn bus_quiet(&self, now_ms: u32) -> bool {
+        self.link.egress_empty()
+            && self
+                .last_rx_ms
+                .is_none_or(|t| now_ms.wrapping_sub(t) >= FRU_ERASE_QUIET_MS)
+    }
+
+    /// service_fru_log -- the save step of the main loop (`Persist::poll`): one console line per
+    /// save or failed save. Nothing runs while the log is off.
+    fn service_fru_log(&mut self) {
+        let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
+        let now_ms = systick::millis();
+        let quiet = self.bus_quiet(now_ms);
+        let Some((persist, flash)) = self.fru_log.parts() else {
+            return;
+        };
+        let mut paused = PausedErase {
+            flash,
+            master: &self.master,
+            plan,
+        };
+        let nvmro = self.dispatch.addr.nvmro_asserted;
+        let outcome = persist.poll(
+            &mut paused,
+            &mut self.dispatch.fru,
+            now_ms,
+            nvmro,
+            FRU_PERSIST_DELAY_MS,
+            quiet,
+        );
+        match outcome {
+            Some(Ok(saved)) => out!(
+                "FRU log: saved record {} to sector {} offset {}\n",
+                saved.seq,
+                saved.sector.name(),
+                saved.offset
+            ),
+            Some(Err(error)) => out!("FRU log: save failed: {}\n", error.name()),
+            None => {}
+        }
     }
 
     /// link -- the link layer, for the console views of the bus state.
@@ -354,12 +602,14 @@ impl IpmbLink {
     /// 2. Drains the receive queues into the link in STOP-time order.
     /// 3. Runs `Link::poll`.
     /// 4. Sends at most one queued response through the master (`transmit`).
+    /// 5. Saves the FRU image to the flash log when a Write FRU Data has been quiet long enough
+    ///    (a save that must erase a sector also waits for a quiet bus, `bus_quiet`).
     ///
     /// The bus-fault bookkeeping runs around step 4: `track_slave_faults` before it (frames
     /// received in this pass reset the streak, the writes then add to it) and
     /// `clear_faulted_buses` after it.
     pub fn service(&mut self) {
-        let nvmro = addr::nvmro_asserted(ga::read_raw());
+        let nvmro = ga::nvmro_asserted();
         if nvmro != self.dispatch.addr.nvmro_asserted {
             self.dispatch.addr.nvmro_asserted = nvmro;
             ConsoleTrace.line(format_args!(
@@ -373,6 +623,7 @@ impl IpmbLink {
         self.track_slave_faults();
         self.transmit();
         self.clear_faulted_buses();
+        self.service_fru_log();
     }
 
     /// tracker -- the fault tracker of `bus`.
@@ -528,6 +779,7 @@ impl IpmbLink {
                 Bus::B => self.rx_b.as_mut(),
             };
             if let Some(frame) = consumer.and_then(|c| c.dequeue()) {
+                self.last_rx_ms = Some(frame.stop_ms);
                 let _ = self.link.on_frame(bus, frame.data(), frame.stop_ms);
             }
         }

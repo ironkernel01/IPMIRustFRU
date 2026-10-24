@@ -133,21 +133,8 @@ pub fn parse(text: &str) -> Result<Vec<Vector>, VectorError> {
         let seconds = fields.next().ok_or(fail(VectorErrorKind::MissingTime))?;
         let time_ms = time_ms_of(seconds).ok_or(fail(VectorErrorKind::BadTime))?;
         let tag = fields.next().ok_or(fail(VectorErrorKind::MissingBus))?;
-        let bus = match tag {
-            "A" => Bus::A,
-            "B" => Bus::B,
-            _ => return Err(fail(VectorErrorKind::BadBus)),
-        };
-        let mut bytes = Vec::new();
-        for token in fields {
-            if bytes.len() >= FRAME_MAX_BYTES {
-                return Err(fail(VectorErrorKind::FrameTooLong));
-            }
-            bytes.push(ipmc_wire::hex_byte(token).ok_or(fail(VectorErrorKind::BadHex))?);
-        }
-        if bytes.is_empty() {
-            return Err(fail(VectorErrorKind::EmptyFrame));
-        }
+        let bus = parse_bus(tag).ok_or(fail(VectorErrorKind::BadBus))?;
+        let bytes = frame_bytes(fields).map_err(fail)?;
         out.push(Vector {
             line: number,
             time_ms,
@@ -156,6 +143,33 @@ pub fn parse(text: &str) -> Result<Vec<Vector>, VectorError> {
         });
     }
     Ok(out)
+}
+
+/// parse_bus -- the bus tag `A` or `B`; None for anything else. The one bus-tag reader of the
+/// vector file and of the serve line protocol.
+pub fn parse_bus(tag: &str) -> Option<Bus> {
+    match tag {
+        "A" => Some(Bus::A),
+        "B" => Some(Bus::B),
+        _ => None,
+    }
+}
+
+/// frame_bytes -- the hex byte tokens of one frame, in order. Err(EmptyFrame) for no tokens,
+/// Err(BadHex) for a token that is not one or two hex digits, Err(FrameTooLong) past
+/// FRAME_MAX_BYTES. The one frame-bytes reader of the vector file and of the serve line protocol.
+pub fn frame_bytes<'a>(tokens: impl Iterator<Item = &'a str>) -> Result<Vec<u8>, VectorErrorKind> {
+    let mut bytes = Vec::new();
+    for token in tokens {
+        if bytes.len() >= FRAME_MAX_BYTES {
+            return Err(VectorErrorKind::FrameTooLong);
+        }
+        bytes.push(ipmc_wire::hex_byte(token).ok_or(VectorErrorKind::BadHex)?);
+    }
+    if bytes.is_empty() {
+        return Err(VectorErrorKind::EmptyFrame);
+    }
+    Ok(bytes)
 }
 
 /// time_ms_of -- seconds text to milliseconds; None when it is not a finite, non-negative number

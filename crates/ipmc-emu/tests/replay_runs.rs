@@ -70,6 +70,9 @@ fn tx_buses(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool)> {
 
 #[test]
 fn arrival_policy_with_both_buses_matches_the_captures_own_buses() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, true, TxPolicy::Arrival), 0);
     assert!(r.passed());
     assert_eq!(
@@ -113,6 +116,9 @@ fn arrival_policy_with_both_buses_matches_the_captures_own_buses() {
 
 #[test]
 fn alternate_policy_answers_every_request_and_alternates_buses() {
+    if common::capture_missing() {
+        return;
+    }
     let policy = config(true, true, TxPolicy::Alternate);
     let (r, _) = run(policy, 0);
     assert!(r.passed());
@@ -128,6 +134,9 @@ fn alternate_policy_answers_every_request_and_alternates_buses() {
 
 #[test]
 fn failed_transmissions_are_resent_on_the_other_bus() {
+    if common::capture_missing() {
+        return;
+    }
     let policy = config(true, true, TxPolicy::Alternate);
     let (r, _) = run(policy, 5);
     assert!(r.passed());
@@ -149,6 +158,9 @@ fn failed_transmissions_are_resent_on_the_other_bus() {
 
 #[test]
 fn without_ipmb_b_the_b_requests_are_not_fitted_not_unanswered() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, vectors) = run(config(false, false, TxPolicy::Alternate), 0);
     assert!(r.passed());
     let b_requests = vectors
@@ -169,6 +181,9 @@ fn without_ipmb_b_the_b_requests_are_not_fitted_not_unanswered() {
 
 #[test]
 fn a_disabled_but_fitted_bus_leaves_its_requests_unanswered() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, false, TxPolicy::Alternate), 0);
     assert!(!r.passed());
     assert_eq!(r.totals.bus_not_fitted, 0);
@@ -178,6 +193,9 @@ fn a_disabled_but_fitted_bus_leaves_its_requests_unanswered() {
 
 #[test]
 fn injected_failures_are_all_recovered() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, true, TxPolicy::Alternate), 5);
     assert_eq!(r.responses_lost(), 0);
     assert!(r.failures() > 0);
@@ -192,6 +210,9 @@ fn injected_failures_are_all_recovered() {
 
 #[test]
 fn failing_every_transmission_loses_responses_and_fails() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, true, TxPolicy::Alternate), 1);
     assert!(r.responses_lost() > 0);
     assert!(!r.passed());
@@ -200,6 +221,9 @@ fn failing_every_transmission_loses_responses_and_fails() {
 
 #[test]
 fn the_report_prints_a_row_per_command_and_the_verdict() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, true, TxPolicy::Arrival), 0);
     let text = r.to_string();
     assert!(text.contains("Get Device ID"));
@@ -210,6 +234,9 @@ fn the_report_prints_a_row_per_command_and_the_verdict() {
 
 #[test]
 fn failing_every_transmission_answers_nothing_and_leaves_every_request_unanswered() {
+    if common::capture_missing() {
+        return;
+    }
     let (r, _) = run(config(true, true, TxPolicy::Alternate), 1);
     assert!(!r.passed());
     assert_eq!(r.answered, 0);
@@ -221,6 +248,9 @@ fn failing_every_transmission_answers_nothing_and_leaves_every_request_unanswere
 
 #[test]
 fn a_resend_on_the_other_bus_is_classified_by_the_bus_that_delivered_it() {
+    if common::capture_missing() {
+        return;
+    }
     let policy = config(true, true, TxPolicy::Arrival);
     let (r, _) = run(policy, 5);
     assert!(r.passed());
@@ -249,6 +279,9 @@ fn first_request(vectors: &[Vector]) -> usize {
 
 #[test]
 fn a_request_with_a_bad_checksum_fails_the_run_and_names_its_line() {
+    if common::capture_missing() {
+        return;
+    }
     let mut vectors = load();
     let index = first_request(&vectors);
     let line = vectors[index].line;
@@ -294,6 +327,9 @@ fn an_empty_vector_list_fails_with_its_reason() {
 
 #[test]
 fn the_sampled_state_after_the_capture_is_m4_with_healthy_sensors() {
+    if common::capture_missing() {
+        return;
+    }
     let vectors = load();
     let mut emu = Emulator::new(config(true, true, TxPolicy::Arrival)).expect("emulator");
     let r = replay(&mut emu, &vectors, &ReplayOptions::default(), &mut NoTrace);

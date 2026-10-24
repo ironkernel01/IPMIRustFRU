@@ -1,14 +1,18 @@
 // data_cmds.rs - console views of the data the IPMI handlers serve: FRU SHOW and FRU DUMP over the
-// FRU image, SENSORS SDR over the Device SDR repository. Read-only: both live in the dispatch
-// context that ipmb_link.rs owns, and these handlers only print them. Decoding comes from
+// FRU image, SENSORS SDR over the Device SDR repository, FRU STORE over the flash log state.
+// Read-only except FRU RESTORE, which asks ipmb_link.rs to save the built image to the log. The data lives in the
+// dispatch context that ipmb_link.rs owns, and these handlers only print it. Decoding comes from
 // ipmc_fru::records and ipmc_core::sdr; nothing here parses a byte layout of its own.
 //
 // Nothing here runs in an interrupt handler.
 
+use ipmc_fru::persist::RECORD_LEN;
 use ipmc_fru::records::{self as fru, AreaKind};
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
 use crate::console::Context;
+use crate::fru_log;
+use crate::ipmb_link::RestoreError;
 
 /// Labels of the predefined fields, in table order (FRU spec Tables 11-1 and 12-1).
 const BOARD_LABELS: [&str; 5] = [
@@ -88,9 +92,14 @@ pub fn cmd_fru_show(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     let dispatch = ctx.ipmb.dispatch();
     let image = dispatch.fru.bytes();
     out!(
-        "FRU image: {} bytes, {} in use, RAM only (a write is lost at reset), NVMRO {}\n",
+        "FRU image: {} bytes, {} in use, {}, NVMRO {}\n",
         fru::SIZE,
         fru::IMAGE_LEN,
+        if ctx.ipmb.fru_log_status().is_some() {
+            "kept in the flash log (FRU STORE)"
+        } else {
+            "RAM only (a write is lost at reset)"
+        },
         if dispatch.addr.nvmro_asserted {
             "asserted (writes refused)"
         } else {
@@ -154,6 +163,90 @@ pub fn cmd_fru_dump(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
         out!("\n");
     }
     Ok(())
+}
+
+/// print_last_save -- the time of the last save, or "none since boot".
+fn print_last_save(last_save_ms: Option<u32>) {
+    match last_save_ms {
+        Some(ms) => out!("{} ms after boot", ms),
+        None => out!("none since boot"),
+    }
+}
+
+/// cmd_fru_store -- the flash log state: active sector, records per sector, newest sequence
+/// number, bytes free, whether a write waits to be saved, the last save, the erase waiting for
+/// the other sector, the save counters.
+pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    let Some(status) = ctx.ipmb.fru_log_status() else {
+        out!(
+            "FRU log: off ({}); the FRU image is RAM only\n",
+            if fru_log::ENABLED {
+                "did not start, see the boot lines"
+            } else {
+                "IPMC_FRU_PERSIST 0"
+            }
+        );
+        return Ok(());
+    };
+    let dirty = ctx.ipmb.dispatch().fru.is_dirty();
+    out!(
+        "FRU log: {}-byte records, active sector {}, records A={} B={}, newest sequence ",
+        RECORD_LEN,
+        status.active.name(),
+        status.records[0],
+        status.records[1]
+    );
+    match status.newest_seq {
+        Some(seq) => out!("{}", seq),
+        None => out!("none"),
+    }
+    out!(
+        ", {} bytes free\nFRU log: write pending {}, delay {} ms, last save ",
+        status.bytes_free,
+        if status.pending || dirty { "yes" } else { "no" },
+        ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS
+    );
+    print_last_save(status.last_save_ms);
+    out!(
+        ", erase pending {}, saves {}, failures {}",
+        if status.erase_pending {
+            status.active.other().name()
+        } else {
+            "no"
+        },
+        status.saves,
+        status.failures
+    );
+    if let Some(error) = status.last_error {
+        out!(" (last: {})", error.name());
+    }
+    out!("\n");
+    Ok(())
+}
+
+/// cmd_fru_restore -- saves the built image as a new log record (one record write: a power cut
+/// loads the previous image or the built one) and puts it back in the store. Asks nothing and
+/// prints what it did; refused while NVMRO is asserted (no non-volatile write, VITA 46.11
+/// Rule 8-3).
+pub fn cmd_fru_restore(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    match ctx.ipmb.fru_restore() {
+        Ok(()) => {
+            out!("Built image saved as a new log record and back in the store, self test rerun\n");
+            Ok(())
+        }
+        Err(RestoreError::LogOff) => {
+            out!("Error: the flash log is off; FRU RESTORE has no log to write\n");
+            Err(CmdError::Reported)
+        }
+        Err(RestoreError::Nvmro) => {
+            out!("Error: NVMRO is asserted; the flash log is not written\n");
+            Err(CmdError::Reported)
+        }
+        Err(RestoreError::Failed(error)) => {
+            out!("Error: FRU log write failed: {}\n", error.name());
+            Err(CmdError::Reported)
+        }
+    }
 }
 
 /// cmd_sensors_sdr -- the Device SDR repository: one line per record.

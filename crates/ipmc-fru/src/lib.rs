@@ -7,11 +7,14 @@
 //!
 //! - `records.rs`: the common header, the board and product info areas, the compile-time image
 //!   built from the IPMC_FRU_* defines, the decoder and `verify`.
-//! - `store.rs`: `FruStore`, the scratchpad memory (RAM today; the flash persistence of Phase 6b
-//!   lands in this file), and `FruError`.
+//! - `store.rs`: `FruStore`, the scratchpad memory, and `FruError`.
+//! - `persist.rs`: the stored record, the two-sector flash log behind the `FlashLog` trait, the
+//!   boot load and the save after a Write FRU Data.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+/// persist -- the FRU scratchpad on flash: record format, log, load and save.
+pub mod persist;
 /// records -- FRU Information layouts, the built image, the decoder and `verify`.
 pub mod records;
 /// store -- the FRU scratchpad memory and the FRU error type.

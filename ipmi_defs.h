@@ -96,7 +96,12 @@
 #define IPMC_FRU_PRODUCT_SERIAL "IK-T1-000001"    /* FRU product area: serial number */
 #define IPMC_FRU_ASSET_TAG ""                     /* FRU product area: asset tag, empty */
 #define IPMC_FRU_MFG_MINUTES 16204320             /* FRU board area manufacturing date, minutes since 1996-01-01 00:00 (FRU spec section 11, 3 bytes little endian, 000000h = unspecified); 2026-10-23 00:00 = (30 years x 365 + 8 leap days + 295 days) = 11253 days x 1440 = 16204320; at most 16777215 */
-#define IPMC_FRU_SIZE 256                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info); a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the area is RAM only until flash persistence is added */
+#define IPMC_FRU_SIZE 256                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info); a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru persist.rs) is 16 bytes longer than this */
+#define IPMC_FRU_PERSIST 1                        /* 1 = Write FRU Data survives reset (FRU image kept in the flash log of sectors 6 and 7); 0 = RAM only, a reset restores the built image */
+#define IPMC_FRU_PERSIST_DELAY_MS 1000            /* quiet time after the last Write FRU Data before the image is saved to flash, milliseconds (100..=10000); coalesces a Chassis Manager writing an area in chunks into one record */
+#define IPMC_FRU_SCAN_CHUNK 64                    /* bytes read at a time when the flash log checks a range for erased flash (ipmc-fru persist.rs); a multiple of 4, 16..=272; the buffer lives on the stack */
+#define IPMC_FRU_ERASE_QUIET_MS 500               /* a run-time sector erase starts only after the egress queue is empty and no IPMB frame arrived for this many milliseconds (100..=5000); the save stays pending in RAM meanwhile */
+#define IPMC_FRU_PAUSE_WAIT_MS 40                 /* longest wait for an IPMB slave to go idle before a run-time erase, milliseconds (20..=200); a frame in progress ends within T1 = 20 ms (VITA 46.11 Table 4.1.1-1) */
 
 #define IPMC_SDR_FRU_STATE_NAME "FRU State"           /* sensor 0: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
 #define IPMC_SDR_IPMB_LINK_NAME "IPMB Link"           /* sensor 1: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
@@ -164,5 +169,8 @@
 #define IPMC_EMU_TX_DONE_DELAY_MS 1               /* x86 emulator: time from a request to the end of its response transmission, milliseconds (1..=227, the VITA 46.11 T5 response limit) */
 #define IPMC_EMU_VECTOR_LINE_MAX 512              /* x86 emulator: longest accepted vector file line, characters; must hold a time, a bus tag and IPMB_MSG_MAX three-character hex tokens */
 #define IPMC_EMU_REPORT_LINES_MAX 8               /* x86 emulator: most vector line numbers the replay report lists for malformed frames */
+#define IPMC_EMU_PORT 5470                        /* x86 emulator serve mode: default TCP port on 127.0.0.1 (1024..=65535) */
+#define IPMC_EMU_SERVE_POLL_MS 1                  /* x86 emulator serve mode: main-loop step period and socket read timeout, milliseconds; two steps plus IPMC_EMU_TX_DONE_DELAY_MS stay within the VITA 46.11 T5 response limit (227 ms) */
+#define IPMC_EMU_ERROR_ECHO_MAX 80                /* x86 emulator serve mode: most characters of a rejected client line echoed in its #error reply (1..=IPMC_EMU_VECTOR_LINE_MAX) */
 
 #endif /* IPMI_DEFS_H */

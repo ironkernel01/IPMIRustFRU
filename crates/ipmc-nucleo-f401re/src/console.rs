@@ -7,12 +7,12 @@
 //   SYS  : STATUS, RESET, VERSION      LED : ON, OFF, BLINK [HZ], AUTO, STATUS
 //   IPMB : ADDR, STATS, STATE
 //   SENSORS : SHOW, SDR, TRACE {OFF|EVENTS|ALL}     POWER : ON, OFF, CLEAR, STATUS
-//   FRU  : SHOW, DUMP {OFFSET} {COUNT}
+//   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, RESTORE
 //   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
-// IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; FRU SHOW, FRU DUMP and SENSORS SDR live
-// in data_cmds.rs.
+// IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; FRU SHOW, FRU DUMP, FRU STORE, FRU
+// RESTORE and SENSORS SDR live in data_cmds.rs.
 
 use core::fmt;
 
@@ -213,7 +213,7 @@ static SIM_COMMANDS: [ConsoleCommand; 4] = [
     },
 ];
 
-static FRU_COMMANDS: [ConsoleCommand; 2] = [
+static FRU_COMMANDS: [ConsoleCommand; 4] = [
     Command {
         syntax: "SHOW",
         help: "FRU image decoded: common header, board and product areas, checksums",
@@ -223,6 +223,17 @@ static FRU_COMMANDS: [ConsoleCommand; 2] = [
         syntax: "DUMP {OFFSET} {COUNT}",
         help: "Hex dump of the FRU image; default offset 0 and the rest of the area",
         handler: data_cmds::cmd_fru_dump,
+    },
+    Command {
+        syntax: "STORE",
+        help: "Flash log state: active sector, records, newest sequence, free bytes, pending write",
+        handler: data_cmds::cmd_fru_store,
+    },
+    Command {
+        syntax: "RESTORE",
+        help:
+            "Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted",
+        handler: data_cmds::cmd_fru_restore,
     },
 ];
 
@@ -259,7 +270,7 @@ static GROUPS: [Group<Context>; 7] = [
     },
     Group {
         name: "FRU",
-        description: "FRU image and its decoded areas",
+        description: "FRU image, its decoded areas and the flash log",
         commands: &FRU_COMMANDS,
     },
 ];

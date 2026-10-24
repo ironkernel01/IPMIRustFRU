@@ -3,6 +3,7 @@
 pub mod board_pins;
 pub mod clock;
 pub mod fault;
+pub mod flash;
 pub mod ga;
 pub mod i2c_bitbang;
 pub mod i2c_hw;

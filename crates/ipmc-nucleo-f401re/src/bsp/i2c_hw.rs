@@ -778,16 +778,17 @@ fn idle_now(slave: &Slave) -> bool {
 
 /// take_bus -- takes `bus` away from the slave interrupts for a master transmission.
 /// 1. In one critical section, re-checks that the slave is idle (a frame can start after the
-///    caller's own check); if not, returns false and changes nothing.
+///    caller's own check); if not, returns false and changes nothing. `require_idle` false skips
+///    the check (a faulted bus, whose BUSY flag may never clear).
 /// 2. Masks the bus's EV and ER interrupts; with `peripheral_off`, also PE = 0 (RM0368 18.6.1):
 ///    the peripheral releases SDA and SCL.
-fn take_bus(bus: Bus, peripheral_off: bool) -> bool {
+fn take_bus(bus: Bus, peripheral_off: bool, require_idle: bool) -> bool {
     free(|cs| {
         let guard = slot(bus).borrow(cs).borrow();
         let Some(slave) = guard.as_ref() else {
             return false;
         };
-        if !idle_now(slave) {
+        if require_idle && !idle_now(slave) {
             return false;
         }
         let (ev, er) = irqs(bus);
@@ -805,12 +806,19 @@ fn take_bus(bus: Bus, peripheral_off: bool) -> bool {
 /// While PE = 0 the slave cannot hear its bus; a frame another master sends now is lost and is
 /// recovered by the requester's retry (PLAN 3.4). Call `resume` afterwards on every path.
 pub fn suspend(bus: Bus) -> bool {
-    take_bus(bus, true)
+    take_bus(bus, true, true)
+}
+
+/// suspend_faulted -- `suspend` for a bus the firmware marked faulted: no wait for idle, since a
+/// stuck line keeps BUSY set and a frame there is not coming. Returns false only when the bus has
+/// no running slave.
+pub fn suspend_faulted(bus: Bus) -> bool {
+    take_bus(bus, true, false)
 }
 
 /// mask_slave -- the hardware master's claim: `take_bus` with the peripheral left on (PE = 1).
 fn mask_slave(bus: Bus) -> bool {
-    take_bus(bus, false)
+    take_bus(bus, false, true)
 }
 
 /// unmask_slave -- gives the interrupts of `bus` back to the slave after a hardware master

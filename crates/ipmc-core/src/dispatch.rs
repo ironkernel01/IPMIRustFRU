@@ -81,7 +81,9 @@ pub mod cc {
 /// - `addr`: written once at start-up by `addr::resolve`; read-only afterwards.
 /// - `sensors`: the latest sensor snapshot; the firmware writes it each sample through
 ///   `update_sensors`, handlers read it (Get Sensor Reading sensors 2..=4).
-/// - `fru`: the RAM FRU store (ipmc-fru); Write FRU Data is its only writer.
+/// - `fru`: the RAM FRU store (ipmc-fru); Write FRU Data is its only writer (and marks it dirty
+///   for the flash log), apart from `set_fru`, which the firmware calls at boot and for FRU
+///   RESTORE.
 /// - `sdr`: the Device SDR repository and its reservation; Reserve Device SDR Repository is
 ///   the only writer.
 /// - `self_test`: the result of the controller self test; `Context::new` sets it and an accepted
@@ -133,6 +135,15 @@ impl Context {
             link: LinkView::power_up(LinkConfig::from_defs(), addr.usable()),
             pending_ipmb: None,
         }
+    }
+
+    /// set_fru -- replaces the FRU store (the image loaded from flash at boot, or the built image
+    /// after FRU RESTORE) and reruns the self test on it, so Get Self Test Results and the FRU
+    /// initial checks (Rule 4.1.5.4.1-9) judge the image now in use: a corrupt stored image
+    /// gives 57h with the FRU bit and keeps the FRU in M0 (owner decision 8).
+    pub fn set_fru(&mut self, fru: FruStore) {
+        self.fru = fru;
+        self.self_test = selftest::run(self.fru.bytes(), &self.sdr);
     }
 
     /// initial_checks -- the FRU initial criteria (Rule 4.1.5.4.1-2) as they stand now.
@@ -248,8 +259,10 @@ pub enum Outcome {
     Handled(&'static str),
     /// No row matches (netFn, cmd): C1h.
     NoHandler,
-    /// A Group Extension request without the VSO identifier first: C1h.
+    /// A Group Extension request for a defining body other than VSO: C1h.
     BadVso,
+    /// A Group Extension request with no data, so no defining body: C7h.
+    NoDefiningBody,
     /// The destination LUN is not 0: C2h; carries the LUN asked for.
     BadLun(u8),
 }
@@ -317,11 +330,15 @@ fn run_command(
 }
 
 /// run_request -- runs a request into `data`, the response data buffer.
-/// A Group Extension request gets the VSO handling here, the only place that writes the
-/// response VSO byte: data[0] = 03h on every path, then the handler sees the request data
-/// after the VSO byte (a copy of the Frame with `data` re-sliced) and the buffer after
-/// data[0], and the returned length includes the VSO byte. A destination LUN other than 0 is
-/// answered C2h here before any lookup (a 2Dh response still starts with the VSO byte).
+/// A Group Extension request gets the defining-body handling here, the only place that writes
+/// the response's defining-body byte. IPMI v2.0 Table 5-1 (NetFn 2Ch/2Dh): the first data byte
+/// of a request AND of its response names the defining body, so data[0] echoes the request's
+/// byte on every path (03h for VSO). A request with no data has no defining body: C7h with no
+/// data (IPMI Table 5-2; section 5.3.1 lets the response stop after the completion code). A
+/// defining body other than VSO: C1h. Otherwise the handler sees the request data after the
+/// VSO byte (a copy of the Frame with `data` re-sliced) and the buffer after data[0], and the
+/// returned length includes the VSO byte. A destination LUN other than 0 is answered C2h here
+/// before any lookup (a 2Dh response still starts with the defining-body byte).
 fn run_request(
     table: &[Command],
     ctx: &mut Context,
@@ -334,16 +351,22 @@ fn run_request(
         }
         return run_command(table, ctx, req, data);
     }
-    let Some((vso_slot, handler_out)) = data.split_first_mut() else {
+    let Some((body_slot, handler_out)) = data.split_first_mut() else {
         return Err(IpmbError::TooLong);
     };
-    *vso_slot = VSO_IDENTIFIER;
+    let Some((&defining_body, body)) = req.data.split_first() else {
+        // No defining body to echo; C2h for another LUN still comes before C7h.
+        let (code, outcome) =
+            unsupported_lun(req).unwrap_or((cc::REQ_LEN_INVALID, Outcome::NoDefiningBody));
+        return Ok((code, outcome, 0));
+    };
+    *body_slot = defining_body;
     if let Some((code, outcome)) = unsupported_lun(req) {
         return Ok((code, outcome, 1));
     }
-    let Some((&VSO_IDENTIFIER, body)) = req.data.split_first() else {
+    if defining_body != VSO_IDENTIFIER {
         return Ok((cc::INVALID_CMD, Outcome::BadVso, 1));
-    };
+    }
     let view = Frame { data: body, ..*req };
     let (code, outcome, len) = run_command(table, ctx, &view, handler_out)?;
     Ok((code, outcome, len.checked_add(1).ok_or(IpmbError::TooLong)?))
@@ -394,7 +417,10 @@ fn trace_request(trace: &mut dyn Trace, req: &Frame, built: &Built) {
             "FN({netfn:02X}h) CMD({cmd:02X}h) -> {code:02X}h (no handler)"
         )),
         Outcome::BadVso => trace.line(format_args!(
-            "FN({netfn:02X}h) CMD({cmd:02X}h) -> {code:02X}h (missing VSO identifier)"
+            "FN({netfn:02X}h) CMD({cmd:02X}h) -> {code:02X}h (defining body not VSO)"
+        )),
+        Outcome::NoDefiningBody => trace.line(format_args!(
+            "FN({netfn:02X}h) CMD({cmd:02X}h) -> {code:02X}h (no defining body byte)"
         )),
         Outcome::BadLun(lun) => trace.line(format_args!(
             "FN({netfn:02X}h) CMD({cmd:02X}h) -> {code:02X}h (LUN {lun} not supported)"
@@ -610,16 +636,28 @@ mod tests {
             (resp.completion_code, resp.data),
             (Some(cc::OK), &[0x03, 0xA1, 0xA2][..])
         );
-        // Missing VSO byte and a wrong one: C1h, still with 03h first.
-        for data in [&[][..], &[0x05, 0xA1][..], &[0x00][..]] {
+        // Another defining body: C1h, echoing that body's byte (IPMI Table 5-1).
+        for (data, echoed) in [
+            (&[0x05, 0xA1][..], 0x05),
+            (&[0x00][..], 0x00),
+            (&[0xFE][..], 0xFE),
+        ] {
             let (frame, lines) = run(&table, NETFN_GROUP_EXT, 0x00, data);
             let resp = ipmb::parse(&frame).unwrap();
             assert_eq!(
                 (resp.completion_code, resp.data),
-                (Some(cc::INVALID_CMD), &[0x03][..])
+                (Some(cc::INVALID_CMD), &[echoed][..])
             );
-            assert_eq!(lines, ["FN(2Ch) CMD(00h) -> C1h (missing VSO identifier)"]);
+            assert_eq!(lines, ["FN(2Ch) CMD(00h) -> C1h (defining body not VSO)"]);
         }
+        // No data at all: no defining body, C7h and no data (IPMI Table 5-2, section 5.3.1).
+        let (frame, lines) = run(&table, NETFN_GROUP_EXT, 0x00, &[]);
+        let resp = ipmb::parse(&frame).unwrap();
+        assert_eq!(
+            (resp.completion_code, resp.data),
+            (Some(cc::REQ_LEN_INVALID), &[][..])
+        );
+        assert_eq!(lines, ["FN(2Ch) CMD(00h) -> C7h (no defining body byte)"]);
         // Unknown command with a good VSO byte.
         let (frame, _) = run(&table, NETFN_GROUP_EXT, 0x77, &[VSO_IDENTIFIER]);
         let resp = ipmb::parse(&frame).unwrap();
@@ -680,8 +718,14 @@ mod tests {
         Ok(0)
     }
 
-    /// Request bytes with destination LUN `lun` (rsLUN in byte 1), checksums rebuilt.
-    fn request_to_lun(netfn: u8, cmd: u8, lun: u8) -> ([u8; ipmb::IPMB_MAX_LEN], usize) {
+    /// Request bytes with destination LUN `lun` (rsLUN in byte 1) and request `data`, checksums
+    /// rebuilt.
+    fn request_to_lun(
+        netfn: u8,
+        cmd: u8,
+        lun: u8,
+        data: &[u8],
+    ) -> ([u8; ipmb::IPMB_MAX_LEN], usize) {
         let header = ipmb::Header {
             dest: 0x82,
             netfn,
@@ -692,7 +736,7 @@ mod tests {
             cmd,
         };
         let mut buf = [0u8; ipmb::IPMB_MAX_LEN];
-        let n = ipmb::encode_request(&header, &[], &mut buf).unwrap();
+        let n = ipmb::encode_request(&header, data, &mut buf).unwrap();
         (buf, n)
     }
 
@@ -700,7 +744,7 @@ mod tests {
     fn nonzero_lun_is_c2_before_any_handler() {
         let table = [cmd(NETFN_APP, 0x30, "Lun", "test", lun_handler)];
         for lun in 1..=3u8 {
-            let (buf, n) = request_to_lun(NETFN_APP, 0x30, lun);
+            let (buf, n) = request_to_lun(NETFN_APP, 0x30, lun, &[]);
             let req = ipmb::parse(&buf[..n]).unwrap();
             let mut queue = EgressQueue::new();
             let mut trace = RecordingTrace::default();
@@ -728,7 +772,7 @@ mod tests {
             "handler ran for a LUN it does not serve"
         );
         // The same request on LUN 0 reaches the handler.
-        let (buf, n) = request_to_lun(NETFN_APP, 0x30, 0);
+        let (buf, n) = request_to_lun(NETFN_APP, 0x30, 0, &[]);
         let req = ipmb::parse(&buf[..n]).unwrap();
         let mut queue = EgressQueue::new();
         dispatch_with(
@@ -748,26 +792,37 @@ mod tests {
     }
 
     #[test]
-    fn nonzero_lun_on_group_extension_keeps_the_vso_byte() {
-        let (buf, n) = request_to_lun(NETFN_GROUP_EXT, 0x00, 2);
-        let req = ipmb::parse(&buf[..n]).unwrap();
-        let mut queue = EgressQueue::new();
-        dispatch_with(
-            &[],
-            &mut context(),
-            &req,
-            Bus::A,
-            0,
-            &mut queue,
-            &mut NoTrace,
-        )
-        .unwrap();
-        let frame = queue.pop().unwrap();
-        let resp = ipmb::parse(frame.as_bytes()).unwrap();
-        assert_eq!(
-            (resp.completion_code, resp.data),
-            (Some(cc::INVALID_FOR_LUN), &[VSO_IDENTIFIER][..])
-        );
+    fn nonzero_lun_on_group_extension_is_answered_c2h_first() {
+        // C2h takes precedence over a missing (C7h) or foreign (C1h) defining body and over the
+        // command; the response echoes the request's defining-body byte when it has one.
+        let cases: [(&[u8], &[u8]); 4] = [
+            (&[], &[]),
+            (&[VSO_IDENTIFIER], &[VSO_IDENTIFIER]),
+            (&[VSO_IDENTIFIER, 0xA1], &[VSO_IDENTIFIER]),
+            (&[0x05, 0xA1], &[0x05]),
+        ];
+        for (data, echoed) in cases {
+            let (buf, n) = request_to_lun(NETFN_GROUP_EXT, 0x00, 2, data);
+            let req = ipmb::parse(&buf[..n]).unwrap();
+            let mut queue = EgressQueue::new();
+            dispatch_with(
+                &[],
+                &mut context(),
+                &req,
+                Bus::A,
+                0,
+                &mut queue,
+                &mut NoTrace,
+            )
+            .unwrap();
+            let frame = queue.pop().unwrap();
+            let resp = ipmb::parse(frame.as_bytes()).unwrap();
+            assert_eq!(
+                (resp.completion_code, resp.data),
+                (Some(cc::INVALID_FOR_LUN), echoed),
+                "request data {data:02X?}"
+            );
+        }
     }
 
     static FULL_RAN: AtomicBool = AtomicBool::new(false);

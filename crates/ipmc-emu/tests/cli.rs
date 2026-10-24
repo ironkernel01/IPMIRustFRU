@@ -11,13 +11,17 @@ fn emu(args: &[&str]) -> Output {
         .expect("run ipmc-emu")
 }
 
-fn capture() -> String {
-    capture_path().to_string_lossy().into_owned()
+/// capture -- the capture path as text, None (with the skip line printed) when the file is absent.
+fn capture() -> Option<String> {
+    if common::capture_missing() {
+        return None;
+    }
+    Some(capture_path().to_string_lossy().into_owned())
 }
 
 #[test]
 fn the_capture_run_with_both_buses_exits_0() {
-    let file = capture();
+    let Some(file) = capture() else { return };
     let out = emu(&[
         "replay",
         &file,
@@ -36,7 +40,7 @@ fn the_capture_run_with_both_buses_exits_0() {
 
 #[test]
 fn the_bench_build_run_exits_0_and_reports_the_unfitted_bus() {
-    let file = capture();
+    let Some(file) = capture() else { return };
     let out = emu(&["replay", &file, "--b-fitted", "0"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
@@ -51,7 +55,7 @@ fn the_bench_build_run_exits_0_and_reports_the_unfitted_bus() {
 
 #[test]
 fn a_run_that_loses_responses_exits_1_and_names_the_reason() {
-    let file = capture();
+    let Some(file) = capture() else { return };
     let out = emu(&[
         "replay",
         &file,
@@ -73,7 +77,7 @@ fn a_run_that_loses_responses_exits_1_and_names_the_reason() {
 
 #[test]
 fn trace_prints_the_frames() {
-    let file = capture();
+    let Some(file) = capture() else { return };
     let out = emu(&[
         "replay",
         &file,
@@ -106,7 +110,7 @@ fn no_arguments_prints_usage_and_exits_2() {
 
 #[test]
 fn a_bad_option_exits_2() {
-    let file = capture();
+    let Some(file) = capture() else { return };
     let bad_policy = emu(&["replay", &file, "--policy", "x"]);
     assert_eq!(bad_policy.status.code(), Some(2));
     // IPMB-B enabled at start but not fitted.
@@ -142,5 +146,20 @@ fn sdr_prints_one_consistent_line_per_record() {
             .collect();
         // Record header: ID (2), version, type, length; the length counts the bytes after it.
         assert_eq!(usize::from(bytes[4]) + 5, bytes.len());
+    }
+}
+
+#[test]
+fn serve_rejects_bad_options_with_exit_2() {
+    let cases: [&[&str]; 4] = [
+        &["serve", "--bogus"],
+        &["serve", "--port", "http"],
+        &["serve", "--fail-every", "3"],
+        &["serve", "some.vec"],
+    ];
+    for args in cases {
+        let out = emu(args);
+        assert_eq!(out.status.code(), Some(2), "args {args:?}");
+        assert!(!out.stderr.is_empty(), "args {args:?}");
     }
 }

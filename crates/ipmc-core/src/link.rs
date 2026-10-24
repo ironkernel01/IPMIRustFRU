@@ -880,6 +880,12 @@ impl Link {
         self.dispatch_errors
     }
 
+    /// egress_empty -- no response waits for transmission (the firmware also needs this for a
+    /// quiet bus before a flash erase).
+    pub const fn egress_empty(&self) -> bool {
+        self.egress.is_empty()
+    }
+
     /// egress_dropped -- responses the egress queue rejected because it was full.
     pub const fn egress_dropped(&self) -> u32 {
         self.egress.dropped()
@@ -1233,6 +1239,21 @@ mod tests {
         assert_eq!(sent, order);
         assert_eq!(link.counters(Bus::A).rx_ok, 2);
         assert_eq!(link.counters(Bus::B).rx_ok, 2);
+    }
+
+    #[test]
+    fn egress_empty_follows_the_response_queue() {
+        let mut link = link_with(false, TxPolicy::Alternate);
+        assert!(link.egress_empty());
+        link.on_frame(Bus::A, &count_request(1, &[]), 0).unwrap();
+        assert!(
+            link.egress_empty(),
+            "a request in the ingress FIFO has no response yet"
+        );
+        assert_eq!(poll(&mut link, 0), 1);
+        assert!(!link.egress_empty());
+        drain(&mut link);
+        assert!(link.egress_empty());
     }
 
     #[test]

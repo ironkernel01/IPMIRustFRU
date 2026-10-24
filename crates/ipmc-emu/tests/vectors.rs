@@ -15,6 +15,9 @@ fn err(text: &str) -> VectorError {
 
 #[test]
 fn the_real_capture_is_accepted() {
+    if common::capture_missing() {
+        return;
+    }
     let all = vectors::load(&capture_path()).expect("capture loads");
     assert_eq!(all.len(), CAPTURE_FRAMES);
     assert!(all.iter().all(|v| !v.bytes.is_empty()));

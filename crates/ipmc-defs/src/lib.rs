@@ -334,6 +334,35 @@ const _: () = assert!(
     IPMC_FRU_SIZE.is_multiple_of(8) && IPMC_FRU_SIZE >= 8 && IPMC_FRU_SIZE <= 0xFFFF,
     "IPMC_FRU_SIZE must be a multiple of 8, 8..=65535"
 );
+// The flash persistence switch is a boolean; the save delay is long enough to coalesce a chunked
+// Write FRU Data and short enough that a write is on flash before a person resets the board.
+const _: () = assert!(
+    IPMC_FRU_PERSIST == 0 || IPMC_FRU_PERSIST == 1,
+    "IPMC_FRU_PERSIST must be 0 or 1"
+);
+const _: () = assert!(
+    IPMC_FRU_PERSIST_DELAY_MS >= 100 && IPMC_FRU_PERSIST_DELAY_MS <= 10_000,
+    "IPMC_FRU_PERSIST_DELAY_MS must be 100..=10000"
+);
+// The blank-check buffer is read in whole flash words and holds at least a few of them; the upper
+// bound keeps it a small stack buffer (the record is IPMC_FRU_SIZE + 16 bytes).
+const _: () = assert!(
+    IPMC_FRU_SCAN_CHUNK.is_multiple_of(4)
+        && IPMC_FRU_SCAN_CHUNK >= 16
+        && IPMC_FRU_SCAN_CHUNK <= 272,
+    "IPMC_FRU_SCAN_CHUNK must be a multiple of 4, 16..=272"
+);
+// The quiet time before a run-time erase is longer than one IPMB frame exchange and short enough
+// that a save is not held back for long on a busy bus.
+const _: () = assert!(
+    IPMC_FRU_ERASE_QUIET_MS >= 100 && IPMC_FRU_ERASE_QUIET_MS <= 5_000,
+    "IPMC_FRU_ERASE_QUIET_MS must be 100..=5000"
+);
+// A frame in progress ends within T1 = 20 ms (VITA 46.11 Table 4.1.1-1); the wait covers one.
+const _: () = assert!(
+    IPMC_FRU_PAUSE_WAIT_MS >= 20 && IPMC_FRU_PAUSE_WAIT_MS <= 200,
+    "IPMC_FRU_PAUSE_WAIT_MS must be 20..=200"
+);
 
 // ---- SDR ID strings ----
 
@@ -515,4 +544,21 @@ const _: () = assert!(
 const _: () = assert!(
     IPMC_EMU_REPORT_LINES_MAX >= 1,
     "IPMC_EMU_REPORT_LINES_MAX must be at least 1"
+);
+// The serve-mode port is a user port: below 1024 is privileged, above 65535 is not a port.
+const _: () = assert!(
+    IPMC_EMU_PORT >= 1024 && IPMC_EMU_PORT <= 65535,
+    "IPMC_EMU_PORT must be 1024..=65535"
+);
+// A serve-mode response leaves at most two loop steps plus the transmission time after its
+// request (the step that takes the request in, then the step at the end of the transmission);
+// that must stay inside the VITA 46.11 T5 response limit (227 ms, as above).
+const _: () = assert!(
+    IPMC_EMU_SERVE_POLL_MS >= 1 && 2 * IPMC_EMU_SERVE_POLL_MS + IPMC_EMU_TX_DONE_DELAY_MS <= 227,
+    "IPMC_EMU_SERVE_POLL_MS must be at least 1, and two of it plus IPMC_EMU_TX_DONE_DELAY_MS at most 227"
+);
+// The echo is a cut of one accepted line, so it can be no longer than a line.
+const _: () = assert!(
+    IPMC_EMU_ERROR_ECHO_MAX >= 1 && IPMC_EMU_ERROR_ECHO_MAX <= IPMC_EMU_VECTOR_LINE_MAX,
+    "IPMC_EMU_ERROR_ECHO_MAX must be 1..=IPMC_EMU_VECTOR_LINE_MAX"
 );

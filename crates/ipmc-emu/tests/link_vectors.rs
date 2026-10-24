@@ -107,6 +107,9 @@ fn assert_counts(link: &Link, e: &Expected) {
 
 #[test]
 fn alternate_policy_sends_every_response_once_alternating_buses() {
+    if common::capture_missing() {
+        return;
+    }
     let e = expected();
     let mut l = link(TxPolicy::Alternate);
     let sent = replay(&mut l);
@@ -122,6 +125,9 @@ fn alternate_policy_sends_every_response_once_alternating_buses() {
 
 #[test]
 fn arrival_policy_answers_on_the_request_bus() {
+    if common::capture_missing() {
+        return;
+    }
     let e = expected();
     let mut l = link(TxPolicy::Arrival);
     let sent = replay(&mut l);
@@ -145,6 +151,9 @@ fn arrival_policy_answers_on_the_request_bus() {
 /// the later retry of the same request, arriving on B, is answered from the cache.
 #[test]
 fn failed_response_on_a_is_resent_on_b_and_the_retry_is_replayed() {
+    if common::capture_missing() {
+        return;
+    }
     let first_on_a = load()
         .into_iter()
         .find(|v| v.bus == Bus::A && ipmb::parse(&v.bytes).is_ok_and(|f| !f.header.is_response()))

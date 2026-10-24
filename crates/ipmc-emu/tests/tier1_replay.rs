@@ -247,6 +247,9 @@ fn expected_get_device_sdr(data: &[u8], reservation: u16) -> (u8, &'static str) 
 
 #[test]
 fn every_captured_request_gets_the_documented_answer() {
+    if common::capture_missing() {
+        return;
+    }
     let resolved = addr::resolve(0x7F);
     let mut link = Link::new(
         LinkConfig {

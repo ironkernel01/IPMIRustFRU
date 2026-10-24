@@ -13,12 +13,14 @@
 //! | `vectors` | the one reader of the vector file format (`vectors/sbc_ab.vec`) |
 //! | `emulator` | `Emulator`, the board in software, and `EmuConfig` |
 //! | `replay` | replay of a vector list through an `Emulator`, the comparison with the captured responses and `ReplayReport` |
+//! | `serve` | `Board`, the emulator in real time, and the TCP line protocol of `ipmc-emu serve` |
 //! | `trace` | the stdout trace sink and the hex formatter |
 //!
 //! # Running
 //!
 //! ```text
 //! cargo run -p ipmc-emu -- replay <file.vec> [options]
+//! cargo run -p ipmc-emu -- serve [--port N] [--b-fitted 0|1] [--policy alternate|arrival] [--trace]
 //! cargo run -p ipmc-emu -- sdr
 //! cargo run -p ipmc-emu -- help
 //! ```
@@ -81,9 +83,37 @@
 //! `--b-fitted 1 --b-enabled 1 --policy arrival` reproduces its traffic. The build default
 //! (IPMB-B not fitted) counts the IPMB-B requests as NoBus and passes, which is the bench
 //! situation with one Aardvark.
+//!
+//! # Serve mode
+//!
+//! `serve` runs the emulator in real time (std `Instant`, one step every `IPMC_EMU_SERVE_POLL_MS`
+//! in `ipmi_defs.h`) and listens on 127.0.0.1. `--port N` sets the TCP port (default
+//! `IPMC_EMU_PORT` in `ipmi_defs.h`; 0 picks a free port). The first stdout line is `listening
+//! 127.0.0.1:<port>`. One client at a time is served; a new client starts a fresh board in its
+//! start-up state, as a power cycle (IPMB-B disabled until Set IPMB State, Rule 4.1.1-4).
+//! `--b-fitted` and `--policy` are as for replay.
+//!
+//! The protocol is ASCII, one message per line (LF or CR LF), at most `IPMC_EMU_VECTOR_LINE_MAX`
+//! characters. Frame bytes are hex, one or two digits each, separated by spaces, read by the one
+//! vector reader (`vectors::parse_bus`, `vectors::frame_bytes`).
+//!
+//! | Direction | Line | Meaning |
+//! |---|---|---|
+//! | client to emulator | `A <hex bytes>` / `B <hex bytes>` | a frame the Chassis Manager writes on that bus; the first byte is the 8-bit destination address as in the vector format (a Broadcast Get Device ID starts with the general-call byte `00`) |
+//! | client to emulator | `#bus A down` / `#bus A up` (and B) | break or repair a bus: frames to and from it are lost and the IPMC's transmissions on it fail (`on_tx_result(false)`, so the Link resends on the other bus, Rule 4.1.1-7) |
+//! | client to emulator | `#reset` | power-cycle the board (both buses up again) |
+//! | client to emulator | `#quit` | end the session; the server waits for the next client |
+//! | emulator to client | `A <hex>` / `B <hex>` | a frame the IPMC transmits, with its bus |
+//! | emulator to client | `#ready <hex>` | once at connect and after `#reset`: the IPMC's own IPMB address (8-bit form) |
+//! | emulator to client | `# <text>` | a trace line, only with `--trace` |
+//! | emulator to client | `#error <line text>: <reason>` | the client line was rejected; the session continues |
+//!
+//! A frame the Link drops (checksum, wrong address, disabled bus) is not an error line; it is
+//! counted by the Link and shown as a trace line.
 #![forbid(unsafe_code)]
 
 pub mod emulator;
 pub mod replay;
+pub mod serve;
 pub mod trace;
 pub mod vectors;

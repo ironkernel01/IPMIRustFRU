@@ -6,6 +6,7 @@ use ipmc_core::link::TxPolicy;
 use ipmc_core::trace::{NoTrace, Trace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
 use ipmc_emu::replay::{replay, ReplayOptions};
+use ipmc_emu::serve::{self, ServeConfig};
 use ipmc_emu::trace::StdoutTrace;
 use ipmc_emu::vectors;
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ ipmc-emu - the IPMC on the PC
 
 Usage:
   ipmc-emu replay <file.vec> [options]
+  ipmc-emu serve [options]
   ipmc-emu sdr
   ipmc-emu help
 
@@ -35,6 +37,16 @@ Options for replay (defaults from ipmi_defs.h):
   --fail-every N      report every Nth transmission failed (default 0, none)
   --trace             print every frame and trace line
   --quiet             print a one-line summary only
+
+Options for serve (defaults from ipmi_defs.h):
+  --port N            TCP port on 127.0.0.1 (default IPMC_EMU_PORT; 0 picks a free port)
+  --b-fitted 0|1      IPMB-B is built in
+  --policy alternate|arrival
+                      response bus policy
+  --trace             send trace lines to the client, each prefixed by a hash
+
+serve runs the IPMC in real time behind a line protocol (see the ipmc-emu crate
+documentation); one client at a time, a new client starts a fresh board.
 
 sdr prints the Device SDR repository, one line per record:
   <record ID, 4 hex digits> <record bytes, hex, space separated>
@@ -64,6 +76,10 @@ fn main() -> ExitCode {
             Ok(parsed) => run_replay(parsed),
             Err(message) => usage_error(&message),
         },
+        Some("serve") => match parse_serve(&args[1..]) {
+            Ok(parsed) => run_serve(parsed),
+            Err(message) => usage_error(&message),
+        },
         Some("sdr") if args.len() == 1 => run_sdr(),
         Some("sdr") => usage_error("sdr takes no arguments"),
         Some(other) => usage_error(&format!("unknown command '{other}'")),
@@ -76,54 +92,118 @@ fn usage_error(message: &str) -> ExitCode {
     ExitCode::from(EXIT_USAGE)
 }
 
-fn parse_replay(args: &[String]) -> Result<Args, String> {
-    let mut file: Option<PathBuf> = None;
-    let mut config = EmuConfig::from_defs();
-    let mut options = ReplayOptions::default();
-    let (mut trace, mut quiet) = (false, false);
+/// REPLAY_OPTIONS / SERVE_OPTIONS -- the options each command accepts.
+const REPLAY_OPTIONS: [&str; 6] = [
+    "--b-fitted",
+    "--b-enabled",
+    "--policy",
+    "--fail-every",
+    "--trace",
+    "--quiet",
+];
+const SERVE_OPTIONS: [&str; 4] = ["--b-fitted", "--policy", "--port", "--trace"];
+
+/// Parsed -- every option of `replay` and `serve`; a command reads the fields it accepts.
+struct Parsed {
+    file: Option<PathBuf>,
+    config: EmuConfig,
+    fail_every: u32,
+    port: u16,
+    trace: bool,
+    quiet: bool,
+}
+
+/// parse_options -- the one command-line parser: the options in `allowed` and, for replay, one
+/// file name (`takes_file`). Err(message) for an unknown option, a missing or bad value, or a
+/// second file.
+fn parse_options(args: &[String], allowed: &[&str], takes_file: bool) -> Result<Parsed, String> {
+    let mut parsed = Parsed {
+        file: None,
+        config: EmuConfig::from_defs(),
+        fail_every: 0,
+        port: ServeConfig::from_defs().port,
+        trace: false,
+        quiet: false,
+    };
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let mut value = |name: &str| -> Result<&String, String> {
             iter.next().ok_or(format!("{name} needs a value"))
         };
-        match arg.as_str() {
-            "--b-fitted" => config.b_fitted = flag(value("--b-fitted")?, "--b-fitted")?,
-            "--b-enabled" => {
-                config.b_enabled_at_start = flag(value("--b-enabled")?, "--b-enabled")?;
+        if !arg.starts_with("--") {
+            if !takes_file {
+                return Err(format!("unexpected argument '{arg}'"));
             }
+            if parsed.file.replace(PathBuf::from(arg)).is_some() {
+                return Err("more than one vector file given".to_string());
+            }
+            continue;
+        }
+        if !allowed.contains(&arg.as_str()) {
+            return Err(format!("unknown option '{arg}'"));
+        }
+        match arg.as_str() {
+            "--b-fitted" => parsed.config.b_fitted = flag(value(arg)?, arg)?,
+            "--b-enabled" => parsed.config.b_enabled_at_start = flag(value(arg)?, arg)?,
             "--policy" => {
-                config.tx_policy = match value("--policy")?.as_str() {
+                parsed.config.tx_policy = match value(arg)?.as_str() {
                     "alternate" => TxPolicy::Alternate,
                     "arrival" => TxPolicy::Arrival,
-                    other => {
-                        return Err(format!("--policy: '{other}' is not alternate or arrival"))
-                    }
+                    other => return Err(format!("{arg}: '{other}' is not alternate or arrival")),
                 };
             }
-            "--fail-every" => {
-                let text = value("--fail-every")?;
-                options.fail_every = text
-                    .parse()
-                    .map_err(|_| format!("--fail-every: '{text}' is not a number"))?;
-            }
-            "--trace" => trace = true,
-            "--quiet" => quiet = true,
-            other if other.starts_with("--") => return Err(format!("unknown option '{other}'")),
-            path => {
-                if file.replace(PathBuf::from(path)).is_some() {
-                    return Err("more than one vector file given".to_string());
-                }
-            }
+            "--fail-every" => parsed.fail_every = number(value(arg)?, arg)?,
+            "--port" => parsed.port = number(value(arg)?, arg)?,
+            "--trace" => parsed.trace = true,
+            _ => parsed.quiet = true,
         }
     }
-    let file = file.ok_or("replay needs a vector file".to_string())?;
+    Ok(parsed)
+}
+
+/// number -- text to an unsigned number for the option `name`.
+fn number<T: std::str::FromStr>(text: &str, name: &str) -> Result<T, String> {
+    text.parse()
+        .map_err(|_| format!("{name}: '{text}' is not a valid number"))
+}
+
+fn parse_replay(args: &[String]) -> Result<Args, String> {
+    let parsed = parse_options(args, &REPLAY_OPTIONS, true)?;
     Ok(Args {
-        file,
-        config,
-        options,
-        trace,
-        quiet,
+        file: parsed
+            .file
+            .ok_or("replay needs a vector file".to_string())?,
+        config: parsed.config,
+        options: ReplayOptions {
+            fail_every: parsed.fail_every,
+        },
+        trace: parsed.trace,
+        quiet: parsed.quiet,
     })
+}
+
+fn parse_serve(args: &[String]) -> Result<ServeConfig, String> {
+    let parsed = parse_options(args, &SERVE_OPTIONS, false)?;
+    Ok(ServeConfig {
+        emu: parsed.config,
+        port: parsed.port,
+        trace: parsed.trace,
+    })
+}
+
+/// run_serve -- binds the port, prints the bound address and serves clients until killed.
+fn run_serve(config: ServeConfig) -> ExitCode {
+    let listener = match serve::bind(config.port) {
+        Ok(listener) => listener,
+        Err(e) => return usage_error(&format!("port {}: {e}", config.port)),
+    };
+    match serve::run(&listener, &config) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(EXIT_FAIL)
+        }
+    }
 }
 
 /// flag -- "0" or "1" to a bool.

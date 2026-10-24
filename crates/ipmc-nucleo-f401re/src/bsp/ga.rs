@@ -1,6 +1,7 @@
 // bsp/ga.rs - strap pin configuration (GA0..GA4, GAP, NVMRO) and the raw level read. Decoding is in ipmc_core::addr.
 
 use cortex_m::interrupt;
+use ipmc_core::addr;
 use ipmc_sensors::drivers::stm32f401::ports::{self, Pins, PortError, PortId, Pull};
 
 use super::static_slot::{self, StaticSlot};
@@ -21,6 +22,14 @@ pub fn init() -> Result<(), PortError> {
     pins.input(Pull::Up);
     static_slot::install(&PINS, pins);
     Ok(())
+}
+
+/// nvmro_asserted -- the live NVMRO state: a fresh pin sample through the one decoding rule
+/// (`addr::nvmro_asserted`, which honours the IPMB_NVMRO_SOURCE forced value). The flash driver
+/// calls it immediately before every erase and every program; the main loop calls it for the
+/// cached state that drives the Write FRU Data answer.
+pub fn nvmro_asserted() -> bool {
+    addr::nvmro_asserted(read_raw())
 }
 
 /// read_raw -- reads the raw pin levels (bit n = PC(n), 1 = high). Before `init` every pin reads high.

@@ -242,6 +242,26 @@ fn write_fru_data_error_paths() {
 }
 
 #[test]
+fn only_an_accepted_write_fru_data_marks_the_store_dirty() {
+    let mut c = ctx();
+    assert!(!c.fru.is_dirty());
+    // Refused writes (length, ID, range) leave it clean.
+    for refused in [&[0, 0, 0][..], &[1, 0, 0, 7], &[0, 0x00, 0x01, 7]] {
+        storage(&mut c, WRITE_FRU_DATA, refused);
+        assert!(!c.fru.is_dirty(), "request {refused:?}");
+    }
+    // Reads never mark it.
+    storage(&mut c, READ_FRU_DATA, &[0, 8, 0, 1]);
+    assert!(!c.fru.is_dirty());
+    assert_eq!(storage(&mut c, WRITE_FRU_DATA, &[0, 0x08, 0, 0xFF]).cc, OK);
+    assert!(c.fru.is_dirty());
+    // `set_fru` takes a new image and reruns the self test on it.
+    c.set_fru(fru::FruStore::new());
+    assert!(!c.fru.is_dirty());
+    assert!(c.self_test.passed());
+}
+
+#[test]
 fn write_fru_data_is_refused_with_80h_while_nvmro_is_asserted() {
     // VITA Rules 8-3 and 8-5: write protect everything, answer 80h, change nothing.
     let mut c = ctx();
@@ -328,6 +348,30 @@ fn a_failed_self_test_keeps_the_fru_in_m0_until_the_image_is_valid_again() {
     assert_eq!(self_test(&mut c), [0x57, 0x20]);
     assert!(c.update_sensors(3000, &on, &mut NoTrace).is_some());
     assert_eq!(c.fru_state.state(), State::M4);
+}
+
+#[test]
+fn a_corrupt_persisted_image_loaded_through_set_fru_fails_the_self_test_and_keeps_m0() {
+    // The flash log hands `set_fru` the stored image, which can be damaged since it was saved.
+    let mut c = ctx();
+    let mut stored = *fru::FruStore::new().image();
+    stored[usize::from(BOARD_STRING_BYTE)] ^= 0xFF;
+    c.set_fru(fru::FruStore::from_image(stored));
+    assert_eq!(self_test(&mut c), [0x57, 0x20]);
+    let on = snapshot(Summary::Good, Summary::Good, 0, PowerState::On);
+    assert!(c.update_sensors(1000, &on, &mut NoTrace).is_none());
+    assert_eq!(c.fru_state.state(), State::M0);
+    // Writing the original byte back repairs it: 55h 00h, and the FRU leaves M0.
+    let offset = BOARD_STRING_BYTE.to_le_bytes();
+    let original = fru::FruStore::new().image()[usize::from(BOARD_STRING_BYTE)];
+    storage(
+        &mut c,
+        WRITE_FRU_DATA,
+        &[0x00, offset[0], offset[1], original],
+    );
+    assert_eq!(self_test(&mut c), [0x55, 0x00]);
+    assert!(c.update_sensors(2000, &on, &mut NoTrace).is_some());
+    assert_eq!(c.fru_state.state(), State::M1);
 }
 
 // ---- Get Device SDR Info (Table 35-2) ----
@@ -672,9 +716,12 @@ fn vso_capabilities_frame_is_byte_exact() {
 fn vso_capabilities_error_paths() {
     let mut c = ctx();
     expect_err(call_vso(&mut c, GET_VSO_CAPABILITIES, &[0x00]), BAD_CMD_LEN);
-    // A wrong or missing VSO identifier is C1h from the dispatcher, with 03h first.
+    // Another defining body is C1h from the dispatcher, echoing that body's byte; no defining
+    // body byte at all is C7h with no data (IPMI v2.0 Tables 5-1 and 5-2).
     let r = call(&mut c, 0x2C, GET_VSO_CAPABILITIES, &[0x05]);
-    assert_eq!((r.cc, r.data), (0xC1, vec![0x03]));
+    assert_eq!((r.cc, r.data), (0xC1, vec![0x05]));
+    let r = call(&mut c, 0x2C, GET_VSO_CAPABILITIES, &[]);
+    assert_eq!((r.cc, r.data), (0xC7, vec![]));
 }
 
 // ---- Get Device Locator Record ID (Table 10.1.3.11-1) ----

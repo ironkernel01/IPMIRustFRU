@@ -17,3 +17,21 @@ pub fn capture_path() -> PathBuf {
 pub fn load() -> Vec<Vector> {
     vectors::load(&capture_path()).unwrap_or_else(|e| panic!("load capture: {e}"))
 }
+
+// Each integration test binary uses a different subset.
+#[allow(dead_code)]
+/// capture_missing -- true when the capture file is absent; prints one line naming the file and
+/// the reason, and the calling test then returns early (passes). The capture is local only and
+/// git-ignored (owner directive 10-23-2026), so a fresh clone does not have it. Every test that
+/// reads the capture starts with `if common::capture_missing() { return; }`.
+pub fn capture_missing() -> bool {
+    let path = capture_path();
+    if path.exists() {
+        return false;
+    }
+    println!(
+        "SKIPPED: {} is absent (the capture is local only and git-ignored)",
+        path.display()
+    );
+    true
+}

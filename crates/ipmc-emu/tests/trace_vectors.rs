@@ -19,6 +19,9 @@ fn is_response(f: &Frame) -> bool {
 
 #[test]
 fn every_frame_parses_and_round_trips() {
+    if common::capture_missing() {
+        return;
+    }
     for (i, v) in load().iter().enumerate() {
         let f = ipmb::parse(&v.bytes).unwrap_or_else(|e| panic!("frame {i}: {}", e.name()));
         let mut out = [0u8; IPMB_MAX_LEN];
@@ -33,6 +36,9 @@ fn every_frame_parses_and_round_trips() {
 
 #[test]
 fn requests_and_responses_pair_up_on_the_same_bus() {
+    if common::capture_missing() {
+        return;
+    }
     let vectors = load();
     let (mut requests, mut responses, mut bus_changes, mut orphan_responses) = (0, 0, 0, 0);
     let mut prev_request: Option<(Bus, Frame)> = None;
@@ -87,6 +93,9 @@ const DEVICE_ID_DATA: [u8; 15] = [
 /// dispatched onto the egress queue (drained as it goes) on the bus it arrived on.
 #[test]
 fn dispatcher_answers_every_captured_request() {
+    if common::capture_missing() {
+        return;
+    }
     let mut ctx = Context::new(addr::resolve(0x7F));
     let mut queue = EgressQueue::new();
     let vectors = load();

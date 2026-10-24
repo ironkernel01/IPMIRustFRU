@@ -74,7 +74,8 @@ pub fn read_fru_data(ctx: &mut Context, req: &Frame, out: &mut [u8]) -> Result<u
 /// recorded in the self test results (VITA Rec 8-2): a Chassis Manager that writes an area in
 /// several chunks sees 57h from Get Self Test Results between them, and 55h 00h again once the
 /// image verifies. The result gates only M0 to M1; a later failure leaves M1 and M4 alone.
-/// The store is RAM: the write is lost at reset (flash persistence is a later phase).
+/// The write marks the store dirty; the firmware saves it to the flash log once no further write
+/// has come for IPMC_FRU_PERSIST_DELAY_MS and NVMRO is deasserted (ipmc-fru `persist`).
 pub fn write_fru_data(ctx: &mut Context, req: &Frame, out: &mut [u8]) -> Result<usize, u8> {
     let [fru_id, lo, hi, data @ ..] = req.data else {
         return Err(cc::REQ_LEN_INVALID);

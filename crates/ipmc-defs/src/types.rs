@@ -70,6 +70,11 @@ const _: u32 = IPMC_PRODUCT_ID;
 const _: u32 = IPMC_AUX_FIRMWARE;
 const _: u32 = IPMC_FRU_MFG_MINUTES;
 const _: u32 = IPMC_FRU_SIZE;
+const _: u32 = IPMC_FRU_PERSIST;
+const _: u32 = IPMC_FRU_PERSIST_DELAY_MS;
+const _: u32 = IPMC_FRU_SCAN_CHUNK;
+const _: u32 = IPMC_FRU_ERASE_QUIET_MS;
+const _: u32 = IPMC_FRU_PAUSE_WAIT_MS;
 const _: u32 = IPMC_SRC_HW;
 const _: u32 = IPMC_SRC_SIM;
 const _: u32 = IPMC_SRC_I2C;
@@ -111,6 +116,9 @@ const _: u32 = IPMC_SIM_RESET_N_HIGH;
 const _: u32 = IPMC_EMU_TX_DONE_DELAY_MS;
 const _: u32 = IPMC_EMU_VECTOR_LINE_MAX;
 const _: u32 = IPMC_EMU_REPORT_LINES_MAX;
+const _: u32 = IPMC_EMU_PORT;
+const _: u32 = IPMC_EMU_SERVE_POLL_MS;
+const _: u32 = IPMC_EMU_ERROR_ECHO_MAX;
 
 // Signed integers (i32): the temperatures, tagged `[i32]` in the header.
 const _: i32 = IPMC_TEMP_LNC_C;

@@ -1,9 +1,10 @@
 //! store.rs - the FRU scratchpad memory: the RAM copy of the FRU inventory area that Read FRU
 //! Data and Write FRU Data (ipmc-core cmd/storage.rs) use.
 //!
-//! The store is RAM today: a reset restores the built image. The Phase 6b flash persistence
-//! lands in this file, as a backend that the firmware's flash driver implements, so the
-//! scratchpad stays in this crate and no other crate holds FRU bytes.
+//! The store is the RAM copy. `persist.rs` keeps it on flash: it loads the stored image into a
+//! store at boot and saves the store after a Write FRU Data, behind the `FlashLog` trait the
+//! firmware implements, so the scratchpad stays in this crate and no other crate holds FRU bytes.
+//! `write` marks the store dirty; `persist::Persist::poll` is the one reader of that mark.
 
 use crate::records::{IMAGE, SIZE};
 
@@ -49,12 +50,41 @@ impl FruError {
 /// FruStore -- the RAM copy of the FRU inventory area.
 pub struct FruStore {
     bytes: [u8; SIZE],
+    /// An accepted write changed `bytes` since `take_dirty` last ran (written by `write`, read
+    /// and cleared by `persist::Persist::poll`, both in the main loop).
+    dirty: bool,
 }
 
 impl FruStore {
     /// new -- a store holding the built image.
     pub const fn new() -> FruStore {
-        FruStore { bytes: IMAGE.bytes }
+        FruStore {
+            bytes: IMAGE.bytes,
+            dirty: false,
+        }
+    }
+
+    /// from_image -- a store holding `image`, a stored image loaded from flash; not dirty.
+    pub const fn from_image(image: [u8; SIZE]) -> FruStore {
+        FruStore {
+            bytes: image,
+            dirty: false,
+        }
+    }
+
+    /// image -- the whole area as a fixed-size array (what `persist` saves).
+    pub const fn image(&self) -> &[u8; SIZE] {
+        &self.bytes
+    }
+
+    /// is_dirty -- a write changed the area and `persist` has not yet taken the mark.
+    pub const fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// take_dirty -- returns the dirty mark and clears it.
+    pub fn take_dirty(&mut self) -> bool {
+        core::mem::take(&mut self.dirty)
     }
 
     /// bytes -- the whole area.
@@ -75,13 +105,15 @@ impl FruStore {
     }
 
     /// write -- stores `data` at `offset`. Err(OutOfRange) when the range is not inside the
-    /// area; nothing is written then. The caller checks NVMRO (VITA Rule 8-3) first.
+    /// area; nothing is written then. The caller checks NVMRO (VITA Rule 8-3) first. An accepted
+    /// write marks the store dirty.
     pub fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), FruError> {
         let end = offset.checked_add(data.len()).ok_or(FruError::OutOfRange)?;
         self.bytes
             .get_mut(offset..end)
             .ok_or(FruError::OutOfRange)?
             .copy_from_slice(data);
+        self.dirty = true;
         Ok(())
     }
 }
@@ -105,7 +137,12 @@ mod tests {
         assert_eq!(store.read(SIZE, 0).map(<[u8]>::len), Ok(0));
         assert_eq!(store.write(SIZE - 1, &[1, 2]), Err(FruError::OutOfRange));
         assert_eq!(store.read(SIZE - 1, 1).unwrap(), &[0]);
+        assert!(!store.is_dirty(), "a refused write leaves the store clean");
         assert_eq!(store.write(SIZE - 2, &[0xAA, 0xBB]), Ok(()));
         assert_eq!(store.read(SIZE - 2, 2).unwrap(), &[0xAA, 0xBB]);
+        assert!(store.is_dirty());
+        assert!(store.take_dirty());
+        assert!(!store.take_dirty(), "the mark is taken once");
+        assert!(!FruStore::from_image([0; SIZE]).is_dirty());
     }
 }

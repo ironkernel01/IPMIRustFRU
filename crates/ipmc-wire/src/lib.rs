@@ -6,6 +6,7 @@
 //! - `zero_checksum`: the two's-complement checksum of IPMB frames and FRU areas.
 //! - `Builder`: the const byte-record builder of the SDR records and the FRU image.
 //! - `Builder::push_type_length_ascii`: the IPMI type/length field of 8-bit ASCII text.
+//! - `crc32_update` / `crc32`: the CRC-32 of the stored FRU record (ipmc-fru persist.rs).
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -41,6 +42,45 @@ pub const fn zero_checksum(bytes: &[u8]) -> u8 {
         i += 1;
     }
     0u8.wrapping_sub(sum)
+}
+
+/// CRC32_POLY_REFLECTED -- the CRC-32 polynomial 04C11DB7h bit-reversed (IEEE 802.3, the reflected
+/// form that shifts right).
+const CRC32_POLY_REFLECTED: u32 = 0xEDB8_8320;
+/// CRC32_INIT -- the register value before the first byte (IEEE 802.3: all ones). Also the final
+/// XOR value.
+pub const CRC32_INIT: u32 = 0xFFFF_FFFF;
+/// CRC32_XOROUT -- the value XORed into the register after the last byte.
+pub const CRC32_XOROUT: u32 = 0xFFFF_FFFF;
+
+/// crc32_update -- one byte folded into a CRC-32 register (IEEE 802.3: reflected, polynomial
+/// 04C11DB7h, bits shifted out LS first). Start from `CRC32_INIT`, finish with `^ CRC32_XOROUT`;
+/// `crc32` does both. Bitwise, no table: the stored FRU record is a few hundred bytes, read at
+/// boot and written after a Write FRU Data, so speed does not matter and flash is saved.
+pub const fn crc32_update(crc: u32, byte: u8) -> u32 {
+    let mut crc = crc ^ byte as u32;
+    let mut bit = 0;
+    while bit < u8::BITS {
+        crc = if crc & 1 != 0 {
+            (crc >> 1) ^ CRC32_POLY_REFLECTED
+        } else {
+            crc >> 1
+        };
+        bit += 1;
+    }
+    crc
+}
+
+/// crc32 -- the CRC-32 (IEEE 802.3) of `bytes`: init FFFFFFFFh, reflected, XOR out FFFFFFFFh.
+/// The check value of the ASCII bytes "123456789" is CBF43926h.
+pub const fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = CRC32_INIT;
+    let mut i = 0;
+    while i < bytes.len() {
+        crc = crc32_update(crc, bytes[i]);
+        i += 1;
+    }
+    crc ^ CRC32_XOROUT
 }
 
 /// Builder -- a fixed-capacity byte record built in const context: the bytes and how many of
@@ -127,6 +167,18 @@ mod tests {
         assert_eq!(zero_checksum(&[0x82, 0x18]), 0x66);
         assert_eq!(zero_checksum(&[0x01]), 0xFF);
         assert_eq!(zero_checksum(&[0xFF, 0x01]), 0x00);
+    }
+
+    #[test]
+    fn crc32_matches_the_standard_check_value_and_empty_input() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(&[]), 0);
+        // Streaming the same bytes through the byte primitive gives the same register.
+        let streamed = b"123456789"
+            .iter()
+            .fold(CRC32_INIT, |crc, &b| crc32_update(crc, b))
+            ^ CRC32_XOROUT;
+        assert_eq!(streamed, 0xCBF4_3926);
     }
 
     #[test]

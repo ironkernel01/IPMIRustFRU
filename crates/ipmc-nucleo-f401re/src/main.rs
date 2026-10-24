@@ -1,7 +1,8 @@
 // main.rs - ipmc-nucleo-f401re entry point for the NUCLEO-F401RE.
 // Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it
 // services exists), UART, IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
-// ipmi_defs.h source is hardware), strap pins, IPMB drivers (the own address is known; bus
+// ipmi_defs.h source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
+// before the I2C slaves exist), IPMB drivers (the own address is known; bus
 // recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
 // (console, sensor sampling, IPMB link, sleep).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
@@ -22,6 +23,7 @@ macro_rules! out {
 mod bsp;
 mod console;
 mod data_cmds;
+mod fru_log;
 mod ipmb_link;
 mod sensing;
 
@@ -97,6 +99,15 @@ fn main() -> ! {
         bsp::fault::claim_failed(e);
     }
 
+    // FRU flash log: loads the stored image (`None`: the built image stays in use) and erases the
+    // stale sector when it is due and NVMRO is deasserted. After the UART (it prints), before the
+    // I2C slaves start: an erase stalls the core for up to 2 s and no slave exists yet to miss a
+    // frame. The DWT cycle counter runs first so the erase can give SysTick the stalled time
+    // (systick::catch_up); a counter that does not run is reported by the IPMB master start.
+    let _ = bsp::ipmb_common::start_cycle_counter(&mut cp.DCB, &mut cp.DWT);
+    let nvmro = bsp::ga::nvmro_asserted();
+    let (fru_log, fru_image) = fru_log::FruLog::boot(dp.FLASH, nvmro);
+
     // IPMB drivers: the bus recovery, the bit-bang master and the I2C slaves, now that the own
     // address is known. A bus that cannot start prints a line and stays disabled.
     let address = ipmc_core::addr::resolve(bsp::ga::read_raw());
@@ -115,7 +126,7 @@ fn main() -> ! {
         &address,
     );
     // The one IpmbLink lives in a static; None would mean main re-entered.
-    let Some(ipmb) = ipmb_link::IpmbLink::take(ipmb_io) else {
+    let Some(ipmb) = ipmb_link::IpmbLink::take(ipmb_io, fru_log, fru_image) else {
         loop {
             cortex_m::asm::wfi();
         }
