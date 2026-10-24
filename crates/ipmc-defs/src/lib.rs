@@ -2,8 +2,7 @@
 //!
 //! build.rs parses the header (rules in defs_parser.rs) and writes one `pub const` per define:
 //! `u32` for an integer, `&str` for a string. Every crate reads a constant as
-//! `ipmc_defs::NAME`; there is no second path. The C harness includes the same header, so a
-//! value changed there changes in both builds. The guards below fail the build when a value
+//! `ipmc_defs::NAME`; there is no second path. The guards below fail the build when a value
 //! breaks a spec or datasheet rule, naming the define.
 #![no_std]
 #![forbid(unsafe_code)]
@@ -14,8 +13,8 @@ include!(concat!(env!("OUT_DIR"), "/ipmi_defs.rs"));
 // Compile-time type and {0, 1} assertions for every define (types.rs).
 mod types;
 
-// The alternatives carry their documented values: ipmi_defs.h and the C harness name them the
-// same way, and a collapsed pair (both 0) would make the `==` checks below select the first.
+// The alternatives carry their documented values: a collapsed pair (both 0) would make the `==`
+// checks below select the first.
 const _: () = assert!(
     IPMB_MASTER_HW == 0 && IPMB_MASTER_BITBANG == 1,
     "IPMB_MASTER_HW must be 0 and IPMB_MASTER_BITBANG 1"

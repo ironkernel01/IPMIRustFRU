@@ -1,6 +1,8 @@
-/* ipmi_defs.h - the single build configuration shared by the Rust build and the C harness.
+/* ipmi_defs.h - the single build configuration of the IPMC.
  *
- * The Rust build parses this file (crates/ipmc-defs/build.rs); the C harness includes it.
+ * The Rust build parses this file (crates/ipmc-defs/build.rs); the bench tools read the values
+ * they share with the IPMC (IPMC_EMU_PORT, and IPMC_CONSOLE_BAUD in gen.ps1). The file stays
+ * valid C.
  * Only "#define NAME <integer, previously defined NAME or string>" lines, the include guard,
  * blank lines and C block comments are allowed. An integer is 0x hex or decimal without a
  * leading 0 (C reads that as octal) and becomes a Rust u32. A signed integer carries the tag

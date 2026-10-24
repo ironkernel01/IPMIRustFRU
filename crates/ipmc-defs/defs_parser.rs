@@ -14,8 +14,8 @@
 //     each other;
 //   - one string literal: printable ASCII 0x20..0x7E, no backslash, no embedded quote, no
 //     adjacent literal ("a" "b"), an optional trailing block comment. The empty string is legal.
-// Everything else is rejected with its line number, so the C harness (which reads the same
-// header with a real preprocessor) cannot see a different configuration. A block comment
+// Everything else is rejected with its line number, so a C compiler that includes the header
+// (it stays valid C) cannot see a different configuration. A block comment
 // inside a string literal is text, as in C. Forms C preprocesses differently are rejected with
 // their line: `??` anywhere (trigraphs), a block comment that spans lines after code, text
 // after the `*/` of a multi-line comment. The type tag is read from the lexed trailing

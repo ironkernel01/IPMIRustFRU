@@ -15,7 +15,8 @@
 pub const IPMB_MIN_REQUEST_LEN: usize = 7;
 /// IPMB_MIN_RESPONSE_LEN -- smallest response: 6 header bytes, completion code and chk2.
 pub const IPMB_MIN_RESPONSE_LEN: usize = 8;
-/// IPMB_MAX_LEN -- largest frame, from ipmi_defs.h IPMB_MSG_MAX (peer: the C harness buffers use the same header).
+/// IPMB_MAX_LEN -- largest frame, from ipmi_defs.h IPMB_MSG_MAX (peer: the firmware's I2C receive
+/// buffer, bsp/i2c_hw.rs RX_FRAME_MAX, is this plus the address byte).
 pub const IPMB_MAX_LEN: usize = ipmc_defs::IPMB_MSG_MAX as usize;
 /// IPMB_RESPONSE_DATA_MAX -- largest data field of a response: the frame minus header, completion code and chk2.
 pub const IPMB_RESPONSE_DATA_MAX: usize = IPMB_MAX_LEN - IPMB_MIN_RESPONSE_LEN;

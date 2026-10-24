@@ -1,0 +1,8 @@
+{
+  "name": "project-diagrams",
+  "private": true,
+  "description": "Engineering drawings built as Google Slides with pptxgenjs (googleslides.md)",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}
