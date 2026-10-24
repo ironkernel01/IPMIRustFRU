@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 10-23-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 10-24-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -65,7 +65,7 @@ to `diagrams/out/png/`).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -88,8 +88,13 @@ crate and module by module, for a software engineer who maintains or extends it.
 - **Supported modes:** firmware on the STM32F401RE with the bit-bang IPMB master (default) or
   the hardware I2C master; x86 emulator with capture replay (`replay`), real-time TCP serving
   (`serve`) and an SDR dump (`sdr`).
-- **Non-goals:** Tier-2 and Tier-3 functions (events, payload power control by the Chassis
-  Manager, FRU activation policy), optional Tier-1 commands (Get Mandatory Sensor Numbers,
+- **Build modes:** the public build is the Tier-1 IPMC described here. A commercial release
+  build adds a private Tier-2/3 extension through the hook interface of section 4 (Build modes
+  and the Tier-2/3 extension); the commands and behaviour it adds are listed in section 7.2,
+  each marked "commercial release build". The public build answers those commands C1h.
+- **Non-goals of the public build:** Tier-2 and Tier-3 functions (events, payload power control
+  by the Chassis Manager, FRU activation policy; they belong to the commercial release build),
+  optional Tier-1 commands (Get Mandatory Sensor Numbers,
   FRU Control Capabilities, Get IPMB Link Info, Get FRU Hash, Get Device GUID, Set SEL Time:
   all answer C1h), subsidiary FRUs, and IPMI bridging. The built FRU image has no Internal Use
   or MultiRecord area; `verify` still checks those areas when a written image contains them.
@@ -102,7 +107,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -145,7 +150,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -175,6 +180,9 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-017 | Startup self test of the FRU image and the SDR chain; 55h 00h or 57h with the failure bits; a failure keeps the FRU in M0; rerun after each accepted Write FRU Data | IPMI Table 20-5, Rule 4.1.5.4.1-9, Rec 8-2 | `selftest.rs` |
 | FR-018 | Write FRU Data survives a reset (`IPMC_FRU_PERSIST 1`) | owner decision | `persist.rs`, `fru_log.rs` |
 | FR-019 | No IPMC pull-ups on the IPMB lines | Rule 9.2.3-2 | `bsp/ipmb_pins.rs`, `i2c_hw.rs` |
+| FR-020 | A (netFn, cmd) the Tier-1 table does not own goes to the extension hook; the Tier-1 build has none and answers C1h | Rules 4.2-2, 4.1.1-16 | `ext.rs`, `dispatch.rs` |
+| FR-021 | A Tier-2/3 build sends requests one at a time: a response wait of `IPMB_REQ_TIMEOUT_MS` (T3), up to `IPMB_REQ_RETRIES` retries with the same sequence number, a failed transmission retried on the other bus after T6 (60 ms minimum), T4 between new requests, T9 before a sequence number is reused; a Tier-1 build sends none | Rules 4.1.1-9, 4.1.1-10, 7-4, Table 4.1.1-1 | `requester.rs`, `link.rs` |
+| FR-022 | A Cold Reset request restarts the processor once its response has left the egress queue and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.2 | `reset_gate.rs`, `ipmb_link.rs` |
 
 ### Performance requirements
 
@@ -199,7 +207,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -214,19 +222,22 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 
 Source: `diagrams/src/ipmc-software.js`, sheet 1.
 
-The code is a Cargo workspace of seven crates plus the firmware crate, which is its own
+The code is a Cargo workspace of eight crates plus the firmware crate, which is its own
 workspace (it builds only for `thumbv7em-none-eabihf`). Dependencies point one way: the two
-binaries at the top, the IPMI logic in the middle, the configuration reader at the bottom.
+binaries at the top, the IPMI logic in the middle, the configuration reader at the bottom. The
+bridge crate `ipmc-ext` sits between the IPMI logic and the two binaries; it is the only place
+the private Tier-2/3 extension enters the build.
 
 | Crate | Kind | Holds |
 |---|---|---|
-| `ipmc-defs` | `no_std` library | the only Rust reader of `ipmi_defs.h`: one `pub const` per define, compile-time guards on every value |
+| `ipmc-defs` | `no_std` library | the only Rust reader of `ipmi_defs.h` (and of the extension's header when the extension is built in): one `pub const` per define, compile-time guards on every value, and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
 | `ipmc-wire` | `no_std` library | IPMI byte primitives: zero checksum, const record builder, type/length ASCII field, CRC-32, hex-byte parser |
 | `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the RAM scratchpad (`FruStore`) and the flash log (`persist`) |
-| `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer, duplicate cache, queues, command table, dispatcher, handlers, SDR repository, sensor encoders, FRU state machine, self test, trace hook |
+| `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
+| `ipmc-ext` | `no_std` library, `forbid(unsafe_code)` | the bridge: `ipmc_ext::Active` is `NoExtension` in the Tier-1 build and the extension's state when `ipmc-defs` found it; the firmware and the emulator hold one `Active` |
 | `ipmc-sensors` | `no_std` library | sensor and board-I/O HAL: three traits, hardware-free evaluation, drivers (simulation, STM32F401 ADC/GPIO behind feature `stm32f401`, example I2C/SPI parts), board table, sampling monitor, GPIO pin ownership |
 | `ipmc-menu` | `no_std` library, no dependencies besides `ipmc-defs` | the console menu engine (MenuBuilder rules, tiered groups) |
-| `ipmc-emu` | host `std` binary and library | the x86 emulator: vector reader, `Emulator`, capture replay, real-time `serve`, SDR dump |
+| `ipmc-emu` | host `std` binary and library | the x86 emulator: vector reader, `Emulator`, capture replay (also the Event Receiver), real-time `serve`, SDR dump |
 | `ipmc-nucleo-f401re` | firmware binary | start-up, board support (one module per hardware access path), IPMB drivers, flash driver, console, composition of the crates above |
 
 ### Layering rules
@@ -240,6 +251,11 @@ binaries at the top, the IPMI logic in the middle, the configuration reader at t
   transmits; `bsp/flash.rs` owns the FLASH registers after clock start-up; `uart.rs` owns
   USART2; `led.rs` owns PA5; `ga.rs` owns the strap pins; `ipmb_link.rs` owns the static Link
   and dispatch Context.
+- The dispatcher asks the extension hook only after the Tier-1 table has no row for a command, so
+  a Tier-1 command cannot be replaced. Nothing specific to a Tier-2/3 command, event or hook is
+  written in this repository: board support, processor functions (reset, flash, timers) and the
+  link layer, the IPMB requester included, live here; the Tier-2/3 commands, hooks and sensor
+  events live in the extension.
 - One implementation of each function, judged by behaviour (`tools/dupcheck.py` is a gate): one
   checksum, one frame parser and encoder, one GA decode, one sensor-read function, one record
   builder, one retry loop shared by both master methods.
@@ -268,13 +284,90 @@ binaries at the top, the IPMI logic in the middle, the configuration reader at t
   word leaves the previous image loadable.
 - **Compile-time configuration** (`ipmc-defs`): a malformed or out-of-range define fails the
   build with its line number or the guard that names it.
+- **Requester in the link layer** (`requester.rs`): the request sequence number, response
+  matching and the resend timing sit beside the response path of `Link`, so one `next_tx` hands
+  out both and responses keep priority over requests. The extension decides what to send and
+  when; a Tier-1 build never sends a request (Rule 7-4).
+- **Processor reset by hand-off** (`reset_gate.rs`): a handler asks for a Cold Reset through
+  `Context::pending_reset`; the owner of the processor performs it when the gate says nothing is
+  lost (section 8.2).
+- **Tier rules in one place** (`tier.rs`): Get Device ID, the Device SDR records and the event
+  enables derive their Tier-dependent bytes from three rules (section 9.6).
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+</tr>
+</table>
+<hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
+
+### Build modes and the Tier-2/3 extension
+
+One source tree builds two kinds of image. The public build is the Tier-1 IPMC of this document.
+The commercial release build adds the Tier-2/3 extension, which lives in a private sibling folder
+named `IPMIRustFRU_Tier23`; this repository holds only the hook interface, the bridge and the
+detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7.2).
+
+| Build | Selected by | `IPMC_TIER` | `ipmc_ext::Active` |
+|---|---|---:|---|
+| Public Tier-1 | sibling folder absent, or `IPMC_TIER23=0` | 1 | `NoExtension` |
+| Commercial release, Tier-2 | folder present, its header sets `IPMC_TIER` 2 | 2 | the extension |
+| Commercial release, Tier-3 (in development) | its header sets `IPMC_TIER` 3 | 3 | refused at compile time today |
+| Evaluation (section 8.4) | `IPMC_EVAL=1` with the extension, release profile | as the commercial build | the extension |
+
+`crates/ipmc-defs/build.rs` is the one detection point; its rules are pure functions in
+`tier23_detect.rs`, tested by `tests/tier23.rs`.
+
+| `IPMC_TIER23` | Result |
+|---|---|
+| unset | on when both marker files exist (the extension's header `ipmi_defs_tier23.h` and its library source), off when neither exists; exactly one present fails the build ("half a Tier23 checkout") |
+| `0` | off, whatever exists: the public Tier-1 build |
+| `1` | on; a missing marker file fails the build and names it |
+| any other value | fails the build |
+
+- **Defines.** Off: `ipmi_defs.h` plus `IPMC_TIER` = 1 in the generated file. On: the extension's
+  header is parsed by the same parser and merged; a name in both headers fails the build, and so
+  does `IPMC_TIER` in `ipmi_defs.h` or missing from the extension's header. The guards of the
+  extension's defines are mounted from the extension folder.
+- **Publishing the decision.** `ipmc-defs` declares `links = "ipmc_defs"` and prints
+  `cargo:tier23=1` or `0` (and `cargo:eval=1` or `0`); cargo hands these to each direct dependent
+  as `DEP_IPMC_DEFS_TIER23` and `DEP_IPMC_DEFS_EVAL`. `build.rs` also sets `cfg(tier23)` for
+  `ipmc-defs` itself and exports `ipmc_defs::TIER23_BUILT`.
+- **One build-script step for the dependents.** `ipmc-ext` and the firmware crate include
+  `crates/ipmc-defs/dep_cfg.rs` and call `cfg_from_defs(key, cfg, path)`, which turns the
+  published value into `cfg(tier23)` or `cfg(ipmc_eval)`. They read no file and no other
+  variable, so they cannot disagree with `ipmc-defs`.
+- **The bridge.** With `cfg(tier23)`, `ipmc-ext` mounts the extension's sources through a relative
+  `#[path]` and `Active` is the extension's state type; otherwise `Active` is `NoExtension`. A
+  compile-time assertion requires a build without the extension to report `IPMC_TIER` 1.
+- **Adding the folder.** The build script cannot watch a folder that is missing, so after adding
+  it to a tree already built without it, run `cargo clean -p ipmc-defs`. `gen.ps1 build` sets
+  `IPMC_TIER23` from the folder.
+- **Evaluation switch.** `IPMC_EVAL` is unset or 0 (off) or 1 (on); `IPMC_EVAL=1` without the
+  extension, or outside the release profile, fails the build. On, it prints a build warning with
+  the length and sets `cfg(ipmc_eval)`.
+
+The hook interface is `ipmc_core::ext::Extension`, three methods with a default for the last two.
+
+| Method | Called | Purpose |
+|---|---|---|
+| `command(ctx, req, out)` | by the dispatcher, after the Tier-1 table has no row for (netFn, cmd) and the LUN and VSO checks passed | answers a command the extension owns with its name and a `Handler`-style result; `None` gives C1h. For NetFn 2Ch the request data and `out` exclude the VSO byte, as for a `Handler` |
+| `poll(ctx, requester, now_ms, trace)` | once per `Link::poll`, after the queued requests are answered and `ctx.link` is refreshed | the extension sends its requests through the `Requester` |
+| `on_sample(ctx, transition, now_ms, trace)` | once per sensor sample, after `Context::update_sensors` stored the snapshot and stepped the FRU state machine | `transition` is the FRU state change that sample made, if any |
+
+`NoExtension` answers nothing and ignores both hooks. `ext::feed_sensors(ctx, ext, now_ms,
+snapshot, trace)` is the one sensor-sample entry of the firmware and the emulator: it calls
+`update_sensors`, then `on_sample` with the transition, and returns the transition.
+
+<div style="page-break-after: always;"></div>
+
+<table style="width:100%; border:none; margin:0; padding:0;">
+<tr>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -286,8 +379,8 @@ syntax: plain `#define NAME <integer>` lines (a signed value carries the tag `[i
 token of its trailing comment) and `#define NAME "text"` lines (one printable-ASCII literal, no
 escapes). `crates/ipmc-defs/build.rs` parses it with `defs_parser.rs` into
 `$OUT_DIR/ipmi_defs.rs`; every crate reads a value as `ipmc_defs::NAME`. Any other line form
-fails the build with `path:line: reason`, and `ipmc-defs/src/lib.rs` holds 104 compile-time
-guards (81 written out, 23 from the FRU-string, SDR-name and rail guard macros) that tie values to
+fails the build with `path:line: reason`, and `ipmc-defs/src/lib.rs` holds 109 compile-time
+guards (86 written out, 23 from the FRU-string, SDR-name and rail guard macros) that tie values to
 their rules (for example `IPMB_STRETCH_TIMEOUT_US` at most 3000, the T8 limit; `IPMC_FRU_SIZE` a
 multiple of 8; every FRU string at most 63 bytes). `types.rs` fixes each define to the type its
 consumers expect, so a wrong `[i32]` tag fails the build.
@@ -309,6 +402,10 @@ below group the defines; the header itself carries the rule beside each line.
 | `IPMB_DUP_CACHE` | 64 | duplicate-cache entries (8..=64) |
 | `IPMB_DUP_WINDOW_MS` | 3000 | retry window: covers 11 attempts of 250 ms, below the 3.846 s sequence reuse of the captured Chassis Manager |
 | `IPMB_TX_RETRIES` | 3 | resends of one response on the other bus (3..=10, C1) |
+| `IPMB_REQ_TIMEOUT_MS` | 250 | wait for the response to a request this IPMC sent, before a retry (60..=250; T3max, Rule 4.1.1-9; T6 spaces the retries) |
+| `IPMB_REQ_RETRIES` | 10 | retries of a request after its first transmission (3..=10; C1max, Rule 4.1.1-10): 11 transmissions x 250 ms = 2.75 s, inside the T9 expiry of 5 s |
+| `IPMB_REQ_GAP_MS` | 5 | least time from one new request to the next (at least 5; T4, Table 4.1.1-1) |
+| `IPMC_RESET_WAIT_MS` | 3000 | longest wait before a pending Cold Reset runs anyway (1..=5000): the response leaving the egress queue, one flash sector erase (up to 2 s) and the FRU write fit inside it |
 | `IPMB_INGRESS_DEPTH` | 8 | received requests held for `Link::poll` (1..=32) |
 | `IPMB_TXQ_DEPTH` | 4 | response frames in the egress queue |
 | `IPMB_RX_QUEUE_DEPTH` | 4 | frames one bus interrupt can post before the main loop drains them (2..=16) |
@@ -366,6 +463,23 @@ below group the defines; the header itself carries the rule beside each line.
 | `IPMC_EMU_PORT`, `IPMC_EMU_SERVE_POLL_MS`, `IPMC_EMU_TX_DONE_DELAY_MS` | 5470, 1, 1 | emulator TCP port, step period, transmit time |
 | `IPMC_EMU_VECTOR_LINE_MAX`, `IPMC_EMU_REPORT_LINES_MAX`, `IPMC_EMU_ERROR_ECHO_MAX` | 512, 8, 80 | emulator line and report limits |
 
+The four request and reset defines in the IPMB table are read by the link layer, the reset gate
+and the requester in every build; a Tier-1 build compiles them and sends no request.
+
+### Tier-2/3 header
+
+A build with the extension reads a second header, `ipmi_defs_tier23.h`, from the extension
+folder, with the same syntax and parser as `ipmi_defs.h` (section 4, Build modes and the Tier-2/3
+extension). The public code reads two names from it:
+
+| Define | Meaning |
+|---|---|
+| `IPMC_TIER` | the Tier the IPMC reports, 1..=3 (Get VSO Capabilities, Get Device ID, the SDR records, `LinkConfig::requests_allowed`); 1 when the extension is not built. `ipmi_defs.h` itself never defines it |
+| `IPMC_EVAL_MINUTES` | evaluation length in minutes, read by the evaluation image only (section 8.4); the firmware build checks 1..=7158 |
+
+The header's other defines belong to the extension. A name defined in both headers fails the
+build, and the public `ipmi_defs.h` names no Tier-2/3 feature.
+
 Pin assignments are not in `ipmi_defs.h`: they live in the owning board-support module
 (`bsp/ipmb_pins.rs`, `bsp/ga.rs`, `bsp/board_pins.rs`) and in
 `Documentation/nucleo_f401re_pinout.md`. Python bench-tool settings live in
@@ -377,7 +491,7 @@ Pin assignments are not in `ipmi_defs.h`: they live in the owning board-support 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -393,7 +507,12 @@ connect.
 `crates/ipmc-defs/` (`build.rs`, `defs_parser.rs`, `src/lib.rs`, `src/types.rs`)
 
 `build.rs` reads `ipmi_defs.h` (or the file named by the `IPMI_DEFS_H` environment variable, to build
-against another header) and writes one constant per define.
+against another header) and writes one constant per define. It is also the one detection point
+of the Tier-2/3 extension (section 4, Build modes and the Tier-2/3 extension): it reads
+`IPMC_TIER23` and `IPMC_EVAL`, checks the extension's marker files, merges the extension's header
+when present and publishes the decision. `tier23_detect.rs` holds the pure rules (`parse_mode`,
+`decide`, `merge`, `tier_of`, `parse_eval`, `check_eval`); `dep_cfg.rs` is the build-script step
+`ipmc-ext` and the firmware crate share.
 The parser accepts integers in decimal or `0x` hex, references to earlier defines, `[i32]`-tagged
 signed values and string literals, and rejects everything else. `lib.rs` re-exports the
 constants and holds the cross-checks; `types.rs` fixes types and boolean ranges.
@@ -457,7 +576,63 @@ must be odd over GA0..GA4 and GAP, and GA 0 is invalid. A forced GA gets a gener
 states, per-bus counters, the ingress FIFO, a drop log, the duplicate cache, the egress queue and
 the bus of the latest transmission. Its main-loop API is `on_frame`, `poll`, `next_tx`,
 `on_tx_result` (section 11.1). `plan_ipmb_state` is the one rule of Set IPMB State. `BusPair`
-power-up: IPMB-A Local Control, IPMB-B isolated, both isolated when the address is unusable.
+power-up: IPMB-A Local Control, IPMB-B isolated, both isolated when the address is unusable. `Link`
+also owns the `Requester`: `on_frame` offers each valid response to it, `next_tx` hands out a
+response first and a due request only when the egress queue is empty, `on_tx_result` books a
+request transmission, and `poll` steps the requester timing, traces a request that ended and calls
+`Extension::poll` once. `LinkConfig::requests_allowed` is `IPMC_TIER >= 2`; a Tier-1 image does not
+reach the requester code. `with_first_request_seq`, `next_request_seq` and
+`recent_request_seqs` carry the request sequence number and the sequence numbers sent inside T9
+across a processor reset.
+
+`crates/ipmc-core/src/requester.rs` - the IPMB requester, the one request this IPMC sends at a
+time. A Tier-1 IPMC sends none (Rule 7-4); a Tier-2/3 IPMC is an Event Generator (Rule 7-3) and
+its extension calls `submit(&Request, now_ms)`, which builds the frame (rqSA own address, rqLUN 0,
+next 6-bit rqSeq) and returns the sequence number. The module holds the request state only; it
+never touches a bus. The `Link` hands the frame to a driver and reports the outcome and the
+responses it receives. `Phase` runs Idle, Due, Sending, Backoff, Waiting, Cancelling and Done.
+
+| Rule | Value | Where |
+|---|---|---|
+| response wait, T3 | `IPMB_REQ_TIMEOUT_MS` (250 ms) from the end of a successful transmission | Rule 4.1.1-9 |
+| retries | `IPMB_REQ_RETRIES` (10): 11 transmissions, the same sequence number each time | Rule 4.1.1-10, Observation 4.1.1-6 |
+| failed transmission, T6 | `T6_MIN_MS` (60 ms) after a failed transmission the retry goes out on the other bus, when it is enabled and a transmission is left; otherwise the wait for a response starts and the same bus is tried at the next timeout | Table 4.1.1-1, Rule 4.1.1-7 |
+| retry bus | the bus other than the one of the request's own previous transmission, the other enabled bus when that one is disabled | Rule 4.1.1-6 |
+| new requests, T4 | `IPMB_REQ_GAP_MS` (5 ms) from the end of the previous request's first transmission | Table 4.1.1-1 |
+| sequence reuse, T9 | `SEQ_EXPIRY_MS` (5 s) after a sequence number's latest transmission; a blocked next sequence number is skipped to the next free one, in order, wrapping | Table 4.1.1-1 |
+| priority | a queued response always goes out before a request | link layer |
+
+`submit` refuses with `NotAllowed` (Tier-1 build), `Busy` (a request or an untaken completion
+exists), `TooSoon` (T4), `SeqNotExpired` (all 64 sequence numbers were sent less than T9 ago) or
+`TooLong` (the frame does not fit or a header field is out of range), and a refused call changes
+nothing. A response matches when destination, source, NetFn + 1,
+command, sequence number and both LUNs equal the request's. The request ends with an `Answer`
+(completion code and data) or `NoResponse` after the last transmission; `take_completion` returns
+it once. `cancel` drops the request and any untaken completion, lets a frame already on the wire
+finish its one transmission and keeps the sequence number used for T9; the extension calls it when
+the request lost its purpose. `Requester::new(allowed, first_seq)` starts the sequence count at
+`first_seq` and `with_recent_seqs` books the sequence numbers the previous run sent inside T9, so
+a Cold Reset continues the count and no number is reused before its T9 (section 8.2).
+
+`crates/ipmc-core/src/reset_gate.rs` - `ResetGate`, the one decision when a pending processor
+reset runs. `poll(pending, now_ms, egress_empty, fru_clean, trace)` returns true when the egress
+queue is empty (the response left or was dropped) and the FRU store holds no unsaved change, or
+when `IPMC_RESET_WAIT_MS` has passed since the request was first seen; the second case prints one
+trace line naming what was still open. With no reset pending it forgets the first-seen time.
+
+`crates/ipmc-core/src/tier.rs` - the Tier rules, each a `const fn` of a tier argument so a test
+checks all three Tiers while the build runs at one: `event_generator` (Tier 2 and 3, Rule 7-3),
+`sel_device` (Tier 3, Rule 7-8) and `per_state_event_enables` (Tier 3). The constants
+`EVENT_GENERATOR`, `SEL_DEVICE` and `PER_STATE_EVENT_ENABLES` apply them to `IPMC_TIER`.
+
+`crates/ipmc-core/src/event_enable.rs` - `EventEnables`, one `SensorEvents` (events on or off,
+assertion mask, deassertion mask) per sensor 0..=6. The power-up values come from the SDR event
+masks (`sdr::event_masks`), so the records and the enables cannot disagree: all off with zero
+masks at Tier 1, all on with the record masks at Tier 2 and 3. Get Sensor Reading reads status
+bit 7 from it; the Tier-2/3 code writes it.
+
+`crates/ipmc-core/src/ext.rs` - the `Extension` trait, `NoExtension` and `feed_sensors` (section
+4, Build modes and the Tier-2/3 extension).
 
 `crates/ipmc-core/src/dupcache.rs` - `DupCache` keeps the response frame of every answered
 request for `IPMB_DUP_WINDOW_MS` under a `Key` of requester address, sequence number, NetFn,
@@ -480,7 +655,10 @@ for NetFn 2Ch it echoes the request's defining-body byte as response data byte 0
 answers C7h with no data for an empty request and C1h for a defining body other than 03h, and
 hands the handler the data after the VSO byte. `build_response_with` checks the output buffer
 before any handler runs; `dispatch_with` reserves an egress slot first, so a response that
-cannot be queued never causes a handler side effect. `trace_request` writes one line per request,
+cannot be queued never causes a handler side effect. `run_command` looks the command up in the
+table; a (netFn, cmd) with no row goes to `Extension::command`, and only a miss there answers C1h.
+`Context` carries two fields for the Tier-2/3 build: `pending_reset` (`Some(ResetRequest::Cold)`
+set by a handler, applied by the owner of the processor, section 8.2) and `event_enables`. `trace_request` writes one line per request,
 `FN(06h) CMD(01h) Get Device ID -> CC 00h, 15 bytes`. `Context::read_sensor` is the one function
 that maps a sensor number to its encoder, used by Get Sensor Reading and the console.
 
@@ -494,19 +672,22 @@ data bytes into the slice it is given and returns `Ok(len)` or `Err(completion c
 `crates/ipmc-core/src/identity.rs` - `DEVICE_IDENTITY`, assembled from `ipmc_defs` values; the
 firmware revision comes from the crate version (0.1), and a guard ties
 `IPMC_FRU_PRODUCT_VERSION` to the same major.minor. No literal identity value lives here.
+`additional_support(tier)` builds Get Device ID byte 7 from the `IPMC_SUPPORT_*` defines and the
+Tier rules (section 9.6).
 
 `crates/ipmc-core/src/sdr.rs` - `SdrRepository`: eight records built once from the
 `IPMC_SDR_*_NAME` strings and the IPMB address, record IDs 0..=7 (section 9.5), the reservation
 counter (`reserve`, `reservation_valid`), `resolve` (0000h first, FFFFh last), `next_id`,
 `describe` and `locator_record_id` (7). The file header lists every place the records differ
-from the captured live IPMC and why.
+from the captured live IPMC and why. Sensor initialization, sensor capabilities, the event masks
+and the locator's global initialization and device capabilities follow the Tier (section 9.6).
 
 `crates/ipmc-core/src/sensor.rs` - the sensor numbers and types of Table 10.2-1, the
 `SensorSnapshot` that `ipmc-sensors` fills, and one encoder per reading layout: `encode_summary`
 (FRU Health, FRU Voltage), `encode_temperature`, `encode_link`, `encode_fru_state`,
 `encode_payload_test_results` (unavailable: no payload test runs) and
-`encode_payload_test_status` (not in progress). `LocalStatus` is the 3-bit IPMB local status of
-Table 10.2.2-1.
+`encode_payload_test_status` (not in progress). `apply_event_enable` is the one place that writes
+status bit 7. `LocalStatus` is the 3-bit IPMB local status of Table 10.2.2-1.
 
 `crates/ipmc-core/src/fru_state.rs` - `FruMachine`, pure: `step(now_ms, inputs)` makes at most one
 transition and returns it; `check_power_on` refuses in M6. Section 10.4 has the diagram.
@@ -553,8 +734,8 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 
 | File | Role |
 |---|---|
-| `src/main.rs` | start-up order (section 8.3) and the main loop: `console.poll`, `console.service_sensors`, `console.service_link`, `wfi` |
-| `src/ipmb_link.rs` | owns the static `Link`, the dispatch `Context`, the frame-queue consumers, the master, the fault trackers and the FRU log; `service` is the IPMB main-loop step (section 10.2); `IPMB STATS` and `IPMB STATE` commands |
+| `src/main.rs` | start-up order (section 8.3) and the main loop: `console.poll`, `console.service_sensors`, `console.service_link`, `wfi` (the evaluation image also checks the evaluation period) |
+| `src/ipmb_link.rs` | owns the static `Link`, the dispatch `Context`, the `ipmc_ext::Active` extension, the `ResetGate`, the frame-queue consumers, the master, the fault trackers and the FRU log; `service` is the IPMB main-loop step (section 10.2) and ends with `service_reset`; `service_fru_log` saves at once while a Cold Reset is pending; `feed_sensors` calls `ext::feed_sensors`; `IPMB STATS` and `IPMB STATE` commands; `stop_for_eval` (evaluation image only) |
 | `src/fru_log.rs` | the boot load of the FRU log before the I2C drivers start; owns `Flash` and `Persist` |
 | `src/sensing.rs` | builds the sensor backends from the source switches, owns the `Monitor`; `SENSORS`, `POWER`, `SIM` commands |
 | `src/console.rs` | command tables and the `SYS`, `LED`, `IPMB` handlers on the `ipmc-menu` engine; banner |
@@ -571,7 +752,9 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/bsp/uart.rs` | USART2 console on PA2/PA3: interrupt-driven receive ring, blocking bounded transmit, failure counters |
 | `src/bsp/led.rs` | LD2 on PA5: heartbeat, 10 Hz activity window after each IPMB frame, manual modes, fault blink |
 | `src/bsp/board_pins.rs` | ADC channels and GPIO pins of the sensor signals |
-| `src/bsp/fault.rs`, `reset_cause.rs`, `static_slot.rs` | fail-stop handlers that record and park; reset-cause decode; the one `Mutex<RefCell<Option<T>>>` access pattern |
+| `src/bsp/reset_cause.rs` | reset-cause decode; `system_reset` (AIRCR SYSRESETREQ, so the next banner reads "software reset"); `keep_sequence` and `kept_sequence`: four `.uninit` words, untouched by start-up code, that carry the next request sequence number and the mask of the sequence numbers sent inside T9 across a software reset, with a check word, read back only after a software reset |
+| `src/bsp/fault.rs`, `static_slot.rs` | fail-stop handlers that record and park; the one `Mutex<RefCell<Option<T>>>` access pattern |
+| `src/bsp/eval_timer.rs`, `src/eval.rs` | evaluation image only (`cfg(ipmc_eval)`): the TIM2 run-time counter and the evaluation period check (section 8.4) |
 
 ### 6.7 `ipmc-emu`: x86 emulator
 
@@ -583,7 +766,17 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/serve.rs` | `Board`, the emulator in real time behind the TCP line protocol (section 7.4); one client at a time; a new client or `#reset` starts a fresh board |
 | `src/trace.rs`, `src/main.rs` | stdout trace sink and hex formatter; command line `replay`, `serve`, `sdr`, `help` |
 
-The emulator keeps the FRU store in RAM only (no flash log) and simulates every sensor group.
+The emulator holds one `ipmc_ext::Active` extension (`Emulator::with_extension` replaces it for a
+test) and calls `ext::feed_sensors` for each sample. A pending Cold Reset runs through the same
+`ResetGate` as the firmware: the `Link`, `Context`, extension, sensor board and payload power are
+rebuilt as at a boot, the request sequence counter continues from the old link, and the FRU store
+is restored from a flash copy. The flash copy is a RAM image the emulator updates where the
+firmware saves (at once while a reset is pending), so an accepted Write FRU Data survives the
+reset. `replay` also plays the Event Receiver role of the captured Chassis Manager: a request the
+IPMC sends to 20h is answered one step later, 00h for a Platform Event and C1h for anything else,
+and counted in the summary line (`ipmc_requests`, `events`). Without the extension no request is
+sent and the counts are 0. The emulator otherwise keeps the FRU store in RAM only (no flash log
+driver) and simulates every sensor group.
 
 ### 6.8 Tools
 
@@ -594,7 +787,8 @@ The emulator keeps the FRU store in RAM only (no flash log) and simulates every 
 | `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `Documentation/captured_sdr.md` (local only) |
 | `tools/dupcheck.py` | scores every pair of Rust function bodies with identifiers normalised; fails on a production pair at or above 0.85 or a test pair at or above 0.92 |
 | `tools/python-ipmi/` | venv with python-ipmi and pyaardvark; `README.md` is the Tier-1 command-line reference |
-| `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `test_cm_link.py` |
+| `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `cm_events.py` (the Chassis Manager as Event Receiver: answers each Platform Event request and records its decoded fields), `test_cm_link.py` |
+| `tools/chassis-manager/` options for events | `--cm-tier 1\|2` (2: Event Receiver, answers a Platform Event with 00h; 1: not an Event Receiver, answers C1h), `--withhold-events N` (the first N Platform Event frames get no answer, retries count, so a run shows the IPMC retrying with the same sequence number), `--set-event-receiver` (sends Set Event Receiver to each IPMC found after discovery; a Tier-1 IPMC answers C1h, which is not an error), `--cold-reset-at-s T` (sends Cold Reset once to each IPMC found, T seconds into the polling) |
 | `tools/conformance/` | spec-only Tier-1 suite: `TRANSPORT.md` (its only interface), `adapter.py` (maps it onto the Aardvark or the emulator), `run_conformance.py`, eight `tests_*.py` files, `REQUIREMENTS.md` |
 | `tools/board_test_report.py` | runs the command line, Chassis Manager, conformance, link-health and FRU persistence checks against the board and writes `Documentation/board_test_report.md` |
 
@@ -603,7 +797,7 @@ The emulator keeps the FRU store in RAM only (no flash log) and simulates every 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -655,6 +849,64 @@ destination LUN other than 0, C7h a wrong request length, C9h a FRU ID other tha
 Address Info, which ignores the ID). Reservation IDs, record IDs and FRU offsets are two bytes, LS
 byte first; a Get Device SDR count of FFh reads the rest of the record; a Set IPMB State bus byte is
 00h (isolate), 01h (Local Control) or FFh (no change), and the optional speed byte must be 00h.
+
+#### Tier-2/3 commands (commercial release build)
+
+The commercial release build adds the commands below; the public Tier-1 build answers each of
+them C1h. "From" is the Tier that makes the command mandatory for an IPMC (Tables 10.1.1-1 and
+10.1.2-1); the codes match `Documentation/ipmi_commands.md`. Tier-3 is in development: a Tier-3
+build is refused at compile time today, and the Tier-3 list may change as the conditional
+commands are decided.
+
+| NetFn | Cmd | Command | From | Notes |
+|---|---|---|---|---|
+| 06h | 02h | Cold Reset | Tier-2 | answers 00h, then the processor restarts (section 8.2) |
+| 04h | 00h | Set Event Receiver | Tier-2 | sets the Event Receiver address, the Chassis Manager; FFh disables event generation |
+| 04h | 01h | Get Event Receiver | Tier-2 | returns the address set |
+| 04h | 02h | Platform Event | Tier-2 | sent by this IPMC to the Event Receiver (Rule 7-3); a Platform Event request received here answers C1h, the IPMC is not an Event Receiver |
+| 2Ch | 1Eh | FRU Control Capabilities | Tier-2 | |
+| 06h | 03h | Warm Reset | Tier-3 | in development |
+| 06h | 2Fh | Get BMC Global Enables | Tier-3 | in development |
+| 04h | 28h | Set Sensor Event Enable | Tier-3 | in development |
+| 04h | 29h | Get Sensor Event Enable | Tier-3 | in development |
+| 0Ah | 40h | Get SEL Info | Tier-3 | in development |
+| 0Ah | 42h | Reserve SEL | Tier-3 | in development |
+| 0Ah | 43h | Get SEL Entry | Tier-3 | in development |
+| 0Ah | 47h | Clear SEL | Tier-3 | in development |
+| 0Ah | 48h | Get SEL Time | Tier-3 | in development |
+| 0Ah | 49h | Set SEL Time | Tier-3 | in development |
+| 2Ch | 04h | FRU Control | Tier-3 | in development; Cold Reset option only (resettable payload) |
+| 2Ch | 0Ah | Set FRU State Policy Bits | Tier-3 | in development |
+| 2Ch | 0Bh | Get FRU State Policy Bits | Tier-3 | in development |
+| 2Ch | 0Ch | Set FRU Activation | Tier-3 | in development |
+| 2Ch | 44h | Get Mandatory Sensor Numbers | Tier-3 | in development |
+| 2Ch | 45h | Get FRU Hash | Tier-3 | in development |
+| 2Ch | 46h | Get Payload Mode Capabilities | Tier-3 | in development |
+| 2Ch | 47h | Set Payload Mode | Tier-3 | in development |
+
+Externally visible behaviour of the commercial release build:
+
+- The Tier is reported in Get VSO Capabilities (identifier bits 1:0 = `IPMC_TIER` - 1), Get Device
+  ID byte 7 (09h, 29h, 2Dh) and the SDR records; section 9.6 lists every byte that changes.
+- A Tier-2/3 IPMC is an Event Generator. It sends Platform Event requests (NetFn 04h, command
+  02h) to the Event Receiver set by Set Event Receiver, for a state change of FRU State, System
+  IPMB Link, FRU Health, FRU Voltage and FRU Temperature (sensors 0 to 4). The Payload Test
+  sensors never change on this module and send nothing. Set Event Receiver FFh stops event
+  generation; the sensors keep their state and the active events are sent again at the next Set
+  Event Receiver (Rule 4.1.6-1). A C1h answer from the receiver stops events until the next Set
+  Event Receiver.
+- Every event goes out through the requester (section 6.3): a response wait of 250 ms, up to 10
+  retries with the same sequence number (11 transmissions), a failed transmission retried on the
+  other bus after at least 60 ms, 5 ms between new requests, and a sequence number held out of use
+  for 5 s. An event that gets no answer after the last transmission is dropped, except a FRU State
+  event, which is sent again at a period set in the extension's header until the receiver answers
+  00h or the state changes (Rule 4.1.5.2-4).
+- The FRU State event carries cause 3h (programmatic action) for a change made by a Chassis
+  Manager command or by the policy-bit automation (Rule 4.1.5.2-5), 0h (normal) for a change that
+  follows the initial checks and payload power, and 6h for a power-failure change (Rules
+  4.1.5.2-6 and 4.1.5.2-7).
+- Event messages are enabled for sensors 0 to 6 at power-up (the SDR event masks, section 9.6)
+  and Get Sensor Reading reports that in status bit 7.
 
 ### 7.3 Console
 
@@ -717,7 +969,7 @@ owning module and that table together.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -738,20 +990,86 @@ owning module and that table together.
 
 ### 8.2 Reset
 
-The firmware has one reset domain: the MCU reset (power-on, pin, software from `SYS RESET`,
-watchdog flags reported but no watchdog is enabled). `bsp/reset_cause.rs` reads RCC_CSR once at
+The firmware has one reset domain: the MCU reset (power-on, pin, software from `SYS RESET` or
+from a Cold Reset, watchdog flags reported but no watchdog is enabled). `bsp/reset_cause.rs` reads RCC_CSR once at
 start-up, reports the most specific cause in the banner and clears the flags. A HardFault or an
 unhandled interrupt records its state in a static, prints one line when the UART is up and parks
 in `wfi`; it does not reset, so the fault stays visible on the bench. The panic handler is
-`panic-halt`. RAM state starts from its Rust initialisers; there is no state kept across reset
-except the FRU log in flash.
+`panic-halt`. RAM state starts from its Rust initialisers; the state kept across a reset is the FRU log in
+flash and, after a software reset, the request sequence words described below.
+
+<div style="page-break-after: always;"></div>
+
+<table style="width:100%; border:none; margin:0; padding:0;">
+<tr>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+</tr>
+</table>
+<hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
+
+#### Cold Reset path (commercial release build)
+
+A handler never resets the processor. The Cold Reset handler of the extension validates the
+request and sets `Context::pending_reset` to `Some(ResetRequest::Cold)`; the response (00h) is
+queued as any response. The owner of the processor, the firmware main loop or the emulator,
+performs the reset.
+
+1. Each pass `IpmbLink::service_reset` calls `ResetGate::poll(pending, now_ms, egress_empty,
+   fru_clean, trace)`. The gate returns true when the egress queue is empty (the response left
+   the board or was dropped) and the FRU store holds no unsaved change, or when
+   `IPMC_RESET_WAIT_MS` has passed since it first saw the request; in the second case one trace
+   line says what was still open.
+2. While a reset is pending the FRU save runs at once (`service_fru_log`): no persist delay and no
+   wait for a quiet bus, because the IPMB is about to go away. The erase it may need is bounded
+   (up to 2 s, covered by `IPMC_RESET_WAIT_MS`). A failed attempt returns to the normal delay, so
+   a failing flash does not stall every pass until the wait runs out.
+3. When the gate says go, one console line goes out and the console is flushed.
+   `reset_cause::keep_sequence` stores the next request sequence number and the mask of the
+   sequence numbers sent inside T9 (`Link::recent_request_seqs`) in four `.uninit` words, which
+   start-up code does not touch, the last a check word over the other three. `reset_cause::system_reset` then requests SYSRESETREQ, so the banner after the
+   restart reads "software reset".
+4. At the next start-up `reset_cause::kept_sequence` returns the stored values after a software
+   reset, and zero after any other reset or when the check word does not match. `IpmbLink::take`
+   hands them to `Link::with_first_request_seq`, which books the recent numbers as sent at
+   start-up, so a request after the restart cannot repeat a sequence number the Event Receiver saw
+   inside T9.
+5. Everything else restarts as at power-up: link, context, sensors and the extension's state
+   (IPMB-B is isolated again until Set IPMB State), and the FRU image loads from the flash log.
+
+```mermaid
+sequenceDiagram
+    participant CM as Chassis Manager
+    participant LNK as Link
+    participant X as Extension handler
+    participant G as ResetGate
+    participant P as Persist poll
+    participant R as reset_cause
+    CM->>LNK: Cold Reset request
+    LNK->>X: command after the Tier-1 table misses
+    X->>X: pending_reset set, Ok
+    LNK->>CM: response 00h through next_tx
+    G->>G: poll each pass, response queued or FRU unsaved
+    P->>P: urgent save, no delay and no quiet wait
+    G->>R: egress empty and FRU saved, or IPMC_RESET_WAIT_MS
+    R->>R: keep_sequence, console flush, SYSRESETREQ
+    Note over R: boot reads kept_sequence, loads the FRU log, requests payload power again
+```
+
+Limitation (owner decision 21, 10-24-2026): on the NUCLEO-F401RE a Cold Reset is a processor
+reset, which releases PWR_EN (PB5) with every GPIO, so the payload loses power for the reset and
+boot time. Recommendation 4.1.9-3, that a reset should not change the payload state, is not met on
+this board, which has no latch to hold the pin; a target board holds PWR_EN externally. The
+emulator models the board.
 
 ### 8.3 Start-up order (`main.rs`)
 
-1. Reset cause (first, before anything can reset again).
+1. Reset cause (first, before anything can reset again); after a software reset the kept request
+   sequence numbers (`kept_sequence`).
 2. Clock to 84 MHz; a clock fault is reported later in the banner.
 3. `ports::init` takes GPIOA..GPIOC; LED claim; SysTick start; USART2 console (a UART failure
-   blinks LD2 at 5 Hz and parks; a pin-claim conflict prints both owners and parks).
+   blinks LD2 at 5 Hz and parks; a pin-claim conflict prints both owners and parks). The
+   evaluation image starts its TIM2 run-time counter after the console (section 8.4).
 4. IPMB pins parked as floating inputs.
 5. Sensor hardware for the groups whose source is hardware (ADC1, board GPIO).
 6. Strap pins (`ga::init`).
@@ -762,16 +1080,44 @@ except the FRU log in flash.
    pins and the DWT counter, then, when the address is usable, each fitted bus gets `bring_up`
    (bus recovery when SDA is held low, then the I2C slave). A bus that fails stays disabled with its local status set, and the
    fault tracker restarts it once the lines read idle-high.
-9. `IpmbLink::take` builds the static Link and dispatch Context (self test runs; a stored image
-   replaces the built one and the self test runs on it).
+9. `IpmbLink::take` builds the static Link (first request sequence number from step 1) and
+   dispatch Context (self test runs; a stored image replaces the built one and the self test runs
+   on it).
 10. Banner, sensor start (payload power requested when `IPMC_POWER_AT_BOOT`), prompt, main loop.
+
+### 8.4 Evaluation build (commercial release build)
+
+The evaluation image is a time-limited build of the commercial release build (owner decision 20).
+
+- **Build.** `gen.ps1 build -Eval` or `gen.ps1 flash -Eval` sets `IPMC_EVAL=1` and writes
+  `ipmc-nucleo-f401re-eval.bin`; without `-Eval` the script passes `IPMC_EVAL=0`, so a build made
+  after an evaluation build carries none of it. `-Eval` needs the extension folder.
+- **Condition.** `ipmc-defs` accepts `IPMC_EVAL=1` only with the extension built in and the
+  release profile, and fails the build otherwise. It sets `cfg(ipmc_eval)`, which the firmware
+  crate takes through `dep_cfg.rs`. Every evaluation line sits behind that cfg (`eval.rs`,
+  `bsp/eval_timer.rs`, the timer start and the period check in `main.rs`,
+  `IpmbLink::stop_for_eval`), so no other image, a Tier-1 or normal release or debug build,
+  contains any evaluation code or a flag that could stop the IPMB.
+- **Clock.** `bsp/eval_timer.rs` runs TIM2 as a free-running 32-bit up-counter at 10 kHz (0.1 ms
+  per tick, 7158 minutes of range), clocked from PCLK1 (twice PCLK1 when the APB1 prescaler is
+  not 1, RM0368 section 6.2). It starts after the console and before the banner; a start failure
+  stops the image, because it could not end the evaluation. SysTick is not used. The banner of the
+  evaluation image carries the line `EVALUATION BUILD: the IPMB stops after N minutes`.
+- **Period.** `IPMC_EVAL_MINUTES` of run time (section 5, Tier-2/3 header). A power cycle starts a
+  new period.
+- **Expiry.** The main loop calls `stop_for_eval` once and prints one console line. It switches
+  both I2C slaves off through the driver's suspend (a healthy bus waits up to the pause time for
+  idle, a faulted one is switched off at once), drops what is queued and never calls
+  `IpmbLink::service` again, so the whole IPMB, responses and requests, stops. The console and the
+  sensor sampling continue, and the FRU save step still runs: a Write FRU Data accepted before the
+  stop is saved, and the save never touches the stopped slaves.
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -814,8 +1160,10 @@ image, mostly the duplicate cache: 64 entries of 76 bytes, frame included).
 | 5 Payload Test Results | F4h | 00h | 60h (unavailable) | 00h |
 | 6 Payload Test Status | F5h | 00h | 40h | 01h not in progress |
 
-Status byte 40h is "scanning enabled"; bit 5 (20h) marks a reading unavailable; bit 7 (events)
-is 0. Sensors 2..4 read `00 60 00` before the first sample and while their source cannot be read.
+Status byte (response byte 3) 40h is "scanning enabled"; bit 5 (20h) marks a reading unavailable;
+bit 7 is the sensor's event enable (`Context::event_enables`, `sensor::apply_event_enable`): 0 in
+the Tier-1 build, so the table shows 40h, and 1 from power-up in a Tier-2/3 build (the byte reads
+C0h) until the enable changes. Sensors 2..4 read `00 60 00` before the first sample and while their source cannot be read.
 On the bench with only IPMB-A enabled sensor 1 reads `08 40 02`.
 
 <div style="page-break-after: always;"></div>
@@ -823,7 +1171,7 @@ On the bench with only IPMB-A enabled sensor 1 reads `08 40 02`.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -846,18 +1194,57 @@ little-endian; the length and version halves share one word, every other field i
 
 | Record ID | Type | Content |
 |---:|---|---|
-| 0000h..0006h | 02h compact sensor | sensors 0..6 in number order: entity A0h (VPX module) instance 60h, scanning on, no events, reading masks per Table 10.2-1, ID strings from `IPMC_SDR_*_NAME` |
-| 0007h | 12h MC device locator | owner = own IPMB address, global initialisation 01b, device capabilities 0Bh, entity A0h instance 60h, ID string "IPMC" |
+| 0000h..0006h | 02h compact sensor | sensors 0..6 in number order: entity A0h (VPX module) instance 60h, scanning on, events off at Tier 1, reading masks per Table 10.2-1, ID strings from `IPMC_SDR_*_NAME`; initialization, capabilities and event masks by Tier (section 9.6) |
+| 0007h | 12h MC device locator | owner = own IPMB address, global initialisation 01b and device capabilities 0Bh at Tier 1 (section 9.6 for Tier 2 and 3), entity A0h instance 60h, ID string "IPMC" |
 
 Get Device SDR Info reports 7 sensors (or 8 records with operation bit 0); Get Device Locator
 Record ID returns 0007h.
+
+### 9.6 Tier-dependent bytes
+
+The Tier rules of `tier.rs` set these bytes; the build reports the Tier of `IPMC_TIER` (1 in the
+public build, section 4). A Tier-1 IPMC generates no events (Rule 7-4); a Tier-2 and a Tier-3
+IPMC are Event Generators (Rule 7-3); a Tier-3 IPMC is also a SEL Device (Rule 7-8) with per-state
+event enables.
+
+| Item | Tier 1 | Tier 2 | Tier 3 |
+|---|---:|---:|---:|
+| Get VSO Capabilities, IPMC identifier byte bits 1:0 (`IPMC_TIER` - 1) | 00b | 01b | 10b |
+| Get Device ID byte 7, additional device support | 09h | 29h | 2Dh |
+| compact record, sensor initialization | 01h | 03h | 03h |
+| compact record, sensor capabilities | 43h | 42h | 40h |
+| compact record, assertion and deassertion event masks | 0000h | per sensor, below | per sensor, below |
+| locator record, global initialization (bits 1:0) | 01b | 00b | 00b |
+| locator record, device capabilities | 0Bh | 2Bh | 2Fh |
+| Get Sensor Reading status bit 7 at power-up (all sensors) | 0 | 1 | 1 |
+| event generator, SEL device, per-state event enables | no, no, no | yes, no, no | yes, yes, yes |
+
+Byte 7 of Get Device ID carries the sensor and FRU inventory bits (09h) at every Tier, the Event
+Generator bit (bit 5) from Tier 2 and the SEL Device bit (bit 2) at Tier 3. The locator's device
+capabilities byte is that value plus the Device SDR bit (02h). Sensor capabilities carry auto
+re-arm (bit 6) and the event message control in bits 1:0: 11b none (Tier 1), 10b global disable
+only (Tier 2), 00b per state (Tier 3).
+
+Event masks at Tier 2 and 3, assertion and deassertion (`sdr.rs`, LS byte first in the record):
+
+| Sensor | Assertion | Deassertion |
+|---|---:|---:|
+| 0 FRU State | 0053h | 0000h |
+| 1 IPMB Link | 000Fh | 0000h |
+| 2 FRU Health | 0003h | 0000h |
+| 3 FRU Voltage | 0003h | 0000h |
+| 4 FRU Temperature | 0038h | 0038h |
+| 5 Payload Test Results, 6 Payload Test Status | 0000h | 0000h |
+
+The power-up event enables (`EventEnables::power_up`) take the same masks, so the records and the
+enables cannot disagree.
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -893,8 +1280,9 @@ Source: `diagrams/src/ipmc-software.js`, sheet 2.
 
 1. A bus that is disabled or not fitted drops the frame (`BusUnavailable`).
 2. A leading 00h (general call) is stripped and the request marked broadcast.
-3. `ipmb::parse`; a parse error is counted per kind; a response is dropped (a Tier-1 IPMC sends
-   no requests).
+3. `ipmb::parse`; a parse error is counted per kind; a response is offered to the requester and
+   kept when it answers the outstanding request (`rx_answers`), else dropped (a Tier-1 IPMC sends
+   no requests, so it drops every response).
 4. rsSA must be the own address; a broadcast must also be Get Device ID (`NotForUs` otherwise).
 5. The request joins the ingress FIFO with its bus and arrival time; a full FIFO drops the new
    frame. Every drop is logged for `poll` to trace; the counters keep the totals.
@@ -903,18 +1291,25 @@ Source: `diagrams/src/ipmc-software.js`, sheet 2.
 request whose `Key` is in the duplicate cache within the window gets the cached response queued
 again and runs no handler (`replays` counter). Any other request is dispatched against a private
 staging queue; a pending Set IPMB State change is applied; the response is cached and queued with
-the arrival bus and time.
+the arrival bus and time. After the requests, `poll` steps the requester timing (a retransmission
+falls due, or the request ends with no response), traces a request that ended, refreshes the link
+view in the context and calls `Extension::poll` once.
 
 `next_tx`: a response handed out for the first time gets its bus now. ALTERNATE prefers the bus
 other than the latest transmission (resends count); ARRIVAL prefers the request's bus; when the
 preferred bus is not enabled the other enabled bus is used. A response whose assigned bus has
-since been disabled moves to the other bus. None when neither bus is enabled.
+since been disabled moves to the other bus. None when neither bus is enabled. A queued response
+always goes first; with none queued, a request that is due goes out on the bus other than the one
+of its own previous transmission (the other enabled bus when that one is disabled), and the same
+frame is handed out until its outcome is reported.
 
 `on_tx_result(bus, ok, now_ms, trace)`: success pops the frame and counts a late response when the
 transmission completed more than 227 ms after the request's STOP. Failure counts `tx_fail` and
 the streak; when the other bus is enabled and the frame has fewer than `IPMB_TX_RETRIES` resends
 it moves there, otherwise it is dropped (`tx_dropped`) and the requester's retry gets the cached
-response.
+response. A request frame is booked by the requester instead: success starts its T3 wait, a
+failure waits at least T6 and retransmits on the other bus when it is enabled (`tx_requests`
+counts every request transmission).
 
 Bus state per bus: `fitted`, `mode` (Isolated or Local Control, the Set IPMB State value) and
 `status` (local fault, `LocalStatus`). A bus is enabled when it is fitted, in Local Control and
@@ -930,16 +1325,18 @@ Source: `diagrams/src/ipmc-software.js`, sheet 3.
 
 Once per `IPMC_SENSOR_PERIOD_MS` the `Monitor` reads the inputs, steps the power state machine,
 drives PWR_EN, builds a `SensorSnapshot` and prints the change lines. `IpmbLink::feed_sensors`
-hands the snapshot to `Context::update_sensors`, which stores it for Get Sensor Reading and steps
-the FRU state machine with the initial checks, "payload power valid" (power state On, so PGOOD
-was seen) and "payload shut down" (PWR_EN released and PGOOD read deasserted).
+hands the snapshot to `ext::feed_sensors`, which calls `Context::update_sensors` and then the
+extension's `on_sample` hook with the FRU state transition that sample made. `update_sensors`
+stores the snapshot for Get Sensor Reading and steps the FRU state machine with the initial
+checks, "payload power valid" (power state On, so PGOOD was seen) and "payload shut down" (PWR_EN
+released and PGOOD read deasserted).
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -959,7 +1356,8 @@ stateDiagram-v2
 ```
 
 One transition per `step`. The state is reported only when Get Sensor Reading polls sensor 0 (a
-Tier-1 IPMC sends no events). Power that returns during M6 does not cancel the deactivation; a
+Tier-1 IPMC sends no events; the commercial release build also sends each change as a Platform
+Event, section 7.2). Power that returns during M6 does not cancel the deactivation; a
 power-on request in M6 is refused (`PowerOnRefused::DeactivationInProgress`). M5 exists only for
 a payload the Chassis Manager controls and M7 is declared by the Chassis Manager, so neither is
 reachable. A self-test failure after M0 does not leave M1 or M4. Management power is valid by
@@ -989,7 +1387,7 @@ start-up request (`IPMC_POWER_AT_BOOT`) runs in M0, where the check always passe
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1031,12 +1429,39 @@ sequenceDiagram
     LNK->>LNK: duplicate cache hit, no handler runs
 ```
 
+A request this IPMC sends (commercial release build) keeps one sequence number through its
+retries. The first transmission goes out on IPMB-A and is acknowledged, but no response arrives
+within `IPMB_REQ_TIMEOUT_MS`; the retry goes on IPMB-B, the bus other than the previous
+transmission's, and fails on the wire; after at least T6 (60 ms) the next retry goes on IPMB-A and
+the response arrives.
+
+```mermaid
+sequenceDiagram
+    participant EXT as Extension
+    participant LNK as Link
+    participant M as IPMB master
+    participant CM as Event Receiver
+    EXT->>LNK: submit Platform Event, rqSeq n
+    LNK->>M: next_tx gives the request on IPMB-A
+    M->>CM: write on IPMB-A
+    M-->>LNK: on_tx_result A ok, T3 wait starts
+    Note over LNK: no response within IPMB_REQ_TIMEOUT_MS
+    LNK->>M: retry 1, same rqSeq n, on IPMB-B
+    M--xCM: write fails on IPMB-B
+    M-->>LNK: on_tx_result B failed, T6 wait starts
+    Note over LNK: at least 60 ms
+    LNK->>M: retry 2, same rqSeq n, on IPMB-A
+    M->>CM: write on IPMB-A
+    CM->>LNK: response with rqSeq n
+    LNK-->>EXT: take_completion gives the answer
+```
+
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1062,7 +1487,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1100,7 +1525,7 @@ save keeps the write pending and retries once per delay.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1148,6 +1573,8 @@ sends at that moment is lost and recovered by the requester's retry.
 | Persistent bus fault | `IPMB_FAULT_STREAK` consecutive bus-fault errors (stretch timeout, SCL/SDA stuck, bus busy, slave BERR or TIMEOUT) | console `IPMB-A fault: <name>`, IPMB Link sensor local status | bus disabled (Rule 9.3-10); cleared after both lines read high for `IPMB_FAULT_CLEAR_MS`, with the BUSY workaround and a slave re-arm |
 | Stuck BUSY flag | both lines high longer than T7 (3 ms) with BUSY set and no frame | `busy-errata-resets` counter | `clear_stuck_busy` (I2C peripheral reset sequence) |
 | Bus fails at start-up | `bring_up` (recovery or slave init) | console line, local status | bus disabled; restarted after the lines read idle-high |
+| Request without a response (commercial release build) | `Requester` T3 timeout after each transmission | trace line `request seq .. no response after N transmissions` | retried up to `IPMB_REQ_RETRIES` times with the same sequence number; then the completion is no response and the extension decides |
+| Cold Reset blocked (commercial release build) | `ResetGate`: response still queued or FRU write unsaved | trace line after `IPMC_RESET_WAIT_MS` | the reset runs anyway at that time |
 | Corrupt FRU image | `selftest::run` | Get Self Test Results 57h with bit 5 | FRU stays in M0 when found at start-up; Write FRU Data or `FRU RESTORE` repairs it |
 | Flash program, erase or verify failure | `FlashError` | console `FRU log: save failed: <name>`, `FRU STORE` | write stays pending, retried once per delay |
 | PGOOD timeout or loss | `power_fsm` | console event line, `POWER STATUS`; FRU Health is bad only while PWR_EN is asserted without PGOOD, so it returns to good once the fault releases PWR_EN | latched until `POWER OFF` or `POWER CLEAR` |
@@ -1158,7 +1585,7 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1169,10 +1596,10 @@ sends at that moment is lost and recovered by the requester's retry.
 
 | API | Inputs | Output | Notes |
 |---|---|---|---|
-| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses |
+| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy, requests_allowed }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses; `with_first_request_seq` sets the first rqSeq, `next_request_seq` reads it |
 | `on_frame(bus, frame, now_ms)` | bus, whole frame (own address or 00h first), STOP time | `Result<(), FrameDrop>` | main loop only; copies at most `IPMB_MSG_MAX` bytes; never traces |
-| `poll(ctx, now_ms, trace)` | dispatch `Context`, time, trace sink | requests taken | runs handlers; stops when the egress queue is full |
-| `next_tx()` | | `Option<(Bus, &[u8])>` | frame stays queued until `on_tx_result` |
+| `poll(ctx, ext, now_ms, trace)` | dispatch `Context`, `&mut dyn Extension`, time, trace sink | requests taken | runs handlers (the extension for a command the table lacks); stops when the egress queue is full; steps the requester and calls `ext.poll` |
+| `next_tx()` | | `Option<(Bus, &[u8])>` | response first, else a due request; frame stays handed out until `on_tx_result` |
 | `on_tx_result(bus, ok, now_ms, trace)` | outcome of the frame handed out | `Result<(), LinkError>` | `NoTxInFlight`, `TxBusMismatch` change nothing |
 | `set_ipmb_state(a, b)` | `Option<BusMode>` per bus | `Result<(), LinkError>` | through `plan_ipmb_state`, all or nothing |
 | `set_local_status(bus, status)` | `LocalStatus` | | the firmware's persistent-fault decision |
@@ -1197,12 +1624,15 @@ code with no data. For NetFn 2Ch the frame data and the output slice both exclud
 | `fru_state: FruMachine` | `update_sensors` | Get Sensor Reading 0 |
 | `link: LinkView` | `Link::poll` before every dispatch | Get VSO Capabilities, Set IPMB State, Get Sensor Reading 1 |
 | `pending_ipmb: Option<PendingIpmbState>` | Set IPMB State handler | `Link::poll` (applies and clears) |
+| `event_enables: EventEnables` | `Context::new` (power-up values by Tier); the Tier-3 Set Sensor Event Enable handler | `read_sensor` (status bit 7), the event generator |
+| `pending_reset: Option<ResetRequest>` | the Cold Reset handler (extension) | `ResetGate` owner: the firmware main loop, the emulator (cleared by the reset) |
 
 Other entry points: `Context::new(addr)`, `set_fru(store)`, `initial_checks()`,
 `update_sensors(now_ms, &snapshot, trace) -> Option<Transition>`,
 `read_sensor(number, &buses, out) -> Result<usize, SensorReadError>`,
-`dispatch(ctx, req, arrival, arrival_ms, queue, trace)` and `build_response_with` (the one frame
-builder behind `dispatch_with` and the tests).
+`dispatch(ctx, req, arrival, arrival_ms, queue, trace)` (the Tier-1 table and `NoExtension`),
+`dispatch_with(table, ext, ctx, ...)` and `build_response_with` (the one frame builder behind
+`dispatch_with` and the tests).
 
 ### 11.3 Hardware-facing traits
 
@@ -1214,6 +1644,7 @@ builder behind `dispatch_with` and the tests).
 | `DigitalInputs` | `ipmc-sensors::hal` | `level_high` | board GPIO, simulator, PCA9555 |
 | `PowerSwitch` | `ipmc-sensors::hal` | `set_enable`, `is_enabled` | board GPIO, simulator, PCA9555 |
 | `Trace` | `ipmc-core::trace` | `line(fmt::Arguments)` | firmware console, emulator stdout, `NoTrace`, `RecordingTrace` |
+| `Extension` | `ipmc-core::ext` | `command`, `poll`, `on_sample` | `NoExtension`; the Tier-2/3 extension through `ipmc_ext::Active` |
 | `MenuOutput` | `ipmc-menu` | `write_str` | firmware UART output |
 
 ### 11.4 Concurrency model
@@ -1238,7 +1669,7 @@ builder behind `dispatch_with` and the tests).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1267,6 +1698,12 @@ cargo run -p ipmc-emu -- replay vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --
 cargo run -p ipmc-emu -- serve --b-fitted 1
 cargo run -p ipmc-emu -- sdr
 ```
+
+The two build modes (section 4) use the same commands. With the extension folder next to the
+repository the build is the commercial release build; `IPMC_TIER23=0` forces the public Tier-1
+build and `IPMC_TIER23=1` demands the folder. `gen.ps1 build` sets `IPMC_TIER23` from the folder,
+and `gen.ps1 build|flash -Eval` makes the evaluation image (section 8.4). The numbers of the
+capture replay (section 13.2) belong to the Tier-1 build.
 
 `gen.ps1 flash` copies the `.bin` to the `NOD_F401RE` drive and prints `Flash OK` only after the
 copy, the drive check and the `FAIL.TXT` check pass. SWD debugging (probe-rs, OpenOCD) needs the
@@ -1302,14 +1739,19 @@ until a bus that is not an IPMB bus is assigned (`sensing.rs` guard).
 `cargo clippy --release -- -D warnings` and `cargo fmt -- --check` inside
 `crates/ipmc-nucleo-f401re`; `sync_ipmi_commands.py --check`; `captured_sdr.py --check`;
 `dupcheck.py`; the name check against the local banned-name list; and for link or handler changes
-the replay totals above.
+the replay totals above. With the extension folder present, a tenth gate repeats `cargo fmt`,
+`cargo clippy` and `cargo test` with `IPMC_TIER23=0` (the public Tier-1 build), runs the replay
+totals with `IPMC_TIER23=0` (they belong to the Tier-1 build), checks the extension's library
+source with `rustfmt --check --edition 2021`, adds the extension folder as a second path to the
+name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware clippy gate;
+`dupcheck.py` scans both repositories by itself.
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1322,19 +1764,21 @@ the replay totals above.
 
 Source: `diagrams/src/ipmc-software.js`, sheet 4.
 
-### 13.1 Host tests (424, `cargo test --workspace`, 10-23-2026)
+### 13.1 Host tests (484 in the public build, `cargo test --workspace`, 10-24-2026)
 
-| Crate | Tests | Covers |
-|---|---:|---|
-| `ipmc-core` | 171 | codec, address decode, link layer, duplicate cache, queues, dispatcher, handlers (`tests/tier1_handlers.rs`), Tier-1 link rules, SDR walk, command document in step (`tests/commands_doc.rs`) |
-| `ipmc-sensors` | 114 | evaluation, power state machine, routing, monitor, pin claims, LED level, example drivers against mock buses |
-| `ipmc-emu` | 44 | vector reader, captured frames decode and re-encode byte-identically, replay runs, serve protocol over TCP, command line |
-| `ipmc-fru` | 42 | image build, decoder, `verify`, store, flash log including a power cut at every word |
-| `ipmc-menu` | 42 | line editor, matching, help, table validation |
-| `ipmc-defs` | 6 | parser rules: every malformed line form is rejected with its line number |
-| `ipmc-wire` | 5 | checksum, builder, CRC-32, hex parser |
+| Crate | Covers |
+|---|---|
+| `ipmc-core` | codec, address decode, link layer, requester timing, reset gate, Tier rules, event enables, extension hook, duplicate cache, queues, dispatcher, handlers (`tests/tier1_handlers.rs`), Tier-1 link rules, SDR walk, command document in step (`tests/commands_doc.rs`) |
+| `ipmc-sensors` | evaluation, power state machine, routing, monitor, pin claims, LED level, example drivers against mock buses |
+| `ipmc-emu` | vector reader, captured frames decode and re-encode byte-identically, replay runs including the Event Receiver role, Cold Reset rebuild, serve protocol over TCP, command line |
+| `ipmc-fru` | image build, decoder, `verify`, store, flash log including a power cut at every word |
+| `ipmc-menu` | line editor, matching, help, table validation |
+| `ipmc-defs` | parser rules (every malformed line form is rejected with its line number) and the Tier-2/3 detection rules (`tests/tier23.rs`) |
+| `ipmc-ext` | the default `Active` answers nothing for an unowned command; the bridge and `ipmc-defs` agree on the extension |
+| `ipmc-wire` | checksum, builder, CRC-32, hex parser |
 
-The Chassis Manager request policy has 80 Python unit tests (`tools/chassis-manager/test_cm_link.py`).
+The per-crate counts are in the `cargo test --workspace` output. The Chassis Manager request
+policy and the Event Receiver have 100 Python unit tests (`tools/chassis-manager/test_cm_link.py`).
 Tests are table-driven; `tools/dupcheck.py` fails near-identical test pairs as well as production
 pairs.
 
@@ -1357,6 +1801,7 @@ NOT-TESTABLE; board 97 PASS, 0 FAIL, 60 NOT-TESTABLE (pins, electrical checks, s
 optional features and NVMRO pin control cannot be observed on the one-Aardvark bench). The Chassis
 Manager emulator completes discovery, FRU and SDR reads, the locator check and polling on both
 targets, and its cross-check against the captured Chassis Manager reports 0 unexpected differences.
+The Phase 10 results are in section 13.6.
 
 ### 13.4 Board test report
 
@@ -1372,16 +1817,26 @@ responses sent, every master and driver error counter at 0.
 
 Scope measurement of SCL/SDA in both master modes; clock-stretch timeout and stuck-line jumper
 tests; arbitration loss with a second master; start-up fault recovery with a line held low; IPMB-B
-on hardware; NVMRO from the strap pin; heartbeat LED by eye; power and fault input jumpers;
-Broadcast Get Device ID through a second independent tool. `.claude/PLAN.md` section 7 lists the
+on hardware, with events and failover (needs a second Aardvark, one per IPMB); NVMRO from the
+strap pin; heartbeat LED by eye; power and fault input jumpers; Broadcast Get Device ID through a
+second independent tool. `.claude/PLAN.md` section 7 lists the
 procedure and expected result of each.
+
+### 13.6 Phase 10 acceptance (10-24-2026)
+
+| Check | Build | Result |
+|---|---|---|
+| Tier-1 conformance suite on the emulator | public Tier-1 | 102 PASS, 0 FAIL |
+| Chassis Manager on the board: events, withheld answers and a Cold Reset | commercial release build | 14 of 14 checks pass |
+| Tier-2 behaviour (section 7.2) | commercial release build | accepted on the emulator and the board |
+| Evaluation image with a 1-minute period | commercial release build, `-Eval` | answers until 52 s, IPMB stopped at 59.7 s; the normal image has no evaluation code (equal `.text`, no evaluation symbols or strings) |
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1432,15 +1887,21 @@ procedure and expected result of each.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-23-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
 
 ## 15. Constraints and Limitations
 
-- **Tier 1 only.** Optional and Tier-2/3 commands answer C1h; there is no event generation, no FRU
-  activation control by the Chassis Manager and no subsidiary FRU.
+- **Tier 1 in the public build.** Optional and Tier-2/3 commands answer C1h; there is no event
+  generation, no FRU activation control by the Chassis Manager and no subsidiary FRU. The
+  commercial release build adds Tier-2 (section 7.2); Tier-3 is in development and a Tier-3 build
+  is refused at compile time today.
+- **Cold Reset drops payload power on this board.** The reset releases PWR_EN with every GPIO
+  (section 8.2, owner decision 21).
+- **One outstanding request.** The requester sends one request at a time; a second `submit`
+  returns `Busy` until the first completes or is cancelled.
 - **One master transmission per main-loop pass.** A response burst drains one frame per pass; the
   egress queue holds `IPMB_TXQ_DEPTH` (4) responses, and further requests wait in the ingress FIFO.
 - **Bit-bang deafness.** While the bit-bang master transmits, the slave peripheral is off; a frame

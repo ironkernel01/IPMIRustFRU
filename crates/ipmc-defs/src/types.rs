@@ -9,6 +9,8 @@
 use super::*;
 
 // Unsigned integers (u32).
+// IPMC_TIER comes from ipmi_defs_tier23.h, or is 1 when the extension is not built.
+const _: u32 = IPMC_TIER;
 const _: u32 = IPMB_MASTER_HW;
 const _: u32 = IPMB_MASTER_BITBANG;
 const _: u32 = IPMB_MASTER_MODE;

@@ -2,6 +2,8 @@
 
 pub mod board_pins;
 pub mod clock;
+#[cfg(ipmc_eval)]
+pub mod eval_timer;
 pub mod fault;
 pub mod flash;
 pub mod ga;

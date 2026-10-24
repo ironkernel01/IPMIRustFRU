@@ -3,6 +3,7 @@
 
 use ipmc_core::addr;
 use ipmc_core::dispatch::{dispatch, Context};
+use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb::{self, Header, NETFN_GROUP_EXT};
 use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::{Bus, EgressQueue};
@@ -16,6 +17,55 @@ pub const OWN: u8 = 0x82;
 /// Sequence number of every direct call; the response frames of the tests are written for it.
 #[allow(dead_code)]
 pub const SEQ: u8 = 5;
+
+/// by_tier -- the literal expectation of the build's Tier from a (Tier-1, Tier-2, Tier-3) table.
+#[allow(dead_code)]
+pub fn by_tier<T: Copy>(table: [T; 3]) -> T {
+    table[ipmc_defs::IPMC_TIER as usize - 1]
+}
+
+/// Sensor 0's record at Tier-1, hand-written from IPMI v2.0 Table 43-2 (see sdr.rs for the field
+/// walk); `sensor0` applies the bytes that differ per Tier.
+const SENSOR0_TIER1: [u8; 41] = [
+    0x00, 0x00, 0x51, 0x02, 0x24, 0x82, 0x00, 0x00, 0xA0, 0x60, 0x01, 0x43, 0xF0, 0x6F, 0x00, 0x00,
+    0x00, 0x00, 0x53, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC9,
+    b'F', b'R', b'U', b' ', b'S', b't', b'a', b't', b'e',
+];
+
+/// sensor0 -- sensor 0's record as the build's Tier writes it: sensor initialization (byte 10),
+/// capabilities (byte 11) and the assertion event mask (bytes 14..16) differ per Tier (Table
+/// 43-2; the Tier-2/3 mask is VITA Table 10.2.1-1's 0053h).
+#[allow(dead_code)]
+pub fn sensor0() -> [u8; 41] {
+    let (init, caps, assertion) = by_tier([
+        (0x01, 0x43, 0x0000u16),
+        (0x03, 0x42, 0x0053),
+        (0x03, 0x40, 0x0053),
+    ]);
+    let mut record = SENSOR0_TIER1;
+    record[10] = init;
+    record[11] = caps;
+    record[14..16].copy_from_slice(&assertion.to_le_bytes());
+    record
+}
+
+/// The management controller device locator record at Tier-1, from Table 43-8; `locator`
+/// applies the bytes that differ per Tier.
+const LOCATOR_TIER1: [u8; 20] = [
+    0x07, 0x00, 0x51, 0x12, 0x0F, 0x82, 0x00, 0x01, 0x0B, 0x00, 0x00, 0x00, 0xA0, 0x60, 0x00, 0xC4,
+    b'I', b'P', b'M', b'C',
+];
+
+/// locator -- the locator record as the build's Tier writes it: global initialization (byte 7)
+/// and capabilities (byte 8).
+#[allow(dead_code)]
+pub fn locator() -> [u8; 20] {
+    let (global_init, caps) = by_tier([(0x01, 0x0B), (0x00, 0x2B), (0x00, 0x2F)]);
+    let mut record = LOCATOR_TIER1;
+    record[7] = global_init;
+    record[8] = caps;
+    record
+}
 
 /// Reply -- one dispatched response: completion code, data after it (for a Group Extension reply
 /// the data after the VSO byte) and the whole frame.
@@ -99,6 +149,7 @@ impl Rig {
         let config = LinkConfig {
             b_fitted: true,
             tx_policy: TxPolicy::Alternate,
+            requests_allowed: false,
         };
         Rig {
             link: Link::new(config, &resolved),
@@ -139,7 +190,8 @@ impl Rig {
         self.link
             .on_frame(bus, frame, self.now_ms)
             .expect("accepted");
-        self.link.poll(&mut self.ctx, self.now_ms, &mut NoTrace);
+        self.link
+            .poll(&mut self.ctx, &mut NoExtension, self.now_ms, &mut NoTrace);
         let (tx_bus, bytes) = self
             .link
             .next_tx()

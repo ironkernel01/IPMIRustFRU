@@ -27,6 +27,8 @@ const cy = (y, h) => y + h / 2;
   box(s, c2, 4.7, w, 0.6, "ipmc-wire", ["IPMI byte primitives", "checksum, builder, type/length, CRC-32"], W);
   box(s, c1, 4.7, w, 0.6, "ipmc-defs", ["only reader of ipmi_defs.h", "constants and compile-time guards"], W);
   box(s, c1, 6.1, w, 0.6, "ipmi_defs.h", ["build configuration", "C #define syntax"], Y);
+  box(s, 6.5, 2.95, 2.2, 0.75, "ipmc-ext", ["bridge crate: Active is", "NoExtension or the", "extension, by ipmc-defs"], W);
+  box(s, 8.2, 6.1, 4.2, 0.6, "Tier-2/3 extension", ["(commercial release build, private)", "sibling folder, mounted by ipmc-ext"], W);
   const x2 = cx(c2, w), x1 = cx(c1, w);
   wire(s, x2, 1.45, x2, 1.75);
   wire(s, x2, 2.35, x2, 2.65);
@@ -36,8 +38,13 @@ const cy = (y, h) => y + h / 2;
   wire(s, x1, 2.35, x1, 4.7);
   wire(s, x1, 6.1, x1, 5.3, { dash: "dash" });
   label(s, x1 + 0.1, 5.75, 1.5, "build.rs reads");
+  wire(s, 8.7, 3.3, c2, 3.3);
+  wire(s, 7.2, 3.7, 7.2, 4.7);
+  wire(s, 8.4, 3.7, 8.4, 6.1, { dash: "dash" });
+  label(s, 8.5, 5.75, 1.6, "#[path] mount, when found");
   notes(s, 0.6, 3.2, 3.4, 3.4, [
     "Every crate reads ipmi_defs.h values through ipmc-defs only; those arrows are not drawn.",
+    "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). ipmc-defs build.rs finds the extension folder and decides whether ipmc-ext mounts it; without the folder ipmc-ext holds NoExtension and the build is Tier-1.",
     "ipmc-nucleo-f401re uses ipmc-core, ipmc-fru, ipmc-menu, ipmc-sensors (feature stm32f401) and ipmc-defs. ipmc-emu uses ipmc-core, ipmc-fru, ipmc-sensors, ipmc-wire and ipmc-defs. ipmc-sensors uses ipmc-core and ipmc-defs. ipmc-core uses ipmc-fru, ipmc-wire and ipmc-defs. ipmc-fru uses ipmc-wire and ipmc-defs. ipmc-menu uses ipmc-defs. Arrows that would cross are not drawn.",
     "The firmware crate is excluded from the root workspace and builds on its own (thumbv7em-none-eabihf).",
     "ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs and ipmc-menu are no_std with forbid(unsafe_code). ipmc-sensors allows unsafe only in drivers/stm32f401.",

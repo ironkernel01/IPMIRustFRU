@@ -11,6 +11,8 @@
 
 use crate::addr::AddrInfo;
 use crate::commands::{self, Command, COMMANDS};
+use crate::event_enable::EventEnables;
+use crate::ext::{Extension, NoExtension};
 use crate::fru_state::{FruMachine, InitialChecks, Inputs, Transition};
 use crate::ipmb::{self, Frame, IpmbError, NETFN_GROUP_EXT};
 use crate::link::{BusPair, LinkConfig, LinkView, PendingIpmbState};
@@ -73,6 +75,13 @@ pub mod cc {
     pub const UNSPECIFIED: u8 = 0xFF;
 }
 
+/// ResetRequest -- a processor restart a handler asks for through `Context::pending_reset`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetRequest {
+    /// Cold reset: the processor restarts as after power-up (IPMI v2.0 Cold Reset).
+    Cold,
+}
+
 /// Context -- state handed to every handler. The egress queue and the trace sink are arguments of
 /// `dispatch` instead: handlers cannot reach either, which keeps "a handler writes only its
 /// data bytes" true by construction.
@@ -86,6 +95,10 @@ pub mod cc {
 ///   RESTORE.
 /// - `sdr`: the Device SDR repository and its reservation; Reserve Device SDR Repository is
 ///   the only writer.
+/// - `event_enables`: the per-sensor event enables; written only by the Tier-3 Set Sensor Event
+///   Enable handler (extension); read by Get Sensor Reading (status byte bit 7) and by the
+///   Tier-2/3 event generator before it sends. The SDR builder's masks come from the same table
+///   (`sdr::event_masks`).
 /// - `self_test`: the result of the controller self test; `Context::new` sets it and an accepted
 ///   Write FRU Data refreshes it (`selftest`); Get Self Test Results reads it and the FRU initial
 ///   checks gate M0 to M1 on it.
@@ -97,6 +110,10 @@ pub mod cc {
 ///   `link::PendingIpmbState`): the handler validates the change against `link` with
 ///   `link::plan_ipmb_state`, leaves it here, and `Link::poll` applies and clears it right after
 ///   the handler returns, before the response is queued.
+/// - `pending_reset`: a handler's request that the processor restarts (the Tier-2/3 Cold Reset
+///   handler): the handler validates the request and sets it. The owner of the processor (the
+///   firmware main loop, the emulator) applies it after the response has left the egress queue,
+///   or `IPMC_RESET_WAIT_MS` after it took the request. No Tier-1 handler sets it.
 pub struct Context {
     /// Resolved geographic address and NVMRO state.
     pub addr: AddrInfo,
@@ -106,6 +123,8 @@ pub struct Context {
     pub fru: FruStore,
     /// Device SDR repository and reservation state.
     pub sdr: SdrRepository,
+    /// Per-sensor event enables (power-up values of this build's Tier).
+    pub event_enables: EventEnables,
     /// Result of the latest self test (IPMI v2.0 Table 20-5).
     pub self_test: SelfTest,
     /// Operational State of FRU 0.
@@ -114,6 +133,8 @@ pub struct Context {
     pub link: LinkView,
     /// Set IPMB State change for the link layer to apply after the handler returns.
     pub pending_ipmb: Option<PendingIpmbState>,
+    /// Processor restart for the owner of the processor to apply after the response left.
+    pub pending_reset: Option<ResetRequest>,
 }
 
 impl Context {
@@ -130,10 +151,12 @@ impl Context {
             sensors: SensorSnapshot::EMPTY,
             fru,
             sdr,
+            event_enables: EventEnables::power_up(),
             self_test,
             fru_state: FruMachine::new(),
             link: LinkView::power_up(LinkConfig::from_defs(), addr.usable()),
             pending_ipmb: None,
+            pending_reset: None,
         }
     }
 
@@ -198,6 +221,8 @@ impl Context {
     /// - 5 Payload Test Results: unavailable, no payload test has run (Table 10.2.6-1);
     /// - 6 Payload Test Status: not in progress (Table 10.2.7-1).
     ///
+    /// Status byte bit 7 (event messages enabled) is the sensor's `event_enables` flag.
+    ///
     /// Returns the byte count, Err(NotPresent) for a number outside 0..=6 and Err(OutputTooSmall)
     /// when `out` cannot hold a reading.
     pub fn read_sensor(
@@ -216,10 +241,13 @@ impl Context {
             SENSOR_PAYLOAD_TEST_STATUS => sensor::encode_payload_test_status(false, out),
             _ => return Err(SensorReadError::NotPresent),
         };
-        encoded.map_err(|error| match error {
+        let len = encoded.map_err(|error| match error {
             EncodeError::BufferTooShort => SensorReadError::OutputTooSmall,
             EncodeError::UnsupportedSensor => SensorReadError::NotPresent,
-        })
+        })?;
+        let enabled = self.event_enables.get(number).is_some_and(|e| e.enabled);
+        sensor::apply_event_enable(out, enabled);
+        Ok(len)
     }
 }
 
@@ -309,20 +337,26 @@ fn unsupported_lun(req: &Frame) -> Option<(u8, Outcome)> {
     (lun != SUPPORTED_LUN).then_some((cc::INVALID_FOR_LUN, Outcome::BadLun(lun)))
 }
 
-/// run_command -- looks up the row and runs its handler into `data`.
+/// run_command -- looks up the row and runs its handler into `data`; on a table miss the
+/// extension gets the request (Tier-1 rows win over it). One result path for both.
 /// Returns (completion code, outcome, data length); TooLong when the handler reports more
 /// bytes than `data` holds.
 fn run_command(
     table: &[Command],
+    ext: &mut dyn Extension,
     ctx: &mut Context,
     req: &Frame,
     data: &mut [u8],
 ) -> Result<(u8, Outcome, usize), IpmbError> {
-    let Some(row) = commands::find_in(table, req.header.netfn, req.header.cmd) else {
-        return Ok((cc::INVALID_CMD, Outcome::NoHandler, 0));
+    let (name, result) = match commands::find_in(table, req.header.netfn, req.header.cmd) {
+        Some(row) => (row.name, (row.handler)(ctx, req, data)),
+        None => match ext.command(ctx, req, data) {
+            Some(answer) => answer,
+            None => return Ok((cc::INVALID_CMD, Outcome::NoHandler, 0)),
+        },
     };
-    let outcome = Outcome::Handled(row.name);
-    match (row.handler)(ctx, req, data) {
+    let outcome = Outcome::Handled(name);
+    match result {
         Ok(len) if len <= data.len() => Ok((cc::OK, outcome, len)),
         Ok(_) => Err(IpmbError::TooLong),
         Err(code) => Ok((code, outcome, 0)),
@@ -341,6 +375,7 @@ fn run_command(
 /// before any lookup (a 2Dh response still starts with the defining-body byte).
 fn run_request(
     table: &[Command],
+    ext: &mut dyn Extension,
     ctx: &mut Context,
     req: &Frame,
     data: &mut [u8],
@@ -349,7 +384,7 @@ fn run_request(
         if let Some((code, outcome)) = unsupported_lun(req) {
             return Ok((code, outcome, 0));
         }
-        return run_command(table, ctx, req, data);
+        return run_command(table, ext, ctx, req, data);
     }
     let Some((body_slot, handler_out)) = data.split_first_mut() else {
         return Err(IpmbError::TooLong);
@@ -368,7 +403,7 @@ fn run_request(
         return Ok((cc::INVALID_CMD, Outcome::BadVso, 1));
     }
     let view = Frame { data: body, ..*req };
-    let (code, outcome, len) = run_command(table, ctx, &view, handler_out)?;
+    let (code, outcome, len) = run_command(table, ext, ctx, &view, handler_out)?;
     Ok((code, outcome, len.checked_add(1).ok_or(IpmbError::TooLong)?))
 }
 
@@ -377,9 +412,11 @@ fn run_request(
 /// 1. Builds the response header (NotARequest when `req` is a response).
 /// 2. Checks `out_frame` holds a whole frame (OutBufferTooSmall) BEFORE any handler runs, so
 ///    a handler's side effects never happen for a response that cannot be delivered.
-/// 3. Runs the request; encodes the response.
+/// 3. Runs the request (`ext` answers a (netFn, cmd) that `table` has no row for); encodes the
+///    response.
 pub fn build_response_with(
     table: &[Command],
+    ext: &mut dyn Extension,
     ctx: &mut Context,
     req: &Frame,
     out_frame: &mut [u8],
@@ -389,7 +426,7 @@ pub fn build_response_with(
         return Err(IpmbError::OutBufferTooSmall);
     }
     let mut data = [0u8; ipmb::IPMB_RESPONSE_DATA_MAX];
-    let (completion_code, outcome, data_len) = run_request(table, ctx, req, &mut data)?;
+    let (completion_code, outcome, data_len) = run_request(table, ext, ctx, req, &mut data)?;
     let payload = data.get(..data_len).ok_or(IpmbError::TooLong)?;
     let len = ipmb::encode_response(&header, completion_code, payload, out_frame)?;
     Ok(Built {
@@ -428,16 +465,22 @@ fn trace_request(trace: &mut dyn Trace, req: &Frame, built: &Built) {
     }
 }
 
-/// dispatch_with -- answers `req` using `table`: builds the response, traces the request and
-/// pushes the frame onto `queue` with the bus the request arrived on and its arrival time
-/// (`arrival_ms`, the request STOP); the link layer chooses the transmit bus later.
+/// dispatch_with -- answers `req` using `table` and, on a table miss, `ext`: builds the response,
+/// traces the request and pushes the frame onto `queue` with the bus the request arrived on and
+/// its arrival time (`arrival_ms`, the request STOP); the link layer chooses the transmit bus
+/// later.
 /// The queue is checked for a free slot BEFORE any handler runs (a handler has side effects;
 /// a response that cannot be queued must not cause them): a full queue runs nothing, counts a
 /// drop and returns Err(Queue(Full)).
 /// Err(Frame(..)) = nothing built (no handler ran for OutBufferTooSmall/NotARequest);
 /// Err(Queue(..)) = not queued.
+// Eight arguments: table, extension, context and request are the
+// four things dispatch needs, and the other four are the queue entry; a parameter struct would
+// only rename them.
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_with(
     table: &[Command],
+    ext: &mut dyn Extension,
     ctx: &mut Context,
     req: &Frame,
     arrival: Bus,
@@ -447,7 +490,8 @@ pub fn dispatch_with(
 ) -> Result<(), DispatchError> {
     queue.reserve().map_err(DispatchError::Queue)?;
     let mut frame = [0u8; ipmb::IPMB_MAX_LEN];
-    let built = build_response_with(table, ctx, req, &mut frame).map_err(DispatchError::Frame)?;
+    let built =
+        build_response_with(table, ext, ctx, req, &mut frame).map_err(DispatchError::Frame)?;
     trace_request(trace, req, &built);
     let bytes = frame
         .get(..built.len)
@@ -457,7 +501,7 @@ pub fn dispatch_with(
         .map_err(DispatchError::Queue)
 }
 
-/// dispatch -- `dispatch_with` over the COMMANDS table.
+/// dispatch -- `dispatch_with` over the COMMANDS table, with no extension (the Tier-1 build).
 pub fn dispatch(
     ctx: &mut Context,
     req: &Frame,
@@ -466,7 +510,16 @@ pub fn dispatch(
     queue: &mut EgressQueue,
     trace: &mut dyn Trace,
 ) -> Result<(), DispatchError> {
-    dispatch_with(COMMANDS, ctx, req, arrival, arrival_ms, queue, trace)
+    dispatch_with(
+        COMMANDS,
+        &mut NoExtension,
+        ctx,
+        req,
+        arrival,
+        arrival_ms,
+        queue,
+        trace,
+    )
 }
 
 #[cfg(test)]
@@ -474,6 +527,7 @@ mod tests {
     use super::*;
     use crate::addr;
     use crate::commands::cmd;
+    use crate::ext::NoExtension;
     use crate::ipmb::{NETFN_APP, NETFN_STORAGE};
     use crate::trace::{NoTrace, RecordingTrace};
     use core::sync::atomic::{AtomicBool, Ordering};
@@ -505,6 +559,7 @@ mod tests {
         let mut trace = RecordingTrace::default();
         dispatch_with(
             table,
+            &mut NoExtension,
             &mut context(),
             &req,
             Bus::B,
@@ -551,12 +606,17 @@ mod tests {
     // chk1, rsSA, seq<<2|rsLUN, cmd, CC, data, chk2), not produced by the encoder.
 
     /// Get Device ID response: seq 5, data per decision 1:
-    /// 01 80 00 01 02 09 | 00 00 00 | 4B 49 | 00 00 00 00. chk1 = -(20+1C) = C4,
-    /// chk2 = -(82+14+01+00+01+80+00+01+02+09+4B+49) = 48.
-    const GET_DEVICE_ID_RESPONSE: [u8; 23] = [
-        0x20, 0x1C, 0xC4, 0x82, 0x14, 0x01, 0x00, 0x01, 0x80, 0x00, 0x01, 0x02, 0x09, 0x00, 0x00,
-        0x00, 0x4B, 0x49, 0x00, 0x00, 0x00, 0x00, 0x48,
-    ];
+    /// 01 80 00 01 02 AS | 00 00 00 | 4B 49 | 00 00 00 00 with the Additional Device Support byte
+    /// AS = 09h at Tier-1, 29h at Tier-2 (Event Generator), 2Dh at Tier-3 (and SEL Device).
+    /// chk1 = -(20+1C) = C4, chk2 = -(82+14+01+00+01+80+00+01+02+AS+4B+49) = 48h, 28h, 24h.
+    fn get_device_id_response() -> [u8; 23] {
+        let (support, chk2) =
+            [(0x09, 0x48), (0x29, 0x28), (0x2D, 0x24)][ipmc_defs::IPMC_TIER as usize - 1];
+        [
+            0x20, 0x1C, 0xC4, 0x82, 0x14, 0x01, 0x00, 0x01, 0x80, 0x00, 0x01, 0x02, support, 0x00,
+            0x00, 0x00, 0x4B, 0x49, 0x00, 0x00, 0x00, 0x00, chk2,
+        ]
+    }
     /// Get Self Test Results response: data 55 00. chk2 = -(82+14+04+00+55+00) = 11.
     const SELF_TEST_RESPONSE: [u8; 10] =
         [0x20, 0x1C, 0xC4, 0x82, 0x14, 0x04, 0x00, 0x55, 0x00, 0x11];
@@ -565,7 +625,7 @@ mod tests {
     fn app_command_responses_are_byte_exact() {
         // (name, command, the exact response frame)
         let cases: [(&str, u8, &[u8]); 2] = [
-            ("Get Device ID", 0x01, &GET_DEVICE_ID_RESPONSE),
+            ("Get Device ID", 0x01, &get_device_id_response()),
             ("Get Self Test Results", 0x04, &SELF_TEST_RESPONSE),
         ];
         for (name, cmd, expected) in cases {
@@ -597,7 +657,7 @@ mod tests {
 
     #[test]
     fn table_handlers_and_errors() {
-        let table = [
+        let table: [Command; 3] = [
             cmd(NETFN_APP, 0x10, "Echo", "test", echo_handler),
             cmd(NETFN_APP, 0x11, "Fail", "test", failing_handler),
             cmd(NETFN_APP, 0x12, "Long", "test", overlong_handler),
@@ -619,6 +679,7 @@ mod tests {
         assert_eq!(
             dispatch_with(
                 &table,
+                &mut NoExtension,
                 &mut context(),
                 &req,
                 Bus::A,
@@ -633,7 +694,7 @@ mod tests {
 
     #[test]
     fn group_extension_vso_handling() {
-        let table = [cmd(NETFN_GROUP_EXT, 0x00, "Echo", "test", echo_handler)];
+        let table: [Command; 1] = [cmd(NETFN_GROUP_EXT, 0x00, "Echo", "test", echo_handler)];
         // Handler sees the data after the VSO byte; the response carries 03h first.
         let (frame, _) = run(&table, NETFN_GROUP_EXT, 0x00, &[VSO_IDENTIFIER, 0xA1, 0xA2]);
         let resp = ipmb::parse(&frame).unwrap();
@@ -675,7 +736,7 @@ mod tests {
 
     #[test]
     fn group_extension_handler_length_limit_counts_the_echoed_defining_body() {
-        let table = [cmd(NETFN_GROUP_EXT, 0x00, "Length", "test", length_handler)];
+        let table: [Command; 1] = [cmd(NETFN_GROUP_EXT, 0x00, "Length", "test", length_handler)];
         // The handler output holds one byte less than the response data: the echoed defining
         // body byte takes the first.
         let fits = ipmb::IPMB_RESPONSE_DATA_MAX - 1;
@@ -693,7 +754,8 @@ mod tests {
             let (buf, n) = request_bytes(NETFN_GROUP_EXT, 0x00, &request_data);
             let req = ipmb::parse(&buf[..n]).unwrap();
             let mut out = [0u8; ipmb::IPMB_MAX_LEN];
-            let result = build_response_with(&table, &mut context(), &req, &mut out);
+            let result =
+                build_response_with(&table, &mut NoExtension, &mut context(), &req, &mut out);
             if built {
                 let b = result.unwrap_or_else(|e| panic!("handler length {len}: {e:?}"));
                 assert_eq!(b.data_len, len + 1, "handler length {len}");
@@ -710,18 +772,19 @@ mod tests {
         let (buf, n) = request_bytes(NETFN_GROUP_EXT, 0x00, &request_data);
         let req = ipmb::parse(&buf[..n]).unwrap();
         let mut out = [0u8; ipmb::IPMB_MAX_LEN];
-        let b = build_response_with(&table, &mut context(), &req, &mut out).unwrap();
+        let b =
+            build_response_with(&table, &mut NoExtension, &mut context(), &req, &mut out).unwrap();
         assert_eq!(b.len, ipmb::IPMB_MAX_LEN);
     }
 
     #[test]
     fn short_output_buffer_runs_no_handler() {
-        let table = [cmd(NETFN_APP, 0x20, "Record", "test", recording_handler)];
+        let table: [Command; 1] = [cmd(NETFN_APP, 0x20, "Record", "test", recording_handler)];
         let (buf, n) = request_bytes(NETFN_APP, 0x20, &[]);
         let req = ipmb::parse(&buf[..n]).unwrap();
         let mut short = [0u8; ipmb::IPMB_MAX_LEN - 1];
         assert_eq!(
-            build_response_with(&table, &mut context(), &req, &mut short),
+            build_response_with(&table, &mut NoExtension, &mut context(), &req, &mut short),
             Err(IpmbError::OutBufferTooSmall)
         );
         assert!(
@@ -729,7 +792,7 @@ mod tests {
             "handler ran with a short buffer"
         );
         let mut full = [0u8; ipmb::IPMB_MAX_LEN];
-        build_response_with(&table, &mut context(), &req, &mut full).unwrap();
+        build_response_with(&table, &mut NoExtension, &mut context(), &req, &mut full).unwrap();
         assert!(RAN.load(Ordering::Relaxed));
     }
 
@@ -789,7 +852,7 @@ mod tests {
 
     #[test]
     fn nonzero_lun_is_c2_before_any_handler() {
-        let table = [cmd(NETFN_APP, 0x30, "Lun", "test", lun_handler)];
+        let table: [Command; 1] = [cmd(NETFN_APP, 0x30, "Lun", "test", lun_handler)];
         for lun in 1..=3u8 {
             let (buf, n) = request_to_lun(NETFN_APP, 0x30, lun, &[]);
             let req = ipmb::parse(&buf[..n]).unwrap();
@@ -797,6 +860,7 @@ mod tests {
             let mut trace = RecordingTrace::default();
             dispatch_with(
                 &table,
+                &mut NoExtension,
                 &mut context(),
                 &req,
                 Bus::A,
@@ -824,6 +888,7 @@ mod tests {
         let mut queue = EgressQueue::new();
         dispatch_with(
             &table,
+            &mut NoExtension,
             &mut context(),
             &req,
             Bus::A,
@@ -854,6 +919,7 @@ mod tests {
             let mut queue = EgressQueue::new();
             dispatch_with(
                 &[],
+                &mut NoExtension,
                 &mut context(),
                 &req,
                 Bus::A,
@@ -880,7 +946,7 @@ mod tests {
 
     #[test]
     fn full_queue_runs_no_handler() {
-        let table = [cmd(NETFN_APP, 0x40, "Full", "test", full_handler)];
+        let table: [Command; 1] = [cmd(NETFN_APP, 0x40, "Full", "test", full_handler)];
         let (buf, n) = request_bytes(NETFN_APP, 0x40, &[]);
         let req = ipmb::parse(&buf[..n]).unwrap();
         let mut queue = EgressQueue::new();
@@ -890,6 +956,7 @@ mod tests {
         assert_eq!(
             dispatch_with(
                 &table,
+                &mut NoExtension,
                 &mut context(),
                 &req,
                 Bus::A,
@@ -908,6 +975,7 @@ mod tests {
         queue.pop().unwrap();
         dispatch_with(
             &table,
+            &mut NoExtension,
             &mut context(),
             &req,
             Bus::A,
@@ -988,6 +1056,137 @@ mod tests {
         assert_eq!(
             dispatch(&mut context(), &req, Bus::A, 0, &mut queue, &mut NoTrace),
             Err(DispatchError::Frame(IpmbError::NotARequest))
+        );
+    }
+
+    // ---- the extension hook ----
+
+    /// ExtAnswer -- test extension: answers one (netFn, cmd) with `result`, writing `fill` into
+    /// the output, and records the request data and whether it was asked.
+    struct ExtAnswer {
+        netfn: u8,
+        cmd: u8,
+        result: Result<usize, u8>,
+        asked: bool,
+        seen: Vec<u8>,
+    }
+
+    impl ExtAnswer {
+        const FILL: u8 = 0xAB;
+
+        fn new(netfn: u8, cmd: u8, result: Result<usize, u8>) -> ExtAnswer {
+            ExtAnswer {
+                netfn,
+                cmd,
+                result,
+                asked: false,
+                seen: Vec::new(),
+            }
+        }
+    }
+
+    impl Extension for ExtAnswer {
+        fn command(
+            &mut self,
+            _ctx: &mut Context,
+            req: &Frame,
+            out: &mut [u8],
+        ) -> Option<(&'static str, Result<usize, u8>)> {
+            self.asked = true;
+            if (req.header.netfn, req.header.cmd) != (self.netfn, self.cmd) {
+                return None;
+            }
+            self.seen = req.data.to_vec();
+            if let Ok(len) = self.result {
+                out.iter_mut().take(len).for_each(|b| *b = ExtAnswer::FILL);
+            }
+            Some(("Ext Test", self.result))
+        }
+    }
+
+    /// ext_response -- builds the response to a request on `lun` through `table` and `ext`;
+    /// Ok((built, response frame bytes)).
+    fn ext_response(
+        table: &[Command],
+        ext: &mut dyn Extension,
+        (netfn, cmd, lun): (u8, u8, u8),
+        data: &[u8],
+    ) -> Result<(Built, Vec<u8>), IpmbError> {
+        let (buf, n) = request_to_lun(netfn, cmd, lun, data);
+        let req = ipmb::parse(&buf[..n]).unwrap();
+        let mut out = [0u8; ipmb::IPMB_MAX_LEN];
+        let built = build_response_with(table, ext, &mut context(), &req, &mut out)?;
+        Ok((built, out[..built.len].to_vec()))
+    }
+
+    #[test]
+    fn extension_answers_only_on_a_table_miss() {
+        let table: [Command; 1] = [cmd(NETFN_APP, 0x10, "Echo", "test", echo_handler)];
+        // The extension claims the table's own command too: the table row wins.
+        let mut ext = ExtAnswer::new(NETFN_APP, 0x10, Ok(1));
+        let (built, frame) = ext_response(&table, &mut ext, (NETFN_APP, 0x10, 0), &[7, 8]).unwrap();
+        assert_eq!(built.outcome, Outcome::Handled("Echo"));
+        assert_eq!(ipmb::parse(&frame).unwrap().data, &[7, 8][..]);
+        assert!(!ext.asked, "the extension was asked about a Tier-1 row");
+        // A command the table lacks goes to the extension.
+        let mut ext = ExtAnswer::new(NETFN_APP, 0x20, Ok(2));
+        let (built, frame) = ext_response(&table, &mut ext, (NETFN_APP, 0x20, 0), &[9]).unwrap();
+        assert_eq!(built.outcome, Outcome::Handled("Ext Test"));
+        assert_eq!(built.completion_code, cc::OK);
+        assert_eq!(ipmb::parse(&frame).unwrap().data, &[ExtAnswer::FILL; 2][..]);
+        assert_eq!(ext.seen, [9]);
+    }
+
+    #[test]
+    fn extension_error_code_has_no_data() {
+        let mut ext = ExtAnswer::new(NETFN_APP, 0x20, Err(cc::PARAM_OUT_OF_RANGE));
+        let (built, frame) = ext_response(&[], &mut ext, (NETFN_APP, 0x20, 0), &[]).unwrap();
+        assert_eq!(built.completion_code, cc::PARAM_OUT_OF_RANGE);
+        assert!(ipmb::parse(&frame).unwrap().data.is_empty());
+    }
+
+    #[test]
+    fn extension_over_long_length_fails_as_a_row_does() {
+        let too_long = ipmb::IPMB_RESPONSE_DATA_MAX + 1;
+        let mut ext = ExtAnswer::new(NETFN_APP, 0x20, Ok(too_long));
+        let from_ext = ext_response(&[], &mut ext, (NETFN_APP, 0x20, 0), &[]).map(|r| r.0);
+        let table: [Command; 1] = [cmd(NETFN_APP, 0x20, "Long", "test", overlong_handler)];
+        let from_row = ext_response(&table, &mut NoExtension, (NETFN_APP, 0x20, 0), &[]);
+        assert_eq!(from_ext, Err(IpmbError::TooLong));
+        assert_eq!(from_row.map(|r| r.0), Err(IpmbError::TooLong));
+    }
+
+    #[test]
+    fn extension_group_extension_command_sees_the_data_after_the_vso_byte() {
+        let mut ext = ExtAnswer::new(NETFN_GROUP_EXT, 0x77, Ok(2));
+        let data = [VSO_IDENTIFIER, 0x55, 0x66];
+        let (built, frame) =
+            ext_response(&[], &mut ext, (NETFN_GROUP_EXT, 0x77, 0), &data).unwrap();
+        assert_eq!(ext.seen, [0x55, 0x66]);
+        assert_eq!(built.completion_code, cc::OK);
+        assert_eq!(
+            ipmb::parse(&frame).unwrap().data,
+            &[VSO_IDENTIFIER, ExtAnswer::FILL, ExtAnswer::FILL][..]
+        );
+    }
+
+    #[test]
+    fn extension_is_not_reached_for_another_lun_or_a_foreign_defining_body() {
+        let mut ext = ExtAnswer::new(NETFN_APP, 0x20, Ok(0));
+        let (built, _) = ext_response(&[], &mut ext, (NETFN_APP, 0x20, 2), &[]).unwrap();
+        assert_eq!(built.completion_code, cc::INVALID_FOR_LUN);
+        let mut ext = ExtAnswer::new(NETFN_GROUP_EXT, 0x77, Ok(0));
+        let (built, _) = ext_response(&[], &mut ext, (NETFN_GROUP_EXT, 0x77, 0), &[0x00]).unwrap();
+        assert_eq!(built.outcome, Outcome::BadVso);
+        assert!(!ext.asked, "the extension was asked past a failed check");
+    }
+
+    #[test]
+    fn no_extension_answers_c1() {
+        let (built, _) = ext_response(&[], &mut NoExtension, (NETFN_APP, 0x20, 0), &[]).unwrap();
+        assert_eq!(
+            (built.completion_code, built.outcome),
+            (cc::INVALID_CMD, Outcome::NoHandler)
         );
     }
 }

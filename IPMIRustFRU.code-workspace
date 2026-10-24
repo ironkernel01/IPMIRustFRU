@@ -1,9 +1,15 @@
 {
 	"folders": [
 		{
+			"name": "IPMIRustFRU",
 			"path": "."
 		},
 		{
+			"name": "IPMIRustFRU_Tier23",
+			"path": "../IPMIRustFRU_Tier23"
+		},
+		{
+			"name": "AI-LinuxScripts",
 			"path": "Z:/AI-LinuxScripts"
 		}
 	],

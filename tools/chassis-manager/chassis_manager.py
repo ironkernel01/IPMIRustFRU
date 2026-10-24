@@ -23,23 +23,24 @@ import array
 import json
 import re
 import sys
-import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from cm_commands import (
-    CC_OK, CMD_GET_DEVICE_ID, CMD_GET_DEVICE_LOCATOR_RECORD_ID, CMD_GET_DEVICE_SDR,
+    CC_OK, CMD_COLD_RESET, CMD_GET_DEVICE_ID, CMD_GET_DEVICE_LOCATOR_RECORD_ID, CMD_GET_DEVICE_SDR,
     CMD_GET_DEVICE_SDR_INFO, CMD_GET_FRU_AREA_INFO, CMD_GET_SELF_TEST_RESULTS,
     CMD_GET_SENSOR_READING, CMD_GET_VSO_CAPABILITIES, CMD_READ_FRU_DATA, CMD_RESERVE_DEVICE_SDR,
-    CMD_SET_IPMB_STATE, IPMB_STATE_LOCAL_CONTROL, IPMB_STATE_NO_CHANGE, IPMB_STATE_OVERRIDE,
+    CMD_SET_EVENT_RECEIVER, CMD_SET_IPMB_STATE, IPMB_STATE_LOCAL_CONTROL, IPMB_STATE_NO_CHANGE, IPMB_STATE_OVERRIDE,
     NETFN_APP, NETFN_GROUP_EXTENSION, NETFN_SENSOR, NETFN_STORAGE, VSO_ID, command_name,
     decode_response, fru_access_unit, ipmb_interfaces, locator_record_id,
 )
+from cm_events import EventReceiver
 from cm_link import C1_MAX, C1_MIN, CM_ADDRESS_DEFAULT, T3_MAX_S, FrameCollector, Link
 from cm_settings import (
     AARDVARK_PORT_DEFAULT, AARDVARK_PULLUPS_DEFAULT, BUS_FAIL_STREAK_DEFAULT, CHUNK_BYTES,
-    DISCOVERY_TRIES_DEFAULT, DURATION_S_DEFAULT, POLL_S_DEFAULT, SDR_RECORDS_MAX,
+    CM_TIER_DEFAULT, COLD_RESET_RECOVERY_S, DISCOVERY_TRIES_DEFAULT, DURATION_S_DEFAULT, POLL_S_DEFAULT,
+    SDR_RECORDS_MAX, WITHHOLD_EVENTS_DEFAULT,
 )
 
 # Slot addressing (Rule 4.1.4.1.2-1, Rule 4.1.4.2-2): slot N is hardware address 40h + N, IPMB
@@ -89,9 +90,12 @@ class Session:
         self.link, self.log, self.args = link, log, args
         self.ipmcs: dict = {}
         self.poll_stats = {"cycles": 0, "readings": 0, "lost_readings": 0, "late_cycles": 0,
-                           "bad_completion_codes": 0, "sensors": 0}
+                           "bad_completion_codes": 0, "sensors": 0,
+                           "reset_lost_readings": 0, "reset_recovered": 0}
         self.checks: list = []  # every pass/fail result that decides the exit status
         self._announced: set = set()  # (dest, bus) pairs already told to use the other bus
+        # IPMCs sent Cold Reset that have not answered since, with the time the reset was sent
+        self._resetting: dict = {}
 
     def check(self, name: str, ok: bool, detail: str = "", dest: int | None = None) -> bool:
         """Record one result that decides the exit status, and log it."""
@@ -381,21 +385,36 @@ class Session:
         fault_at = (a.emu_bus_down_at_s if a.emu_bus_down_at_s is not None
                     else a.duration_s / 2)
         fault_sent = a.emu_bus_down is None
+        reset_sent = a.cold_reset_at_s is None
         cycle = 0
         while self.link.now_s() - start < a.duration_s:
             slot_end = start + (cycle + 1) * a.poll_s
             if not fault_sent and self.link.now_s() - start >= fault_at:
                 self.link_fault(a.emu_bus_down)
                 fault_sent = True
+            if not reset_sent and self.link.now_s() - start >= a.cold_reset_at_s:
+                self.cold_reset(dest)
+                reset_sent = True
             for number in names:
+                asked_at = self.link.now_s()
                 ex = self.ask(dest, NETFN_SENSOR, CMD_GET_SENSOR_READING, bytes([number]),
                               show=False)
                 self.poll_stats["readings"] += 1
                 state = "timeout" if ex.timed_out else ex.response.hex(" ").upper()
-                if ex.timed_out:
+                reset_at = self._resetting.get(dest)
+                recovering = (reset_at is not None
+                              and asked_at - reset_at <= a.cold_reset_recovery_s)
+                if ex.timed_out and recovering:
+                    ex.expected_loss = True
+                    self.poll_stats["reset_lost_readings"] += 1
+                elif ex.timed_out:
                     self.poll_stats["lost_readings"] += 1
                 elif ex.completion_code != CC_OK:
                     self.poll_stats["bad_completion_codes"] += 1
+                if not ex.timed_out:
+                    if recovering:
+                        self.poll_stats["reset_recovered"] += 1
+                    self._resetting.pop(dest, None)
                 if last.get(number) != state:
                     last[number] = state
                     self.log.line(f'sensor {number} "{names[number]}": '
@@ -407,13 +426,42 @@ class Session:
             if self.link.now_s() > slot_end:
                 self.poll_stats["late_cycles"] += 1
             else:
-                time.sleep(max(0.0, slot_end - self.link.now_s()))
+                self.link.idle(slot_end - self.link.now_s())
         stats = self.poll_stats
         self.check("polling answered", stats["cycles"] > 0 and stats["readings"] > 0
                    and stats["lost_readings"] == 0 and stats["bad_completion_codes"] == 0,
                    f"{stats['cycles']} cycles, {stats['readings']} readings, "
                    f"{stats['lost_readings']} lost, {stats['bad_completion_codes']} with an "
                    f"error completion code", dest)
+        if a.cold_reset_at_s is not None and reset_sent:
+            self.check("recovered after Cold Reset", stats["reset_recovered"] > 0,
+                       f"{stats['reset_recovered']} readings answered within "
+                       f"{a.cold_reset_recovery_s} s of the reset, "
+                       f"{stats['reset_lost_readings']} lost inside that time", dest)
+
+    def set_event_receiver(self, dest: int) -> None:
+        """Tell `dest` that this Chassis Manager is its Event Receiver (Set Event Receiver, NetFn
+        04h cmd 00h: receiver address, LUN 0). A Tier-1 IPMC answers C1h; that is logged, not a
+        failure."""
+        ex = self.ask(dest, NETFN_SENSOR, CMD_SET_EVENT_RECEIVER,
+                      bytes([self.link.cm_address, 0x00]))
+        self.log.line(f"Set Event Receiver of {dest:02X}h: "
+                      + ("no response" if ex.timed_out
+                         else f"completion code {ex.completion_code:02X}h"))
+
+    def cold_reset(self, dest: int) -> None:
+        """Send Cold Reset (NetFn 06h cmd 02h) to `dest`, once: the IPMC may reset before it
+        answers, so a missing response is expected and is not a failure. The polling that follows
+        keeps running; its timeouts until `dest` answers again are expected too, but only within
+        `--cold-reset-recovery-s` of the request: after that a timeout is a lost reading, and
+        the run fails unless a reading was answered inside that time."""
+        self.log.line(f"cold reset of {dest:02X}h")
+        sent_at = self.link.now_s()
+        ex = self.ask(dest, NETFN_APP, CMD_COLD_RESET, tries=1)
+        if ex.timed_out:
+            ex.expected_loss = True
+            self.log.line(f"no response to Cold Reset from {dest:02X}h (expected)")
+        self._resetting[dest] = sent_at
 
     def link_fault(self, bus: str) -> None:
         """Emulator only: break `bus` (`#bus A down`) to exercise failover."""
@@ -426,6 +474,7 @@ class Session:
         commands: dict = {}
         unique: dict = {}
         sequence: list = []
+        events = self.link.receiver
         for ex in self.link.exchanges:
             key = f"{ex.netfn:02X}/{ex.cmd:02X} {command_name(ex.netfn, ex.cmd)}"
             c = commands.setdefault(key, {
@@ -459,7 +508,7 @@ class Session:
             "timeouts": sum(1 for e in self.link.exchanges if e.timed_out),
             "timeouts_after_discovery": sum(
                 1 for e in self.link.exchanges
-                if e.timed_out and e.dest in self.ipmcs),
+                if e.timed_out and e.dest in self.ipmcs and not e.expected_loss),
         }
         for c in commands.values():
             c["completion_codes"] = dict(c["completion_codes"])
@@ -479,6 +528,9 @@ class Session:
             "bus_enable_events": [{"after_exchanges": n, "dest": d, "bus": b}
                                   for n, d, b in self.link.enable_events],
             "commands": commands, "exchanges": list(unique.values()), "sequence": sequence,
+            "events": events.events if events else [],
+            "other_requests": events.other_requests if events else [],
+            **(events.counts() if events else EventReceiver(self.link.now_s).counts()),
         }
 
 
@@ -525,10 +577,23 @@ def parse_args(argv=None):
                    help="emu: break this bus during polling (failover test)")
     p.add_argument("--emu-bus-down-at-s", type=float, default=None,
                    help="emu: seconds into polling (default half the duration)")
+    p.add_argument("--cm-tier", type=int, choices=(1, 2), default=CM_TIER_DEFAULT,
+                   help="2: Event Receiver, answers Platform Event 00h; 1: answers C1h (Rule 7-2)")
+    p.add_argument("--withhold-events", type=int, default=WITHHOLD_EVENTS_DEFAULT,
+                   help="leave the first N Platform Event frames unanswered (retries count)")
+    p.add_argument("--set-event-receiver", action="store_true",
+                   help="send Set Event Receiver (this manager) to each IPMC found")
+    p.add_argument("--cold-reset-at-s", type=float, default=None,
+                   help="send Cold Reset to each IPMC found this many seconds into its polling")
+    p.add_argument("--cold-reset-recovery-s", type=float, default=COLD_RESET_RECOVERY_S,
+                   help="seconds after Cold Reset in which the IPMC must answer again; later "
+                        "timeouts are lost readings")
     p.add_argument("--json", default=None, help="write the JSON summary here")
     args = p.parse_args(argv)
     if args.emu_bus_down and args.transport != "emu":
         p.error("--emu-bus-down needs --transport emu")
+    if args.withhold_events < 0:
+        p.error("--withhold-events must be 0 or more")
     return args
 
 
@@ -567,19 +632,25 @@ def run(args) -> int:
     try:
         link = Link(interfaces, collector, args.cm_address, args.retries, args.timeout_s,
                     args.bus_fail_streak)
-        session = Session(link, RunLog(link), args)
-        log = session.log
+        log = RunLog(link)
+        link.receiver = EventReceiver(link.now_s, args.cm_tier, args.withhold_events,
+                                      log.line)
+        session = Session(link, log, args)
         log.line(f"Chassis Manager at {args.cm_address:02X}h over {args.transport}; "
-                 f"timeout {args.timeout_s * 1000:.0f} ms, retries {args.retries}")
+                 f"timeout {args.timeout_s * 1000:.0f} ms, retries {args.retries}, "
+                 f"Tier-{args.cm_tier} Chassis Manager")
         found = session.discover(slot_addresses(args.slots))
         for dest in found:
+            if args.set_event_receiver:
+                session.set_event_receiver(dest)
             session.capabilities(dest)
             session.locator(dest)
             session.read_fru(dest)
             sensors = session.read_sdr(dest)
             session.check_locator(dest)
             session.poll(dest, sensors)
-        late = sum(1 for e in link.exchanges if e.timed_out and e.dest in session.ipmcs)
+        late = sum(1 for e in link.exchanges
+                   if e.timed_out and e.dest in session.ipmcs and not e.expected_loss)
         session.check("no request to a found IPMC timed out", late == 0,
                       f"{late} timeouts")
         summary = session.summary(started)

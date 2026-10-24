@@ -20,6 +20,7 @@ mod common;
 use common::load;
 use ipmc_core::addr;
 use ipmc_core::dispatch::Context;
+use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb::{self, NETFN_APP, NETFN_GROUP_EXT, NETFN_SE, NETFN_STORAGE};
 use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
 use ipmc_core::trace::NoTrace;
@@ -100,6 +101,8 @@ const SAME_LENGTH: [(u8, u8); 10] = [
 /// bit 5 reading/state unavailable; bit 7 (event messages) is 0 because a Tier-1 IPMC sends none.
 const STATUS_SCANNING: u8 = 0x40;
 const STATUS_UNAVAILABLE: u8 = 0x20;
+/// Event messages enabled (status bit 7), set from Tier 2.
+const STATUS_EVENTS_ENABLED: u8 = 0x80;
 /// The VSO identifier that starts the data of every 2Dh response.
 const VSO: u8 = 0x03;
 
@@ -120,7 +123,11 @@ fn expected_device_id() -> [u8; 15] {
         | (d::IPMC_SUPPORT_EVENT_RECEIVER << 4)
         | (d::IPMC_SUPPORT_EVENT_GENERATOR << 5)
         | (d::IPMC_SUPPORT_BRIDGE << 6)
-        | (d::IPMC_SUPPORT_CHASSIS << 7);
+        | (d::IPMC_SUPPORT_CHASSIS << 7)
+        // From Tier 2 the IPMC generates events (Rule 7-3, bit 5); at Tier 3 it also holds a SEL
+        // (Rule 7-8, bit 2).
+        | (u32::from(d::IPMC_TIER >= 2) << 5)
+        | (u32::from(d::IPMC_TIER >= 3) << 2);
     let aux = d::IPMC_AUX_FIRMWARE.to_le_bytes();
     [
         byte(d::IPMC_DEVICE_ID, 0),
@@ -144,7 +151,7 @@ fn expected_device_id() -> [u8; 15] {
 /// expected_sensor_reading -- Get Sensor Reading data (reading, status, state) of sensor
 /// `number` in the replay's state, one table per sensor (VITA 46.11 Table 10.2-1 numbering).
 fn expected_sensor_reading(number: u8) -> [u8; 3] {
-    match number {
+    let mut reading = match number {
         // Table 10.2.1-1 byte 4: bit n = state Mn; the replay never leaves M0.
         0 => [0x00, STATUS_SCANNING, 0x01],
         // Table 10.2.2-1: byte 2 bit 7 IPMB-B and bit 3 IPMB-A in Local Control (override
@@ -158,7 +165,13 @@ fn expected_sensor_reading(number: u8) -> [u8; 3] {
         // Table 10.2.7-1 Payload Test Status: byte 4 bits 1:0 = 01b, test not in progress.
         6 => [0x00, STATUS_SCANNING, 0x01],
         other => panic!("sensor {other} is not a mandatory sensor"),
+    };
+    // From Tier 2 the event messages of a sensor start enabled (status bit 7, Table 35-14): the
+    // IPMC generates events.
+    if ipmc_defs::IPMC_TIER >= 2 {
+        reading[1] |= STATUS_EVENTS_ENABLED;
     }
+    reading
 }
 
 /// check_payload -- the exact response data of commands both controllers answer 00h. `request`
@@ -200,11 +213,13 @@ fn check_payload(netfn: u8, cmd: u8, request: &[u8], ours: &[u8], captured: &[u8
             expected.extend_from_slice(image.read(offset, usize::from(*count)).unwrap());
             assert_eq!(ours, expected, "{what}");
         }
-        // VITA 46.11 Table 10.1.3.1-1: VSO byte; Layer 1 / Tier-1 00h; interfaces 01b (two,
+        // VITA 46.11 Table 10.1.3.1-1: VSO byte; Layer 1 / tier 00h (Tier 1), 01h (Tier 2), 02h
+        // (Tier 3: the build's IPMC_TIER less one); interfaces 01b (two,
         // Rule 4.1.1-2) at 100 kHz; VITA 46.11 00h; revision 22h (2022); max FRU Device ID 0;
         // IPMC FRU Device ID 0.
         (NETFN_GROUP_EXT, 0x00) => {
-            assert_eq!(ours, [VSO, 0x00, 0x01, 0x00, 0x22, 0x00, 0x00], "{what}");
+            let tier = u8::try_from(ipmc_defs::IPMC_TIER - 1).expect("tier 1..=3");
+            assert_eq!(ours, [VSO, tier, 0x01, 0x00, 0x22, 0x00, 0x00], "{what}");
         }
         // Set IPMB State (Table 10.1.3.9-1): the response carries only the VSO byte.
         (NETFN_GROUP_EXT, 0x09) => assert_eq!(ours, [VSO], "{what}"),
@@ -255,6 +270,7 @@ fn every_captured_request_gets_the_documented_answer() {
         LinkConfig {
             b_fitted: true,
             tx_policy: TxPolicy::Arrival,
+            requests_allowed: false,
         },
         &resolved,
     );
@@ -281,7 +297,7 @@ fn every_captured_request_gets_the_documented_answer() {
         // Feed the request at its capture time and take our response.
         link.on_frame(pair[0].bus, &pair[0].bytes, pair[0].time_ms)
             .expect("accepted");
-        link.poll(&mut ctx, pair[0].time_ms, &mut NoTrace);
+        link.poll(&mut ctx, &mut NoExtension, pair[0].time_ms, &mut NoTrace);
         let (tx_bus, bytes) = link
             .next_tx()
             .map(|(b, f)| (b, f.to_vec()))

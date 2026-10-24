@@ -124,6 +124,14 @@ name = "ipmc-defs"
 version = "0.1.0"
 
 [[package]]
+name = "ipmc-ext"
+version = "0.1.0"
+dependencies = [
+ "ipmc-core",
+ "ipmc-defs",
+]
+
+[[package]]
 name = "ipmc-fru"
 version = "0.1.0"
 dependencies = [
@@ -147,6 +155,7 @@ dependencies = [
  "heapless",
  "ipmc-core",
  "ipmc-defs",
+ "ipmc-ext",
  "ipmc-fru",
  "ipmc-menu",
  "ipmc-sensors",

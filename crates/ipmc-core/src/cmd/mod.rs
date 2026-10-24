@@ -19,19 +19,19 @@ pub const MAX_FRU_DEVICE_ID: u8 = 0;
 /// Get VSO Capabilities byte 8).
 pub const IPMC_FRU_DEVICE_ID: u8 = 0;
 
-/// check_fru_device_id -- the one FRU Device ID check: an ID above the maximum of the Managed
+/// check_fru_device_id -- shared with the Tier-2/3 extension: the one FRU Device ID check: an ID above the maximum of the Managed
 /// FRUs is "parameter out of range" C9h (VITA 46.11 Rule 4.1.1-17; Rule 4.2-3 for a Subsidiary
 /// FRU, which a Tier-1 IPMC does not manage). FFh is reserved and lies above the maximum too.
-pub(crate) fn check_fru_device_id(id: u8) -> Result<(), u8> {
+pub fn check_fru_device_id(id: u8) -> Result<(), u8> {
     if id > MAX_FRU_DEVICE_ID {
         return Err(cc::PARAM_OUT_OF_RANGE);
     }
     Ok(())
 }
 
-/// require_no_data -- the one check of a command that takes no request data: any data byte is
+/// require_no_data -- shared with the Tier-2/3 extension: the one check of a command that takes no request data: any data byte is
 /// "request data length invalid" C7h (IPMI v2.0 Table 5-2).
-pub(crate) fn require_no_data(req: &Frame) -> Result<(), u8> {
+pub fn require_no_data(req: &Frame) -> Result<(), u8> {
     if req.data.is_empty() {
         Ok(())
     } else {

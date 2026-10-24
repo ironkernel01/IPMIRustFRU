@@ -5,6 +5,7 @@ mod common;
 use common::load;
 use ipmc_core::addr;
 use ipmc_core::dispatch::Context;
+use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb;
 use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::Bus;
@@ -24,6 +25,7 @@ fn link(policy: TxPolicy) -> Link {
         LinkConfig {
             b_fitted: true,
             tx_policy: policy,
+            requests_allowed: false,
         },
         &addr::resolve(0x7F),
     );
@@ -67,7 +69,7 @@ fn replay(link: &mut Link) -> Vec<(Bus, u8)> {
     for v in load() {
         let bus = v.bus;
         let _ = link.on_frame(bus, &v.bytes, v.time_ms);
-        link.poll(&mut ctx, v.time_ms, &mut NoTrace);
+        link.poll(&mut ctx, &mut NoExtension, v.time_ms, &mut NoTrace);
         while let Some((tx_bus, frame)) = link.next_tx() {
             let response = ipmb::parse(frame).expect("response parses");
             sent.push((tx_bus, response.header.seq));
@@ -162,7 +164,7 @@ fn failed_response_on_a_is_resent_on_b_and_the_retry_is_replayed() {
     let mut ctx = ctx();
     l.on_frame(Bus::A, &first_on_a.bytes, first_on_a.time_ms)
         .expect("accepted");
-    l.poll(&mut ctx, first_on_a.time_ms, &mut NoTrace);
+    l.poll(&mut ctx, &mut NoExtension, first_on_a.time_ms, &mut NoTrace);
     let (bus, original) = l.next_tx().map(|(b, f)| (b, f.to_vec())).expect("response");
     assert_eq!(bus, Bus::A);
     l.on_tx_result(Bus::A, false, first_on_a.time_ms, &mut NoTrace)
@@ -180,7 +182,12 @@ fn failed_response_on_a_is_resent_on_b_and_the_retry_is_replayed() {
     // The requester timed out meanwhile and retries the same request on B.
     l.on_frame(Bus::B, &first_on_a.bytes, first_on_a.time_ms + 250)
         .expect("accepted");
-    l.poll(&mut ctx, first_on_a.time_ms + 250, &mut NoTrace);
+    l.poll(
+        &mut ctx,
+        &mut NoExtension,
+        first_on_a.time_ms + 250,
+        &mut NoTrace,
+    );
     let (_, replayed) = l.next_tx().map(|(b, f)| (b, f.to_vec())).expect("replay");
     assert_eq!(replayed, original);
     assert_eq!(l.counters(Bus::B).replays, 1);

@@ -33,6 +33,10 @@
 #define IPMB_DUP_CACHE 64                         /* responses kept for retry replay (8..=64); 64 holds about 4 s at the captured peak of 16 requests per second, covering the 2.75 s requester retry window (11 x 250 ms; PLAN.md 3.3) */
 #define IPMB_DUP_WINDOW_MS 3000                   /* a request repeated within this time is a retry and gets the cached response; must cover the requester retry window (VITA 250 ms x 11 attempts = 2750 ms) and stay below the sequence reuse time of the Chassis Manager (captured live: every rqSeq reused after 3.846 s or more, so the VITA 5 s expiry cannot be used) */
 #define IPMB_TX_RETRIES 3                         /* most resends of one response frame after a failed transmit, on the alternate bus (3..=10); VITA 46.11 Rule 4.1.1-7 and retry count C1 3 to 10 */
+#define IPMB_REQ_TIMEOUT_MS 250                   /* wait for a response to a request this IPMC sent before a retry, 60..=250 ms; VITA 46.11 Rule 4.1.1-9 T3max, and the retry spacing T6 (Table 4.1.1-1) */
+#define IPMB_REQ_RETRIES 10                       /* retries of a request after its first transmission (3..=10); VITA 46.11 Rule 4.1.1-10 retries up to C1max = 10: 11 transmissions x 250 ms = 2.75 s, inside the T9 sequence expiry of 5 s */
+#define IPMB_REQ_GAP_MS 5                         /* least time from one new request to the next (>= 5); VITA 46.11 Table 4.1.1-1 T4 */
+#define IPMC_RESET_WAIT_MS 3000                   /* longest wait before a pending Cold Reset is applied anyway (1..=5000): normally the processor resets once the response has left the egress queue and no accepted FRU write is unsaved; a flash sector erase takes up to 2 s (DS10086 Table 45), so the wait covers the response, one erase and the write */
 #define IPMB_INGRESS_DEPTH 8                      /* received requests the link layer holds between the bus driver and the main loop (1..=32); a full FIFO drops and counts */
 #define IPMB_BITBANG_HALF_NS 5000                 /* bit-bang half bit time, 100 kHz */
 #define IPMB_STRETCH_TIMEOUT_US 3000              /* longest wait for a stretched SCL, microseconds; VITA 46.11 Table 4.1.1-1 T8 (I2C clock low hold) max 3 ms (1..=3000) */

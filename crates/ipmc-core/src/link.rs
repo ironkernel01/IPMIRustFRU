@@ -30,8 +30,10 @@ use crate::cmd::app::CMD_GET_DEVICE_ID;
 use crate::commands::{Command, COMMANDS};
 use crate::dispatch::{dispatch_with, Context};
 use crate::dupcache::{DupCache, Key};
+use crate::ext::Extension;
 use crate::ipmb::{self, IpmbError, IPMB_MAX_LEN, NETFN_APP};
 use crate::queue::{Bus, EgressQueue, Fifo};
+use crate::requester::Requester;
 use crate::sensor::{LinkBus, LinkSensor, LocalStatus};
 use crate::trace::Trace;
 
@@ -89,6 +91,9 @@ pub struct LinkConfig {
     pub b_fitted: bool,
     /// Response bus policy.
     pub tx_policy: TxPolicy,
+    /// The requester may send requests: Tier 2 and 3 (VITA 46.11 Rule 7-3); a Tier-1 IPMC sends
+    /// none (Rule 7-4).
+    pub requests_allowed: bool,
 }
 
 impl LinkConfig {
@@ -97,6 +102,7 @@ impl LinkConfig {
         LinkConfig {
             b_fitted: ipmc_defs::IPMB_BUS_B_ENABLE == 1,
             tx_policy: TxPolicy::from_define(ipmc_defs::IPMB_TX_POLICY),
+            requests_allowed: ipmc_defs::IPMC_TIER >= 2,
         }
     }
 }
@@ -306,7 +312,7 @@ pub enum FrameDrop {
     BusUnavailable,
     /// The frame failed `ipmb::parse`.
     Parse(IpmbError),
-    /// The frame is a response; a Tier-1 IPMC sends no requests.
+    /// The frame is a response that answers no request of ours (a Tier-1 IPMC sends none).
     Response,
     /// The request is addressed to another controller (or is a broadcast other than Get Device ID).
     NotForUs,
@@ -383,14 +389,18 @@ pub struct BusCounters {
     pub rx_errors: RxErrors,
     /// Valid requests addressed to another controller.
     pub not_for_us: u32,
-    /// Valid responses received (dropped).
+    /// Valid responses that answer no request of ours (dropped).
     pub rx_response: u32,
+    /// Valid responses that answered the outstanding request (`Requester`).
+    pub rx_answers: u32,
     /// Frames that arrived while the bus was disabled or not built in.
     pub bus_unavailable: u32,
     /// Valid requests lost because the ingress FIFO was full.
     pub ingress_full: u32,
     /// Frames transmitted successfully.
     pub tx_ok: u32,
+    /// Request transmissions on this bus, failed ones included (the first and every retry).
+    pub tx_requests: u32,
     /// Transmit attempts that failed.
     pub tx_fail: u32,
     /// Failed transmits since the last success on this bus.
@@ -454,7 +464,15 @@ pub struct Link {
     /// Responses whose transmission completed after RESPONSE_DEADLINE_MS.
     late_responses: u32,
     dispatch_errors: u32,
+    /// Requests this IPMC sends (Tier-2/3); idle in a Tier-1 build. It also holds the bus of the
+    /// request frame handed to a driver whose outcome is open (`Requester::sending_bus`).
+    requester: Requester,
 }
+
+/// REQUESTS_BUILT -- this build can send requests: Tier 2 or 3 (ipmi_defs.h IPMC_TIER), and every
+/// unit test of the requester path. A Tier-1 image never reaches the requester code behind this
+/// constant, so the optimiser drops it.
+const REQUESTS_BUILT: bool = cfg!(test) || ipmc_defs::IPMC_TIER >= 2;
 
 impl Link {
     /// new -- a link in the power-up state: IPMB-A Local Control and enabled, IPMB-B isolated
@@ -462,6 +480,21 @@ impl Link {
     /// own IPMB address; an invalid hardware address (bad parity or GA 0) isolates both buses
     /// (Rule 4.1.5.4.1-5), so `on_frame` drops everything and nothing is sent.
     pub const fn new(config: LinkConfig, addr: &AddrInfo) -> Link {
+        Self::with_first_request_seq(config, addr, 0, 0, 0)
+    }
+
+    /// with_first_request_seq -- `new` with the rqSeq of the first request this IPMC sends and
+    /// the rqSeq values the previous run sent inside T9 (`recent`, bit n for rqSeq n, from
+    /// `recent_request_seqs`), booked as sent at `start_ms` so none is used again for a full T9
+    /// (`Requester::with_recent_seqs`): the owner of the processor hands over what it kept across
+    /// a Cold Reset.
+    pub const fn with_first_request_seq(
+        config: LinkConfig,
+        addr: &AddrInfo,
+        first_seq: u8,
+        recent: u64,
+        start_ms: u32,
+    ) -> Link {
         Link {
             config,
             own_addr: addr.ipmb_address,
@@ -478,7 +511,22 @@ impl Link {
             last_tx_bus: Bus::B,
             late_responses: 0,
             dispatch_errors: 0,
+            requester: Requester::new(config.requests_allowed, first_seq)
+                .with_own_address(addr.ipmb_address)
+                .with_recent_seqs(recent, start_ms),
         }
+    }
+
+    /// next_request_seq -- the rqSeq the next request gets, for the owner of the processor to
+    /// keep across a Cold Reset.
+    pub const fn next_request_seq(&self) -> u8 {
+        self.requester.next_seq()
+    }
+
+    /// recent_request_seqs -- the rqSeq values sent less than T9 before `now_ms` (bit n for rqSeq
+    /// n), for the owner of the processor to keep across a Cold Reset with `next_request_seq`.
+    pub fn recent_request_seqs(&self, now_ms: u32) -> u64 {
+        self.requester.recent_seqs(now_ms)
     }
 
     // ---- ingress ----
@@ -487,8 +535,10 @@ impl Link {
     /// 1. A bus that is disabled or not built in drops the frame.
     /// 2. A leading general-call byte 00h is stripped (Broadcast Get Device ID, IPMI v2.0
     ///    section 20.9).
-    /// 3. `ipmb::parse` validates it; responses are dropped; a request must carry this
-    ///    controller's address in rsSA, and a broadcast must also be Get Device ID.
+    /// 3. `ipmb::parse` validates it; a response goes to the requester, which keeps it when it
+    ///    answers the outstanding request (`BusCounters::rx_answers`, Ok) and otherwise drops it;
+    ///    a request must carry this controller's address in rsSA, and a broadcast must also be
+    ///    Get Device ID.
     /// 4. The accepted request joins the ingress FIFO with its bus and `now_ms`; a full FIFO
     ///    drops the new frame and keeps the queued ones.
     ///
@@ -526,6 +576,10 @@ impl Link {
         };
         let counters = self.counters.get_mut(bus);
         if request.header.is_response() {
+            if REQUESTS_BUILT && self.requester.on_response(&request) {
+                counters.rx_answers = counters.rx_answers.saturating_add(1);
+                return Ok(());
+            }
             counters.rx_response = counters.rx_response.saturating_add(1);
             return Err(FrameDrop::Response);
         }
@@ -556,9 +610,16 @@ impl Link {
 
     // ---- main loop: requests to responses ----
 
-    /// poll -- `poll_with` over the COMMANDS table.
-    pub fn poll(&mut self, ctx: &mut Context, now_ms: u32, trace: &mut dyn Trace) -> usize {
-        self.poll_with(COMMANDS, ctx, now_ms, trace)
+    /// poll -- `poll_with` over the COMMANDS table; `ext` answers what the table does not
+    /// (`NoExtension` in the Tier-1 build).
+    pub fn poll(
+        &mut self,
+        ctx: &mut Context,
+        ext: &mut dyn Extension,
+        now_ms: u32,
+        trace: &mut dyn Trace,
+    ) -> usize {
+        self.poll_with(COMMANDS, ext, ctx, now_ms, trace)
     }
 
     /// poll_with -- main-loop step using `table`.
@@ -568,15 +629,20 @@ impl Link {
     ///    handler; anything else goes through `dispatch_with` and its response is cached.
     ///    The response bus is chosen later, by `next_tx`, when the frame first goes to a driver.
     /// 3. Stops when the egress queue is full; the rest wait in the ingress FIFO.
+    /// 4. Steps the requester timing (a retransmission falls due, or the request ends with
+    ///    NoResponse) and traces a request that ended.
+    /// 5. Refreshes `ctx.link` and calls `ext.poll` once, with the requester.
     ///
-    /// `_now_ms` is the time of the call. Nothing reads it: the duplicate window runs from each
-    /// request's own arrival time and the response deadline is checked when the transmission
-    /// completes (`on_tx_result`). Returns the number of requests taken.
+    /// `now_ms` is the time of the call. Only the requester and the extension hook read it: the duplicate window
+    /// runs from each request's own arrival time and the response deadline is checked when the
+    /// transmission completes (`on_tx_result`). A request the table has no row for goes to
+    /// `ext` (see `Extension::command`). Returns the number of requests taken.
     pub fn poll_with(
         &mut self,
         table: &[Command],
+        ext: &mut dyn Extension,
         ctx: &mut Context,
-        _now_ms: u32,
+        now_ms: u32,
         trace: &mut dyn Trace,
     ) -> usize {
         self.trace_drops(trace);
@@ -585,10 +651,36 @@ impl Link {
             let Some(pending) = self.ingress.pop() else {
                 break;
             };
-            self.answer(table, ctx, &pending, trace);
+            self.answer(table, ext, ctx, &pending, trace);
             taken += 1;
         }
+        if REQUESTS_BUILT {
+            self.requester.step(now_ms);
+            self.trace_request_end(trace);
+        }
+        ctx.link = self.view();
+        ext.poll(ctx, &mut self.requester, now_ms, trace);
         taken
+    }
+
+    /// trace_request_end -- one line when the requester's request ended since the last call.
+    fn trace_request_end(&mut self, trace: &mut dyn Trace) {
+        let Some(end) = self.requester.ended() else {
+            return;
+        };
+        if !TRACE_ON {
+            return;
+        }
+        match end.completion_code {
+            Some(code) => trace.line(format_args!(
+                "request seq {:02X}h FN({:02X}h) CMD({:02X}h) -> CC {code:02X}h",
+                end.seq, end.netfn, end.cmd
+            )),
+            None => trace.line(format_args!(
+                "request seq {:02X}h FN({:02X}h) CMD({:02X}h) no response after {} transmissions",
+                end.seq, end.netfn, end.cmd, end.transmissions
+            )),
+        }
     }
 
     fn trace_drops(&mut self, trace: &mut dyn Trace) {
@@ -607,6 +699,7 @@ impl Link {
     fn answer(
         &mut self,
         table: &[Command],
+        ext: &mut dyn Extension,
         ctx: &mut Context,
         pending: &Pending,
         trace: &mut dyn Trace,
@@ -651,6 +744,7 @@ impl Link {
         ctx.link = self.view();
         let dispatched = dispatch_with(
             table,
+            ext,
             ctx,
             &request,
             pending.bus,
@@ -686,15 +780,19 @@ impl Link {
         }
     }
 
-    /// choose_tx_bus -- the bus for a response being handed to a driver for the first time, and
-    /// the new `last_tx_bus`. ALTERNATE prefers the bus other than the latest frame's (a resend
-    /// counts), ARRIVAL the request's bus; when the preferred bus is not enabled the other
-    /// enabled bus is taken (with only IPMB-A enabled, always A).
-    fn choose_tx_bus(&mut self, arrival: Bus) -> Bus {
-        let preferred = match self.config.tx_policy {
+    /// response_preference -- the bus the TX policy prefers for a response: ALTERNATE the bus
+    /// other than the latest frame's (a resend counts), ARRIVAL the request's bus.
+    fn response_preference(&self, arrival: Bus) -> Bus {
+        match self.config.tx_policy {
             TxPolicy::Alternate => self.last_tx_bus.other(),
             TxPolicy::Arrival => arrival,
-        };
+        }
+    }
+
+    /// choose_tx_bus -- the bus for a frame being handed to a driver for the first time, and the
+    /// new `last_tx_bus`: the `preferred` bus, or when it is not enabled the other enabled bus
+    /// (with only IPMB-A enabled, always A).
+    fn choose_tx_bus(&mut self, preferred: Bus) -> Bus {
         let bus = if self.buses.get(preferred).enabled()
             || !self.buses.get(preferred.other()).enabled()
         {
@@ -709,7 +807,9 @@ impl Link {
     // ---- main loop: egress ----
 
     /// next_tx -- the oldest queued response and the bus to send it on, or None when nothing
-    /// waits. The frame stays queued until `on_tx_result` reports the outcome.
+    /// waits. The frame stays queued until `on_tx_result` reports the outcome. Responses go
+    /// first; with none queued, a request of the requester that is due goes out (`next_request_tx`),
+    /// and the same request frame is returned until its outcome is reported.
     /// 1. A frame handed out for the first time gets its bus from the TX policy now
     ///    (`choose_tx_bus`), which makes ALTERNATE follow the real transmission order.
     /// 2. A frame already handed out whose bus has since been disabled moves to the other bus
@@ -717,6 +817,12 @@ impl Link {
     ///
     /// None also when neither bus is enabled.
     pub fn next_tx(&mut self) -> Option<(Bus, &[u8])> {
+        if let Some(bus) = self.requester.sending_bus() {
+            return Some((bus, self.requester.frame()));
+        }
+        if self.egress.is_empty() {
+            return self.next_request_tx();
+        }
         let enabled = PerBus {
             a: self.buses.a.enabled(),
             b: self.buses.b.enabled(),
@@ -727,7 +833,8 @@ impl Link {
             if !enabled.a && !enabled.b {
                 return None;
             }
-            self.choose_tx_bus(arrival)
+            let preferred = self.response_preference(arrival);
+            self.choose_tx_bus(preferred)
         } else if *enabled.get(current) {
             current
         } else {
@@ -745,9 +852,70 @@ impl Link {
         Some((frame.bus, frame.as_bytes()))
     }
 
+    /// next_request_tx -- the requester's frame and its bus when a transmission is due. A request
+    /// has no arrival bus: it prefers the bus other than its own latest transmission (Rules
+    /// 4.1.1-6 and 4.1.1-7), so a response sent during a backoff does not change the retry bus;
+    /// the first transmission of a request prefers the bus other than the latest frame's. The
+    /// other enabled bus is taken when the preferred one is disabled (`choose_tx_bus`). None when
+    /// nothing is due or no bus is enabled.
+    fn next_request_tx(&mut self) -> Option<(Bus, &[u8])> {
+        if !REQUESTS_BUILT
+            || !self.requester.due()
+            || !(self.buses.a.enabled() || self.buses.b.enabled())
+        {
+            return None;
+        }
+        let preferred = self
+            .requester
+            .last_bus()
+            .map_or_else(|| self.last_tx_bus.other(), Bus::other);
+        let bus = self.choose_tx_bus(preferred);
+        self.requester.start_tx(bus);
+        Some((bus, self.requester.frame()))
+    }
+
+    /// on_request_tx_result -- books the outcome of a request transmission on `bus`: the bus
+    /// counters and the requester (success starts the T3 wait; a failure is retransmitted on the
+    /// other bus after T6, Rule 4.1.1-7, when it is enabled, else at the next timeout).
+    fn on_request_tx_result(&mut self, bus: Bus, ok: bool, now_ms: u32, trace: &mut dyn Trace) {
+        let counters = self.counters.get_mut(bus);
+        counters.tx_requests = counters.tx_requests.saturating_add(1);
+        if ok {
+            counters.tx_ok = counters.tx_ok.saturating_add(1);
+            counters.tx_fail_streak = 0;
+        } else {
+            counters.tx_fail = counters.tx_fail.saturating_add(1);
+            counters.tx_fail_streak = counters.tx_fail_streak.saturating_add(1);
+        }
+        let other_enabled = self.buses.get(bus.other()).enabled();
+        let Some(sent) = self.requester.tx_done(ok, now_ms, other_enabled) else {
+            return;
+        };
+        if !TRACE_ON {
+            return;
+        }
+        let (name, seq, netfn, cmd) = (bus.name(), sent.seq, sent.netfn, sent.cmd);
+        let n = sent.transmissions;
+        match (ok, n) {
+            (true, 1) => trace.line(format_args!(
+                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) sent"
+            )),
+            (true, _) => trace.line(format_args!(
+                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) retry {} of {}",
+                n - 1,
+                crate::requester::RETRIES
+            )),
+            (false, _) => trace.line(format_args!(
+                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) tx failed (transmission {n} of {})",
+                crate::requester::MAX_TRANSMISSIONS
+            )),
+        }
+    }
+
     /// on_tx_result -- the driver reports the outcome of the frame `next_tx` handed out on `bus`,
     /// at `now_ms` (the end of the transmission).
-    /// Ok: the frame leaves the queue, and counts as a late response when `now_ms` is more than
+    /// A request frame handed out by `next_tx` is booked by `on_request_tx_result`. Ok: the frame
+    /// leaves the queue, and counts as a late response when `now_ms` is more than
     /// RESPONSE_DEADLINE_MS after the request arrived. Failure: the other bus is tried (Rule
     /// 4.1.1-7) when it is enabled and the frame has been resent fewer than TX_RETRIES times;
     /// otherwise the frame is dropped and counted (the requester retries and the duplicate cache
@@ -760,6 +928,13 @@ impl Link {
         now_ms: u32,
         trace: &mut dyn Trace,
     ) -> Result<(), LinkError> {
+        if let Some(sent_on) = self.requester.sending_bus() {
+            if sent_on != bus {
+                return Err(LinkError::TxBusMismatch);
+            }
+            self.on_request_tx_result(bus, ok, now_ms, trace);
+            return Ok(());
+        }
         let head = self.egress.peek().ok_or(LinkError::NoTxInFlight)?;
         if !head.assigned {
             return Err(LinkError::NoTxInFlight);
@@ -911,9 +1086,11 @@ impl BusCounters {
         },
         not_for_us: 0,
         rx_response: 0,
+        rx_answers: 0,
         bus_unavailable: 0,
         ingress_full: 0,
         tx_ok: 0,
+        tx_requests: 0,
         tx_fail: 0,
         tx_fail_streak: 0,
         tx_dropped: 0,
@@ -928,6 +1105,7 @@ mod tests {
     use crate::addr;
     use crate::commands::cmd;
     use crate::dispatch::cc;
+    use crate::ext::NoExtension;
     use crate::ipmb::{Frame, Header, NETFN_STORAGE};
     use crate::sensor::encode_link;
     use crate::trace::{NoTrace, RecordingTrace};
@@ -977,6 +1155,7 @@ mod tests {
             LinkConfig {
                 b_fitted,
                 tx_policy,
+                requests_allowed: false,
             },
             &addr,
         )
@@ -1025,7 +1204,7 @@ mod tests {
     }
 
     fn poll(link: &mut Link, now_ms: u32) -> usize {
-        link.poll_with(&table(), &mut ctx(), now_ms, &mut NoTrace)
+        link.poll_with(&table(), &mut NoExtension, &mut ctx(), now_ms, &mut NoTrace)
     }
 
     #[test]
@@ -1119,7 +1298,7 @@ mod tests {
 
     /// poll over the real COMMANDS table.
     fn poll_real(link: &mut Link, now_ms: u32) -> usize {
-        link.poll(&mut ctx(), now_ms, &mut NoTrace)
+        link.poll(&mut ctx(), &mut NoExtension, now_ms, &mut NoTrace)
     }
 
     #[test]
@@ -1140,16 +1319,23 @@ mod tests {
         assert_eq!(link.counters(Bus::A).rx_ok, 0);
     }
 
+    /// response_to -- the empty OK response to the request frame `req`, with sequence number `seq`
+    /// (chk2 recomputed by the encoder).
+    fn response_to(req: &[u8], seq: u8) -> Vec<u8> {
+        let mut header = ipmb::response_header_for(&ipmb::parse(req).unwrap()).unwrap();
+        header.seq = seq;
+        let mut buf = [0u8; IPMB_MAX_LEN];
+        let n = ipmb::encode_response(&header, 0, &[], &mut buf).unwrap();
+        buf[..n].to_vec()
+    }
+
     #[test]
     fn responses_are_dropped_and_counted() {
         let mut link = link_with(false, TxPolicy::Alternate);
         // The response to a request from the CM, addressed to the CM.
         let req = request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, 1, &[]);
-        let header = ipmb::response_header_for(&ipmb::parse(&req).unwrap()).unwrap();
-        let mut buf = [0u8; IPMB_MAX_LEN];
-        let n = ipmb::encode_response(&header, 0, &[], &mut buf).unwrap();
         assert_eq!(
-            link.on_frame(Bus::A, &buf[..n], 0),
+            link.on_frame(Bus::A, &response_to(&req, 1), 0),
             Err(FrameDrop::Response)
         );
         assert_eq!(link.counters(Bus::A).rx_response, 1);
@@ -1480,10 +1666,10 @@ mod tests {
         let mut trace = RecordingTrace::default();
         let frame = count_request(0x14, &[5, 6]);
         link.on_frame(Bus::A, &frame, 1000).unwrap();
-        link.poll_with(&table(), &mut ctx(), 1000, &mut trace);
+        link.poll_with(&table(), &mut NoExtension, &mut ctx(), 1000, &mut trace);
         // The CM times out after 250 ms and retries the same request on B.
         link.on_frame(Bus::B, &frame, 1250).unwrap();
-        link.poll_with(&table(), &mut ctx(), 1250, &mut trace);
+        link.poll_with(&table(), &mut NoExtension, &mut ctx(), 1250, &mut trace);
         assert_eq!(runs(), 1);
         let sent = drain(&mut link);
         assert_eq!(sent.len(), 2);
@@ -1638,6 +1824,7 @@ mod tests {
             LinkConfig {
                 b_fitted: true,
                 tx_policy: TxPolicy::Alternate,
+                requests_allowed: false,
             },
             &bad,
         );
@@ -1681,7 +1868,7 @@ mod tests {
         ] {
             let frame = lun_request(0, 9, NETFN_STORAGE, WRITE_FRU_DATA, &data);
             link.on_frame(bus, &frame, 100).unwrap();
-            link.poll(&mut ctx, 100, &mut NoTrace);
+            link.poll(&mut ctx, &mut NoExtension, 100, &mut NoTrace);
         }
         assert_eq!(
             ctx.fru.bytes()[0xC0..0xC2],
@@ -1712,7 +1899,7 @@ mod tests {
         for (bus, lun) in [(Bus::A, 1u8), (Bus::B, 0)] {
             let frame = lun_request(lun, 4, NETFN_APP, CMD_GET_DEVICE_ID, &[]);
             link.on_frame(bus, &frame, 100).unwrap();
-            link.poll(&mut ctx, 100, &mut NoTrace);
+            link.poll(&mut ctx, &mut NoExtension, 100, &mut NoTrace);
         }
         let sent = drain(&mut link);
         let codes: Vec<(u8, usize)> = sent
@@ -1740,7 +1927,7 @@ mod tests {
         let _ = link.on_frame(Bus::B, &bad, 0);
         let _ = link.on_frame(Bus::A, &request(0x84, NETFN_APP, 1, 1, &[]), 0);
         let mut trace = RecordingTrace::default();
-        link.poll_with(&table(), &mut ctx(), 0, &mut trace);
+        link.poll_with(&table(), &mut NoExtension, &mut ctx(), 0, &mut trace);
         assert_eq!(
             trace.lines,
             [
@@ -1748,5 +1935,305 @@ mod tests {
                 "IPMB-A drop: NotForUs (7 bytes)"
             ]
         );
+    }
+
+    // ---- the requester through the link ----
+
+    use crate::requester::{self, Request, RequestError};
+
+    const PLATFORM_EVENT_DATA: [u8; 7] = [0x04, 0xF0, 0x00, 0x6F, 0xA1, 0x00, 0x00];
+    const PLATFORM_EVENT_FRAME: [u8; 14] = [
+        0x20, 0x10, 0xD0, 0x82, 0x00, 0x02, 0x04, 0xF0, 0x00, 0x6F, 0xA1, 0x00, 0x00, 0x78,
+    ];
+
+    fn platform_event() -> Request<'static> {
+        Request {
+            dest_addr8: CM,
+            dest_lun: 0,
+            netfn: crate::ipmb::NETFN_SE,
+            cmd: 0x02,
+            data: &PLATFORM_EVENT_DATA,
+        }
+    }
+
+    /// requesting_link -- a link whose requester may send; both buses enabled when `both`.
+    fn requesting_link(both: bool) -> Link {
+        let addr = addr::resolve(0x7F);
+        let mut link = Link::new(
+            LinkConfig {
+                b_fitted: both,
+                tx_policy: TxPolicy::Alternate,
+                requests_allowed: true,
+            },
+            &addr,
+        );
+        if both {
+            link.set_ipmb_state(None, Some(BusMode::LocalControl))
+                .unwrap();
+        }
+        link
+    }
+
+    /// next_frame -- `next_tx` as an owned (bus, bytes).
+    fn next_frame(link: &mut Link) -> Option<(Bus, Vec<u8>)> {
+        link.next_tx().map(|(bus, bytes)| (bus, bytes.to_vec()))
+    }
+
+    #[test]
+    fn a_request_goes_out_and_its_response_ends_it() {
+        let mut link = requesting_link(true);
+        let mut trace = RecordingTrace::default();
+        assert_eq!(link.requester.submit(&platform_event(), 0), Ok(0));
+        let (bus, frame) = next_frame(&mut link).unwrap();
+        assert_eq!((bus, frame.as_slice()), (Bus::A, &PLATFORM_EVENT_FRAME[..]));
+        assert_eq!(
+            next_frame(&mut link).unwrap().0,
+            Bus::A,
+            "same frame until reported"
+        );
+        link.on_tx_result(bus, true, 1, &mut trace).unwrap();
+        assert!(next_frame(&mut link).is_none());
+        let response = [0x82, 0x14, 0x6A, 0x20, 0x00, 0x02, 0x00, 0xDE];
+        assert_eq!(link.on_frame(Bus::B, &response, 5), Ok(()));
+        assert_eq!(link.counters(Bus::B).rx_answers, 1);
+        assert_eq!(link.counters(Bus::B).rx_response, 0);
+        assert_eq!(link.counters(Bus::A).tx_requests, 1);
+        assert_eq!(link.counters(Bus::A).tx_ok, 1);
+        link.poll(&mut ctx(), &mut NoExtension, 6, &mut trace);
+        let done = link.requester.take_completion().unwrap();
+        assert_eq!(done.seq, 0);
+        assert_eq!(done.outcome.unwrap().completion_code, 0);
+        assert_eq!(
+            trace.lines,
+            [
+                "IPMB-A request seq 00h FN(04h) CMD(02h) sent",
+                "request seq 00h FN(04h) CMD(02h) -> CC 00h"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_response_that_matches_nothing_is_dropped_and_the_request_stays() {
+        let mut link = requesting_link(false);
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (bus, _) = next_frame(&mut link).unwrap();
+        link.on_tx_result(bus, true, 1, &mut NoTrace).unwrap();
+        // The right response with the sequence number changed (chk2 recomputed by the encoder).
+        assert_eq!(
+            link.on_frame(Bus::A, &response_to(&PLATFORM_EVENT_FRAME, 1), 5),
+            Err(FrameDrop::Response)
+        );
+        assert_eq!(link.counters(Bus::A).rx_response, 1);
+        assert_eq!(link.counters(Bus::A).rx_answers, 0);
+        assert!(link.requester.busy());
+        assert!(link.requester.take_completion().is_none());
+    }
+
+    /// run_unanswered -- one request, never answered, every transmission succeeds; steps time in
+    /// 1 ms and returns (time, bus, seq) of each transmission and the time the request ended.
+    fn run_unanswered(both: bool) -> (Vec<(u32, Bus, u8)>, Option<u32>) {
+        let mut link = requesting_link(both);
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (mut sent, mut ended) = (Vec::new(), None);
+        for now in 0..=3 * requester::TIMEOUT_MS * u32::from(requester::MAX_TRANSMISSIONS) {
+            poll_real(&mut link, now);
+            while let Some((bus, bytes)) = next_frame(&mut link) {
+                let seq = ipmb::parse(&bytes).unwrap().header.seq;
+                sent.push((now, bus, seq));
+                link.on_tx_result(bus, true, now, &mut NoTrace).unwrap();
+            }
+            if ended.is_none() && link.requester.take_completion().is_some() {
+                ended = Some(now);
+            }
+        }
+        (sent, ended)
+    }
+
+    #[test]
+    fn an_unanswered_request_is_retried_with_its_sequence_then_ends() {
+        let t3 = requester::TIMEOUT_MS;
+        for both in [true, false] {
+            let (sent, ended) = run_unanswered(both);
+            // Alternating buses (Rule 4.1.1-6) with both enabled, else always A.
+            let buses: Vec<Bus> = (0..requester::MAX_TRANSMISSIONS)
+                .map(|i| if both && i % 2 == 1 { Bus::B } else { Bus::A })
+                .collect();
+            let expected: Vec<(u32, Bus, u8)> = buses
+                .iter()
+                .enumerate()
+                .map(|(i, bus)| (i as u32 * t3, *bus, 0))
+                .collect();
+            assert_eq!(sent, expected, "both buses: {both}");
+            // The last transmission waits one more timeout; no (2 + RETRIES)th goes out.
+            assert_eq!(ended, Some(t3 * u32::from(requester::MAX_TRANSMISSIONS)));
+        }
+    }
+
+    #[test]
+    fn a_failed_request_transmission_is_retried_after_t6_on_the_other_enabled_bus() {
+        let mut link = requesting_link(true);
+        let mut trace = RecordingTrace::default();
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (bus, first) = next_frame(&mut link).unwrap();
+        assert_eq!(bus, Bus::A);
+        link.on_tx_result(bus, false, 0, &mut trace).unwrap();
+        for now in 0..requester::T6_MIN_MS {
+            poll_real(&mut link, now);
+            assert!(next_frame(&mut link).is_none(), "T6 not over at {now} ms");
+        }
+        poll_real(&mut link, requester::T6_MIN_MS);
+        let (bus, second) = next_frame(&mut link).unwrap();
+        assert_eq!(
+            (bus, &second),
+            (Bus::B, &first),
+            "same frame, other bus, after T6"
+        );
+        let second_at = requester::T6_MIN_MS;
+        link.on_tx_result(bus, true, second_at, &mut trace).unwrap();
+        assert_eq!(link.counters(Bus::A).tx_requests, 1);
+        assert_eq!(link.counters(Bus::A).tx_fail, 1);
+        assert_eq!(link.counters(Bus::B).tx_requests, 1);
+        assert_eq!(link.counters(Bus::B).tx_ok, 1);
+        assert_eq!(trace.lines.len(), 2);
+        assert!(
+            trace.lines[1].ends_with(&format!("retry 1 of {}", requester::RETRIES)),
+            "{:?}",
+            trace.lines
+        );
+        // The failed one counts as a transmission: 1 + RETRIES - 2 are left.
+        let mut more = 0;
+        for now in second_at + 1
+            ..second_at + 4 * requester::TIMEOUT_MS * u32::from(requester::MAX_TRANSMISSIONS)
+        {
+            poll_real(&mut link, now);
+            while let Some((bus, _)) = next_frame(&mut link) {
+                more += 1;
+                link.on_tx_result(bus, true, now, &mut NoTrace).unwrap();
+            }
+        }
+        assert_eq!(more, usize::from(requester::MAX_TRANSMISSIONS) - 2);
+    }
+
+    #[test]
+    fn a_response_sent_during_the_backoff_does_not_change_the_retry_bus() {
+        let mut link = requesting_link(true);
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (bus, _) = next_frame(&mut link).unwrap();
+        assert_eq!(bus, Bus::A);
+        link.on_tx_result(bus, false, 0, &mut NoTrace).unwrap();
+        // A Get Device ID request arrives; its response goes out on B during the T6 wait.
+        link.on_frame(
+            Bus::A,
+            &request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, 7, &[]),
+            1,
+        )
+        .unwrap();
+        poll_real(&mut link, 1);
+        let (response_bus, response) = next_frame(&mut link).unwrap();
+        assert_eq!(response_bus, Bus::B);
+        assert_eq!(ipmb::parse(&response).unwrap().header.src, OWN);
+        link.on_tx_result(response_bus, true, 2, &mut NoTrace)
+            .unwrap();
+        poll_real(&mut link, requester::T6_MIN_MS);
+        let (retry_bus, retry) = next_frame(&mut link).unwrap();
+        assert_eq!(retry, PLATFORM_EVENT_FRAME);
+        assert_eq!(
+            retry_bus,
+            Bus::B,
+            "the alternate of the failed request's bus"
+        );
+    }
+
+    #[test]
+    fn a_failed_request_transmission_with_one_bus_waits_for_the_timeout() {
+        let mut link = requesting_link(false);
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (bus, _) = next_frame(&mut link).unwrap();
+        link.on_tx_result(bus, false, 10, &mut NoTrace).unwrap();
+        poll_real(&mut link, 10 + requester::TIMEOUT_MS - 1);
+        assert!(next_frame(&mut link).is_none());
+        poll_real(&mut link, 10 + requester::TIMEOUT_MS);
+        assert_eq!(next_frame(&mut link).unwrap().0, Bus::A);
+    }
+
+    #[test]
+    fn responses_go_out_before_a_due_request() {
+        let mut link = requesting_link(true);
+        link.requester.submit(&platform_event(), 0).unwrap();
+        link.on_frame(
+            Bus::A,
+            &request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, 7, &[]),
+            0,
+        )
+        .unwrap();
+        assert_eq!(poll_real(&mut link, 0), 1);
+        let (bus, first) = next_frame(&mut link).unwrap();
+        assert_eq!(
+            ipmb::parse(&first).unwrap().header.src,
+            OWN,
+            "the response first"
+        );
+        link.on_tx_result(bus, true, 1, &mut NoTrace).unwrap();
+        let (_, second) = next_frame(&mut link).unwrap();
+        assert_eq!(second, PLATFORM_EVENT_FRAME);
+    }
+
+    #[test]
+    fn a_tier_one_link_sends_no_request() {
+        let mut link = link_with(true, TxPolicy::Alternate);
+        assert_eq!(
+            link.requester.submit(&platform_event(), 0),
+            Err(RequestError::NotAllowed)
+        );
+        assert!(next_frame(&mut link).is_none());
+        assert_eq!(
+            LinkConfig::from_defs().requests_allowed,
+            ipmc_defs::IPMC_TIER >= 2
+        );
+        if !ipmc_defs::TIER23_BUILT {
+            assert!(!LinkConfig::from_defs().requests_allowed);
+        }
+    }
+
+    /// Counts its poll calls and keeps the bus view it saw.
+    #[derive(Default)]
+    struct PollProbe {
+        polls: u32,
+        b_enabled_seen: Option<bool>,
+    }
+
+    impl Extension for PollProbe {
+        fn command(
+            &mut self,
+            _ctx: &mut Context,
+            _req: &Frame,
+            _out: &mut [u8],
+        ) -> Option<(&'static str, Result<usize, u8>)> {
+            None
+        }
+
+        fn poll(
+            &mut self,
+            ctx: &mut Context,
+            _requester: &mut Requester,
+            _now_ms: u32,
+            _trace: &mut dyn Trace,
+        ) {
+            self.polls += 1;
+            self.b_enabled_seen = Some(ctx.link.buses.b.enabled());
+        }
+    }
+
+    #[test]
+    fn poll_calls_the_extension_once_with_a_refreshed_link_view() {
+        let mut link = both_buses();
+        let mut context = ctx();
+        assert!(
+            !context.link.buses.b.enabled(),
+            "the context view starts stale"
+        );
+        let mut probe = PollProbe::default();
+        link.poll(&mut context, &mut probe, 0, &mut NoTrace);
+        assert_eq!((probe.polls, probe.b_enabled_seen), (1, Some(true)));
     }
 }

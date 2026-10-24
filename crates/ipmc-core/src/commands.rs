@@ -7,8 +7,9 @@ use crate::dispatch::Handler;
 use crate::ipmb::{NETFN_APP, NETFN_GROUP_EXT, NETFN_SE, NETFN_STORAGE};
 
 /// Command -- one table row: the request (netFn, cmd), its log name, the spec section that
-/// defines it and the handler.
-pub struct Command {
+/// defines it and the handler. The handler type `H` is the Tier-1 `Handler` unless a table of
+/// another handler shape (the Tier-2/3 extension's) reuses the row and `find_in`.
+pub struct Command<H = Handler> {
     /// Request NetFn (even).
     pub netfn: u8,
     /// Command code.
@@ -18,17 +19,17 @@ pub struct Command {
     /// Spec section that defines the command.
     pub spec: &'static str,
     /// Handler run for a matching request.
-    pub handler: Handler,
+    pub handler: H,
 }
 
 /// cmd -- builds a table row.
-pub(crate) const fn cmd(
+pub const fn cmd<H>(
     netfn: u8,
     cmd: u8,
     name: &'static str,
     spec: &'static str,
-    handler: Handler,
-) -> Command {
+    handler: H,
+) -> Command<H> {
     Command {
         netfn,
         cmd,
@@ -61,7 +62,7 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 /// find_in -- the row of `table` for (netfn, cmd); linear scan, the table is small.
-pub fn find_in(table: &[Command], netfn: u8, cmd: u8) -> Option<&Command> {
+pub fn find_in<H>(table: &[Command<H>], netfn: u8, cmd: u8) -> Option<&Command<H>> {
     table
         .iter()
         .find(|row| row.netfn == netfn && row.cmd == cmd)

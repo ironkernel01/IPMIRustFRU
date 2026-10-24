@@ -6,6 +6,8 @@
 //! from the crate version. The FRU inventory strings (IPMC_FRU_*) join this table when the FRU
 //! image is assembled, so both commands report the same identity from one place.
 
+use crate::tier;
+
 // Additional Device Support bit positions (IPMI v2.0 Table 20-2, response byte 7).
 const SUPPORT_SENSOR_BIT: u32 = 0;
 const SUPPORT_SDR_REPOSITORY_BIT: u32 = 1;
@@ -28,18 +30,26 @@ const fn byte_of(value: u32, index: u32) -> u8 {
     ((value >> (BITS_PER_BYTE * index)) & BYTE_MASK) as u8
 }
 
-/// Additional Device Support byte (response byte 7), one bit per ipmi_defs.h IPMC_SUPPORT_*.
-const ADDITIONAL_SUPPORT: u8 = byte_of(
-    (ipmc_defs::IPMC_SUPPORT_SENSOR << SUPPORT_SENSOR_BIT)
+/// additional_support -- the Additional Device Support byte (response byte 7) of an IPMC at
+/// `tier`: one bit per ipmi_defs.h IPMC_SUPPORT_*, plus the IPMB Event Generator bit from Tier 2
+/// (Rule 7-3) and the SEL Device bit at Tier 3 (Rule 7-8).
+pub const fn additional_support(tier: u32) -> u8 {
+    let mut bits = (ipmc_defs::IPMC_SUPPORT_SENSOR << SUPPORT_SENSOR_BIT)
         | (ipmc_defs::IPMC_SUPPORT_SDR_REPOSITORY << SUPPORT_SDR_REPOSITORY_BIT)
         | (ipmc_defs::IPMC_SUPPORT_SEL << SUPPORT_SEL_BIT)
         | (ipmc_defs::IPMC_SUPPORT_FRU_INVENTORY << SUPPORT_FRU_INVENTORY_BIT)
         | (ipmc_defs::IPMC_SUPPORT_EVENT_RECEIVER << SUPPORT_EVENT_RECEIVER_BIT)
         | (ipmc_defs::IPMC_SUPPORT_EVENT_GENERATOR << SUPPORT_EVENT_GENERATOR_BIT)
         | (ipmc_defs::IPMC_SUPPORT_BRIDGE << SUPPORT_BRIDGE_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_CHASSIS << SUPPORT_CHASSIS_BIT),
-    0,
-);
+        | (ipmc_defs::IPMC_SUPPORT_CHASSIS << SUPPORT_CHASSIS_BIT);
+    if tier::event_generator(tier) {
+        bits |= 1 << SUPPORT_EVENT_GENERATOR_BIT;
+    }
+    if tier::sel_device(tier) {
+        bits |= 1 << SUPPORT_SEL_BIT;
+    }
+    byte_of(bits, 0)
+}
 
 /// Device Revision byte (response byte 3).
 const DEVICE_REVISION: u8 = byte_of(
@@ -165,7 +175,7 @@ pub const DEVICE_IDENTITY: DeviceIdentity = DeviceIdentity {
     firmware_major: FIRMWARE_MAJOR,
     firmware_minor_bcd: FIRMWARE_MINOR_BCD,
     ipmi_version: byte_of(ipmc_defs::IPMC_IPMI_VERSION, 0),
-    additional_support: ADDITIONAL_SUPPORT,
+    additional_support: additional_support(ipmc_defs::IPMC_TIER),
     manufacturer_id: [
         byte_of(ipmc_defs::IPMC_MANUFACTURER_ID, 0),
         byte_of(ipmc_defs::IPMC_MANUFACTURER_ID, 1),
@@ -209,7 +219,24 @@ mod tests {
         assert_eq!(DEVICE_IDENTITY.device_id, 0x01);
         assert_eq!(DEVICE_IDENTITY.device_revision, 0x80);
         assert_eq!(DEVICE_IDENTITY.firmware_minor_bcd, 0x01);
-        assert_eq!(DEVICE_IDENTITY.additional_support, 0x09);
+        // Tier-1 reports 09h; Tier-2 adds the Event Generator bit, Tier-3 also the SEL Device bit.
+        assert_eq!(
+            DEVICE_IDENTITY.additional_support,
+            [0x09, 0x29, 0x2D][ipmc_defs::IPMC_TIER as usize - 1]
+        );
         assert_eq!(DEVICE_IDENTITY.product_id.to_le_bytes(), [0x4B, 0x49]);
+    }
+
+    #[test]
+    fn additional_support_follows_the_tier() {
+        // Tier 1 is the reported value; Tier 2 adds the Event Generator bit (bit 5), Tier 3 also
+        // the SEL Device bit (bit 2).
+        for (tier, expected) in [(1, 0x09), (2, 0x29), (3, 0x2D)] {
+            assert_eq!(additional_support(tier), expected, "tier {tier}");
+        }
+        assert_eq!(
+            DEVICE_IDENTITY.additional_support,
+            additional_support(ipmc_defs::IPMC_TIER)
+        );
     }
 }

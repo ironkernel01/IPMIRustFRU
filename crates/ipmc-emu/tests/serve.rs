@@ -1,10 +1,11 @@
 // serve.rs - the built binary in serve mode: a client over TCP sends Get Device ID, enables
 // IPMB-B, breaks IPMB-A and checks that A requests get no answer while B still works.
 
+use ipmc_emu::serve::is_request_line;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// SILENCE_MS -- how long a request is given before "no answer" is concluded; well over the
 /// 1 ms transmission time of the emulator.
@@ -81,25 +82,35 @@ impl Client {
             .expect("send");
     }
 
-    /// line_within -- the next line, or None when none arrives within `ms`.
+    /// line_within -- the next line, or None when none arrives within `ms`. A request the IPMC
+    /// originated (Tier 2 and 3: its Platform Events, which nobody here answers) is not a line
+    /// the tests wait for and is skipped, so the same expectations hold at every Tier.
     fn line_within(&mut self, ms: u64) -> Option<String> {
-        self.reader
-            .get_ref()
-            .set_read_timeout(Some(Duration::from_millis(ms)))
-            .expect("timeout");
-        let mut line = String::new();
-        match self.reader.read_line(&mut line) {
-            Ok(0) => panic!("server closed the connection"),
-            Ok(_) => Some(line.trim().to_string()),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                None
+        let deadline = Instant::now() + Duration::from_millis(ms);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
             }
-            Err(e) => panic!("read: {e}"),
+            self.reader
+                .get_ref()
+                .set_read_timeout(Some(left))
+                .expect("timeout");
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => panic!("server closed the connection"),
+                Ok(_) if is_request_line(line.trim()) => {}
+                Ok(_) => return Some(line.trim().to_string()),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return None
+                }
+                Err(e) => panic!("read: {e}"),
+            }
         }
     }
 

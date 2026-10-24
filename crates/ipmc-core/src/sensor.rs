@@ -7,7 +7,8 @@
 //!
 //! Response data layout, the bytes after the completion code (IPMI v2.0 Get Sensor Reading):
 //!   byte 2  sensor reading; 00h for these discrete sensors
-//!   byte 3  status: bit 7 event messages enabled (0, a Tier-1 IPMC sends no events),
+//!   byte 3  status: bit 7 event messages enabled (the sensor's `event_enable` flag, set by
+//!           `apply_event_enable`; 0 at Tier-1, which sends no events),
 //!           bit 6 sensor scanning enabled (1), bit 5 reading unavailable
 //!   byte 4  state bits as each table specifies
 
@@ -67,12 +68,16 @@ pub const TEMP_FLAG_UNR: u8 = 1 << 5;
 
 /// Status byte bit 6: sensor scanning enabled (IPMI v2.0 Get Sensor Reading byte 3).
 const STATUS_SCANNING_ENABLED: u8 = 1 << 6;
+/// Status byte bit 7: event messages enabled for the sensor.
+const STATUS_EVENTS_ENABLED: u8 = 1 << 7;
 /// Status byte bit 5: reading/state unavailable.
 const STATUS_UNAVAILABLE: u8 = 1 << 5;
 /// Byte 2 of a discrete sensor.
 const READING_DISCRETE: u8 = 0x00;
 /// READING_LEN -- bytes after the completion code that the encoders write: reading, status, state.
 pub const READING_LEN: usize = 3;
+/// STATUS_INDEX -- position of the status byte within the bytes the encoders write.
+const STATUS_INDEX: usize = 1;
 
 /// Table 10.2.3-1 and 10.2.4-1 byte 4 bits 1:0: 01b is the good state, 10b the bad state.
 const STATE_GOOD: u8 = 0b01;
@@ -255,6 +260,18 @@ fn write_reading(
         *states = 0;
     }
     Ok(READING_LEN)
+}
+
+/// apply_event_enable -- sets or clears status byte bit 7 (event messages enabled) of the
+/// `READING_LEN` bytes an encoder wrote to the front of `out`; the one place the bit is written.
+pub fn apply_event_enable(out: &mut [u8], enabled: bool) {
+    if let Some(status) = out.get_mut(STATUS_INDEX) {
+        if enabled {
+            *status |= STATUS_EVENTS_ENABLED;
+        } else {
+            *status &= !STATUS_EVENTS_ENABLED;
+        }
+    }
 }
 
 /// summary_state -- (available, byte 4 bits 1:0) of a summary, Tables 10.2.3-1 and 10.2.4-1.
@@ -515,6 +532,17 @@ mod tests {
             [0x00, 0x60, 0x00],
             "unavailable temperature"
         );
+    }
+
+    #[test]
+    fn apply_event_enable_sets_and_clears_status_bit_7() {
+        let mut out = [0x00, 0x40, 0x01];
+        apply_event_enable(&mut out, true);
+        assert_eq!(out, [0x00, 0xC0, 0x01]);
+        apply_event_enable(&mut out, false);
+        assert_eq!(out, [0x00, 0x40, 0x01]);
+        let mut empty: [u8; 0] = [];
+        apply_event_enable(&mut empty, true);
     }
 
     #[test]

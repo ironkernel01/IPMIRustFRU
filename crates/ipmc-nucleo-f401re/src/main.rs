@@ -4,7 +4,8 @@
 // ipmi_defs.h source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
 // before the I2C slaves exist), IPMB drivers (the own address is known; bus
 // recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
-// (console, sensor sampling, IPMB link, sleep).
+// (console, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
+// TIM2 after the UART and stops the IPMB when the period is over (eval.rs).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
 // IPMC_FAULT_BLINK_CHZ (ipmi_defs.h) and the device parks (bsp::fault::park). A pin claim
 // conflict prints both owner names on the console and parks (bsp::fault::claim_failed). The panic handler is panic-halt.
@@ -23,6 +24,8 @@ macro_rules! out {
 mod bsp;
 mod console;
 mod data_cmds;
+#[cfg(ipmc_eval)]
+mod eval;
 mod fru_log;
 mod ipmb_link;
 mod sensing;
@@ -72,6 +75,14 @@ fn main() -> ! {
             bsp::led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
             bsp::fault::park();
         }
+    }
+    // Evaluation build: the run-time clock starts here, before the banner. A clock that cannot
+    // start stops the image (it could not end the evaluation).
+    #[cfg(ipmc_eval)]
+    if bsp::eval_timer::start(&dp.RCC, dp.TIM2, &clock).is_err() {
+        out!("EVALUATION BUILD: timer start failed (TIM2 tick rate)\n");
+        bsp::led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
+        bsp::fault::park();
     }
     // IPMB pins float until the I2C drivers start, after the strap pins below.
     let ipmb_pins = bsp::ipmb_pins::park().unwrap_or_else(|e| bsp::fault::claim_failed(e));
@@ -126,7 +137,12 @@ fn main() -> ! {
         &address,
     );
     // The one IpmbLink lives in a static; None would mean main re-entered.
-    let Some(ipmb) = ipmb_link::IpmbLink::take(ipmb_io, fru_log, fru_image) else {
+    let Some(ipmb) = ipmb_link::IpmbLink::take(
+        ipmb_io,
+        fru_log,
+        fru_image,
+        bsp::reset_cause::kept_sequence(reset_cause),
+    ) else {
         loop {
             cortex_m::asm::wfi();
         }
@@ -142,10 +158,27 @@ fn main() -> ! {
     console.banner();
     console.start_sensors();
     console.prompt();
+    #[cfg(ipmc_eval)]
+    let mut ipmb_ended = false;
     loop {
         console.poll();
         console.service_sensors();
+        #[cfg(not(ipmc_eval))]
         console.service_link();
+        #[cfg(ipmc_eval)]
+        if !ipmb_ended {
+            if eval::expired() {
+                console.stop_ipmb_for_eval();
+                out!("Evaluation period ended: IPMB stopped (power cycle to restart)\n");
+                ipmb_ended = true;
+            } else {
+                console.service_link();
+            }
+        } else {
+            // A Write FRU Data accepted before the stop is still saved; the save never touches
+            // the stopped slaves.
+            console.service_fru_log();
+        }
         cortex_m::asm::wfi(); // sleeps until the next interrupt (UART byte or 1 ms tick)
     }
 }

@@ -9,7 +9,7 @@ use ipmc_core::link::TxPolicy;
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::{NoTrace, Trace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
-use ipmc_emu::replay::{replay, ReplayOptions, ReplayReport};
+use ipmc_emu::replay::{is_request_frame, replay, ReplayOptions, ReplayReport};
 use ipmc_emu::trace::Hex;
 use ipmc_emu::vectors::{self, Vector};
 
@@ -46,8 +46,8 @@ impl Trace for Lines {
     }
 }
 
-/// tx_buses -- (bus, succeeded) of every transmission of a traced replay, in order.
-fn tx_buses(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool)> {
+/// tx_frames -- (bus, succeeded, bytes) of every transmission of a traced replay, in order.
+fn tx_frames(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool, Vec<u8>)> {
     let vectors = load();
     let mut emu = Emulator::new(config).expect("emulator");
     let mut lines = Lines(Vec::new());
@@ -63,9 +63,46 @@ fn tx_buses(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool)> {
         .filter_map(|l| l.strip_prefix("tx IPMB-"))
         .map(|l| {
             let bus = if l.starts_with('A') { Bus::A } else { Bus::B };
-            (bus, l[2..].starts_with("ok"))
+            let (_, hex) = l.split_once(": ").expect("tx line has the frame");
+            let bytes = vectors::frame_bytes(hex.split_whitespace()).expect("frame hex");
+            (bus, l[2..].starts_with("ok"), bytes)
         })
         .collect()
+}
+
+/// tx_buses -- (bus, succeeded) of every response transmission of a traced replay, in order: the
+/// IPMC's own requests (Tier 2 and 3) are left out.
+fn tx_buses(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool)> {
+    tx_frames(config, fail_every)
+        .into_iter()
+        .filter(|(_, _, bytes)| !is_request_frame(bytes))
+        .map(|(bus, ok, _)| (bus, ok))
+        .collect()
+}
+
+/// tier1 -- the build is a Tier-1 IPMC: it sends no request of its own, and the replay numbers
+/// below are the Tier-1 ones. At Tier 2 and 3 the tests assert the structure and print numbers.
+fn tier1() -> bool {
+    ipmc_defs::IPMC_TIER == 1
+}
+
+/// tier1_numbers -- the Tier-1 replay numbers of the capture under the capture's own buses.
+fn tier1_numbers(r: &ReplayReport) {
+    // Match 46: Reserve Device SDR Repository 40 (the IDs run 1, 2, 3 ... as on the captured
+    // board), Read FRU Data 5 (the image bytes agree in those ranges) and Set IPMB State 1.
+    assert_eq!(r.totals.matched, 46);
+    // SameCc 40: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 10,
+    // Inventory Area Info), SDR content (Get Device SDR 16, SDR Info), the sensor readings (8,
+    // the emulated sensors differ), the VSO capabilities and the locator record ID differ from
+    // the captured board.
+    assert_eq!(r.totals.same_cc, 40);
+    // CcDiff 134: Get Device SDR requests for chunks (10, C9h) or records (124, CBh) this IPMC's
+    // 8-record repository does not have; the captured board answered 00h.
+    assert_eq!(r.totals.cc_diff, 134);
+    // NotImplemented 89: Tier-1 scope returns C1h (PLAN.md section 4): Set Event Receiver and
+    // Set Sensor Event Enable (4 + 78), Set SEL Time (1), Set FRU Activation (3), FRU Control
+    // Capabilities (1), Get Mandatory Sensor Numbers (2).
+    assert_eq!(r.totals.not_implemented, 89);
 }
 
 #[test]
@@ -83,21 +120,16 @@ fn arrival_policy_with_both_buses_matches_the_captures_own_buses() {
     assert_eq!(r.malformed, 0);
     assert_eq!(r.totals.no_capture, 0);
     assert_eq!(r.totals.total(), REQUESTS);
-    // Match 46: Reserve Device SDR Repository 40 (the IDs run 1, 2, 3 ... as on the captured
-    // board), Read FRU Data 5 (the image bytes agree in those ranges) and Set IPMB State 1.
-    assert_eq!(r.totals.matched, 46);
-    // SameCc 40: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 10,
-    // Inventory Area Info), SDR content (Get Device SDR 16, SDR Info), the sensor readings (8,
-    // the emulated sensors differ), the VSO capabilities and the locator record ID differ from
-    // the captured board.
-    assert_eq!(r.totals.same_cc, 40);
-    // CcDiff 134: Get Device SDR requests for chunks (10, C9h) or records (124, CBh) this IPMC's
-    // 8-record repository does not have; the captured board answered 00h.
-    assert_eq!(r.totals.cc_diff, 134);
-    // NotImplemented 89: Tier-1 scope returns C1h (PLAN.md section 4): Set Event Receiver and
-    // Set Sensor Event Enable (4 + 78), Set SEL Time (1), Set FRU Activation (3), FRU Control
-    // Capabilities (1), Get Mandatory Sensor Numbers (2).
-    assert_eq!(r.totals.not_implemented, 89);
+    if tier1() {
+        assert_eq!((r.ipmc_requests, r.events), (0, 0));
+        tier1_numbers(&r);
+    } else {
+        // The extension changes the answers (more commands implemented, event enables), so only
+        // the structure is asserted; the numbers are printed.
+        println!("{}", r.summary_line());
+        assert!(r.ipmc_requests > 0, "the IPMC sends its own requests");
+        assert!(r.events > 0 && r.events <= r.ipmc_requests);
+    }
     // Rows are named from COMMANDS only; a command the table does not hold reads as such.
     for row in &r.rows {
         let in_table = ipmc_core::commands::find(row.netfn, row.cmd).is_some();
@@ -108,7 +140,8 @@ fn arrival_policy_with_both_buses_matches_the_captures_own_buses() {
             row.netfn,
             row.cmd
         );
-        if !in_table {
+        // At Tier 2 and 3 the extension answers commands the COMMANDS table does not hold.
+        if !in_table && tier1() {
             assert_eq!(row.counts.not_implemented, row.counts.total());
         }
     }
@@ -125,10 +158,20 @@ fn alternate_policy_answers_every_request_and_alternates_buses() {
     assert_eq!((r.answered, r.totals.unanswered), (REQUESTS, 0));
     let tx = tx_buses(policy, 0);
     assert_eq!(tx.len(), REQUESTS as usize);
-    for (i, (bus, ok)) in tx.iter().enumerate() {
-        assert!(ok);
-        let expected = if i % 2 == 0 { Bus::A } else { Bus::B };
-        assert_eq!(*bus, expected, "response {i}");
+    assert!(tx.iter().all(|(_, ok)| *ok));
+    if tier1() {
+        for (i, (bus, _)) in tx.iter().enumerate() {
+            let expected = if i % 2 == 0 { Bus::A } else { Bus::B };
+            assert_eq!(*bus, expected, "response {i}");
+        }
+    } else {
+        // The IPMC's own requests take turns on the buses too, so the responses alone need not
+        // strictly alternate; both buses carry them.
+        println!(
+            "responses on A: {}",
+            tx.iter().filter(|t| t.0 == Bus::A).count()
+        );
+        assert!(tx.iter().any(|t| t.0 == Bus::A) && tx.iter().any(|t| t.0 == Bus::B));
     }
 }
 
@@ -360,6 +403,67 @@ fn the_sampled_state_after_the_capture_is_m4_with_healthy_sensors() {
         let mut out = [0u8; 3];
         let n = ctx.read_sensor(number as u8, &ctx.link.buses, &mut out);
         assert_eq!(n, Ok(3), "sensor {number}");
-        assert_eq!(&out, want, "sensor {number}");
+        // From Tier 2 the event messages of a sensor start enabled (status bit 7).
+        let mut want = *want;
+        if !tier1() {
+            want[1] |= 0x80;
+        }
+        assert_eq!(out, want, "sensor {number}");
+    }
+}
+
+/// FRU_STATE_SENSOR_TYPE -- sensor type of the FRU State sensor (VITA 46.11 Table 10.2.1-1).
+const FRU_STATE_SENSOR_TYPE: u8 = 0xF0;
+/// PLATFORM_EVENT -- NetFn 04h command 02h; the request data after the header starts EvMRev,
+/// sensor type.
+const PLATFORM_EVENT: (u8, u8) = (0x04, 0x02);
+
+/// own_requests -- the requests the IPMC transmitted in a replay (even NetFn), by bus, outcome
+/// and bytes.
+fn own_requests(config: EmuConfig) -> Vec<(Bus, bool, Vec<u8>)> {
+    tx_frames(config, 0)
+        .into_iter()
+        .filter(|(_, _, bytes)| is_request_frame(bytes))
+        .collect()
+}
+
+#[test]
+fn the_replay_answers_the_fru_state_event_and_the_ipmc_does_not_resend_it() {
+    if common::capture_missing() {
+        return;
+    }
+    let policy = config(true, true, TxPolicy::Arrival);
+    let (r, _) = run(policy, 0);
+    let requests = own_requests(policy);
+    if tier1() {
+        // A Tier-1 IPMC sends no request (Rule 7-4).
+        assert!(requests.is_empty());
+        assert_eq!((r.ipmc_requests, r.events), (0, 0));
+        assert!(!r.summary_line().contains("ipmc_requests"));
+        return;
+    }
+    println!("{}", r.summary_line());
+    // Every request the IPMC sent was counted and answered by the Event Receiver role.
+    assert_eq!(r.ipmc_requests as usize, requests.len());
+    assert_eq!(r.events, r.ipmc_requests);
+    assert!(r.passed());
+    let fru_state: Vec<&Vec<u8>> = requests
+        .iter()
+        .map(|(_, _, bytes)| bytes)
+        .filter(|bytes| {
+            ipmb::parse(bytes).is_ok_and(|f| {
+                (f.header.netfn, f.header.cmd) == PLATFORM_EVENT
+                    && f.data.get(1) == Some(&FRU_STATE_SENSOR_TYPE)
+            })
+        })
+        .collect();
+    assert!(!fru_state.is_empty(), "the IPMC reports its FRU State");
+    // It got 00h at once, so no frame is sent twice (a retry repeats the frame, sequence
+    // number included).
+    for (i, frame) in requests.iter().map(|r| &r.2).enumerate() {
+        assert!(
+            !requests.iter().skip(i + 1).any(|r| &r.2 == frame),
+            "request {i} was resent: {frame:02X?}"
+        );
     }
 }

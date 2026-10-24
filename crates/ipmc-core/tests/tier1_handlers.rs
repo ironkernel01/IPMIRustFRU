@@ -3,7 +3,7 @@
 // produced by the encoders under test), every completion code of every error path.
 
 mod common;
-use common::{call, call_vso};
+use common::{by_tier, call, call_vso, locator, sensor0};
 use ipmc_core::addr;
 use ipmc_core::dispatch::{Context, SensorReadError};
 use ipmc_core::fru_state::State;
@@ -48,6 +48,7 @@ fn ctx_with_b() -> Context {
         LinkConfig {
             b_fitted: true,
             tx_policy: TxPolicy::Alternate,
+            requests_allowed: false,
         },
         true,
     );
@@ -394,17 +395,16 @@ fn sdr_info_counts_sensors_and_records() {
 
 // ---- Reserve Device SDR Repository (Table 35-4) and Get Device SDR (Table 35-3) ----
 
-/// Sensor 0's record, hand-written from IPMI v2.0 Table 43-2 (see sdr.rs for the field walk).
-const SENSOR0: [u8; 41] = [
-    0x00, 0x00, 0x51, 0x02, 0x24, 0x82, 0x00, 0x00, 0xA0, 0x60, 0x01, 0x43, 0xF0, 0x6F, 0x00, 0x00,
-    0x00, 0x00, 0x53, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC9,
-    b'F', b'R', b'U', b' ', b'S', b't', b'a', b't', b'e',
-];
-/// The management controller device locator record, from Table 43-8.
-const LOCATOR: [u8; 20] = [
-    0x07, 0x00, 0x51, 0x12, 0x0F, 0x82, 0x00, 0x01, 0x0B, 0x00, 0x00, 0x00, 0xA0, 0x60, 0x00, 0xC4,
-    b'I', b'P', b'M', b'C',
-];
+/// scanning -- the status byte of an available sensor: scanning enabled (bit 6) and, at
+/// Tier-2/3, event messages enabled (bit 7; IPMI v2.0 Table 35-14).
+fn scanning() -> u8 {
+    by_tier([0x40, 0xC0, 0xC0])
+}
+
+/// unavailable -- `scanning` with the reading unavailable (bit 5).
+fn unavailable() -> u8 {
+    by_tier([0x60, 0xE0, 0xE0])
+}
 
 fn reserve(c: &mut Context) -> [u8; 2] {
     let r = se(c, RESERVE_DEVICE_SDR, &[]);
@@ -438,7 +438,7 @@ fn a_record_reads_back_in_chunks_with_the_reservation() {
         assert_eq!(&r.data[..2], &[0x01, 0x00], "next record ID is 0001h");
         record.extend_from_slice(&r.data[2..]);
     }
-    assert_eq!(record, SENSOR0);
+    assert_eq!(record, sensor0());
 }
 
 #[test]
@@ -471,14 +471,14 @@ fn whole_record_read_and_the_next_id_chain_ends_at_ffff() {
     let r = se(&mut c, GET_DEVICE_SDR, &sdr_request([0, 0], 7, 0, 0xFF));
     assert_eq!(r.cc, OK);
     assert_eq!(&r.data[..2], &[0xFF, 0xFF]);
-    assert_eq!(&r.data[2..], &LOCATOR);
+    assert_eq!(&r.data[2..], &locator());
     // Record ID FFFFh names the last record too.
     let r = se(
         &mut c,
         GET_DEVICE_SDR,
         &sdr_request([0, 0], 0xFFFF, 0, 0xFF),
     );
-    assert_eq!(&r.data[2..], &LOCATOR);
+    assert_eq!(&r.data[2..], &locator());
     // The chain 0000h -> 0001h -> ... -> 0007h -> FFFFh, from 5-byte header reads.
     let mut id = 0u16;
     let mut ids = vec![id];
@@ -576,35 +576,35 @@ fn snapshot(
 fn sensor_zero_reports_the_fru_state_mask() {
     let mut c = ctx();
     // Power-up M0: bit 0 of the Current State Mask.
-    assert_eq!(reading(&mut c, 0), [0x00, 0x40, 0x01]);
+    assert_eq!(reading(&mut c, 0), [0x00, scanning(), 0x01]);
     let on = snapshot(Summary::Good, Summary::Good, 0, PowerState::On);
     // Checks pass: M0 -> M1 (bit 1); payload power valid: M1 -> M4 (bit 4).
     c.update_sensors(1000, &on, &mut NoTrace);
     assert_eq!(
         (c.fru_state.state(), reading(&mut c, 0)),
-        (State::M1, vec![0x00, 0x40, 0x02])
+        (State::M1, vec![0x00, scanning(), 0x02])
     );
     c.update_sensors(2000, &on, &mut NoTrace);
     assert_eq!(
         (c.fru_state.state(), reading(&mut c, 0)),
-        (State::M4, vec![0x00, 0x40, 0x10])
+        (State::M4, vec![0x00, scanning(), 0x10])
     );
     // Power lost: M4 -> M6 (bit 6) -> M1.
     let off = snapshot(Summary::Good, Summary::Good, 0, PowerState::Off);
     c.update_sensors(3000, &off, &mut NoTrace);
-    assert_eq!(reading(&mut c, 0), [0x00, 0x40, 0x40]);
+    assert_eq!(reading(&mut c, 0), [0x00, scanning(), 0x40]);
     c.update_sensors(4000, &off, &mut NoTrace);
-    assert_eq!(reading(&mut c, 0), [0x00, 0x40, 0x02]);
+    assert_eq!(reading(&mut c, 0), [0x00, scanning(), 0x02]);
 }
 
 #[test]
 fn sensor_one_reports_the_link_view() {
     let mut c = ctx_with_b();
     // Power-up: A local control and enabled (bit 3 of byte 2; byte 4 bit 1 A en / B dis).
-    assert_eq!(reading(&mut c, 1), [0x08, 0x40, 0x02]);
+    assert_eq!(reading(&mut c, 1), [0x08, scanning(), 0x02]);
     // The Link's view changes: both buses in local control and enabled.
     c.link.buses.b.mode = ipmc_core::link::BusMode::LocalControl;
-    assert_eq!(reading(&mut c, 1), [0x88, 0x40, 0x08]);
+    assert_eq!(reading(&mut c, 1), [0x88, scanning(), 0x08]);
 }
 
 #[test]
@@ -614,7 +614,7 @@ fn sensors_two_to_four_follow_the_snapshot() {
     for sensor in [2, 3, 4] {
         assert_eq!(
             reading(&mut c, sensor),
-            [0x00, 0x60, 0x00],
+            [0x00, unavailable(), 0x00],
             "sensor {sensor}"
         );
     }
@@ -623,26 +623,26 @@ fn sensors_two_to_four_follow_the_snapshot() {
         &snapshot(Summary::Good, Summary::Good, 0, PowerState::Off),
         &mut NoTrace,
     );
-    assert_eq!(reading(&mut c, 2), [0x00, 0x40, 0x01]);
-    assert_eq!(reading(&mut c, 3), [0x00, 0x40, 0x01]);
-    assert_eq!(reading(&mut c, 4), [0x00, 0x40, 0x00]);
+    assert_eq!(reading(&mut c, 2), [0x00, scanning(), 0x01]);
+    assert_eq!(reading(&mut c, 3), [0x00, scanning(), 0x01]);
+    assert_eq!(reading(&mut c, 4), [0x00, scanning(), 0x00]);
     c.update_sensors(
         20,
         &snapshot(Summary::Bad, Summary::Bad, TEMP_FLAG_UC, PowerState::Off),
         &mut NoTrace,
     );
-    assert_eq!(reading(&mut c, 2), [0x00, 0x40, 0x02]);
-    assert_eq!(reading(&mut c, 3), [0x00, 0x40, 0x02]);
-    assert_eq!(reading(&mut c, 4), [0x00, 0x40, 0x10]);
+    assert_eq!(reading(&mut c, 2), [0x00, scanning(), 0x02]);
+    assert_eq!(reading(&mut c, 3), [0x00, scanning(), 0x02]);
+    assert_eq!(reading(&mut c, 4), [0x00, scanning(), 0x10]);
 }
 
 #[test]
 fn sensors_five_and_six_report_no_test_run() {
     let mut c = ctx();
     // Payload Test Results: reading unavailable (bit 5), result byte ignored.
-    assert_eq!(reading(&mut c, 5), [0x00, 0x60, 0x00]);
+    assert_eq!(reading(&mut c, 5), [0x00, unavailable(), 0x00]);
     // Payload Test Status: 01b, test not in progress.
-    assert_eq!(reading(&mut c, 6), [0x00, 0x40, 0x01]);
+    assert_eq!(reading(&mut c, 6), [0x00, scanning(), 0x01]);
 }
 
 #[test]
@@ -653,12 +653,12 @@ fn read_sensor_serves_the_handler_and_the_console_from_one_function() {
     let mut both = c.link.buses;
     both.b.mode = BusMode::LocalControl;
     assert_eq!(c.read_sensor(1, &c.link.buses, &mut out), Ok(3));
-    assert_eq!(out, [0x08, 0x40, 0x02]);
+    assert_eq!(out, [0x08, scanning(), 0x02]);
     assert_eq!(c.read_sensor(1, &both, &mut out), Ok(3));
-    assert_eq!(out, [0x88, 0x40, 0x08]);
+    assert_eq!(out, [0x88, scanning(), 0x08]);
     // The other sensors follow the context.
     assert_eq!(c.read_sensor(0, &both, &mut out), Ok(3));
-    assert_eq!(out, [0x00, 0x40, 0x01]);
+    assert_eq!(out, [0x00, scanning(), 0x01]);
     assert_eq!(
         c.read_sensor(7, &both, &mut out),
         Err(SensorReadError::NotPresent)
@@ -667,6 +667,27 @@ fn read_sensor_serves_the_handler_and_the_console_from_one_function() {
         c.read_sensor(0, &both, &mut out[..2]),
         Err(SensorReadError::OutputTooSmall)
     );
+}
+
+#[test]
+fn reading_status_bit_7_follows_the_sensors_event_enable() {
+    let mut c = ctx_with_b();
+    let both = c.link.buses;
+    let mut out = [0u8; 3];
+    // Power-up: events off everywhere at Tier-1, on for every sensor at Tier-2/3.
+    let power_up = by_tier([0x00, 0x80, 0x80]);
+    for sensor in 0..=6u8 {
+        assert_eq!(c.read_sensor(sensor, &both, &mut out), Ok(3));
+        assert_eq!(out[1] & 0xC0, 0x40 | power_up, "sensor {sensor}");
+    }
+    // Switching one sensor sets or clears bit 7 of that sensor only.
+    for (enabled, bit) in [(true, 0x80), (false, 0x00)] {
+        c.event_enables.get_mut(2).unwrap().enabled = enabled;
+        for (sensor, status) in [(0u8, power_up), (2, bit), (3, power_up), (6, power_up)] {
+            assert_eq!(c.read_sensor(sensor, &both, &mut out), Ok(3));
+            assert_eq!(out[1] & 0x80, status, "sensor {sensor} enabled={enabled}");
+        }
+    }
 }
 
 #[test]
@@ -683,31 +704,34 @@ fn sensor_reading_error_paths() {
 
 #[test]
 fn vso_capabilities_for_one_and_two_interfaces() {
-    // Layer 1 / Tier-1 = 00h; 100 kHz and one interface = 00h; VITA 46.11 = 00h; 2022 = 22h;
-    // max FRU Device ID 0; IPMC FRU Device ID 0.
+    // Layer 1 / Tier-1 = 00h (Tier-2 01h, Tier-3 02h); 100 kHz and one interface = 00h; VITA
+    // 46.11 = 00h; 2022 = 22h; max FRU Device ID 0; IPMC FRU Device ID 0.
+    let tier = by_tier([0x00, 0x01, 0x02]);
     let one = call_vso(&mut ctx(), GET_VSO_CAPABILITIES, &[]);
     assert_eq!(
         (one.cc, one.data),
-        (OK, vec![0x00, 0x00, 0x00, 0x22, 0x00, 0x00])
+        (OK, vec![tier, 0x00, 0x00, 0x22, 0x00, 0x00])
     );
     // IPMB-B fitted: number of interfaces 01b (Rule 4.1.1-2).
     let two = call_vso(&mut ctx_with_b(), GET_VSO_CAPABILITIES, &[]);
     assert_eq!(
         (two.cc, two.data),
-        (OK, vec![0x00, 0x01, 0x00, 0x22, 0x00, 0x00])
+        (OK, vec![tier, 0x01, 0x00, 0x22, 0x00, 0x00])
     );
 }
 
 #[test]
 fn vso_capabilities_frame_is_byte_exact() {
     // rqSA 20h, netFn 2Dh<<2 = B4h, chk1 -(20+B4) = 2Ch, rsSA 82h, seq 5<<2 = 14h, cmd 00h,
-    // CC 00h, data 03 00 00 00 22 00 00, chk2 -(82+14+03+22) = 45h.
+    // CC 00h, data 03 TT 00 00 22 00 00 with the IPMC identifier TT = Tier - 1 (00h, 01h, 02h),
+    // chk2 -(82+14+03+TT+22) = 45h, 44h, 43h.
     let r = call(&mut ctx(), 0x2C, GET_VSO_CAPABILITIES, &[0x03]);
+    let (tier, chk2) = by_tier([(0x00, 0x45), (0x01, 0x44), (0x02, 0x43)]);
     assert_eq!(
         r.frame,
         [
-            0x20, 0xB4, 0x2C, 0x82, 0x14, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00,
-            0x45
+            0x20, 0xB4, 0x2C, 0x82, 0x14, 0x00, 0x00, 0x03, tier, 0x00, 0x00, 0x22, 0x00, 0x00,
+            chk2
         ]
     );
 }

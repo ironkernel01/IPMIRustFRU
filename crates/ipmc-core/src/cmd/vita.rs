@@ -15,8 +15,12 @@ use crate::link::{plan_ipmb_state, BusMode, PendingIpmbState};
 
 // ---- Get VSO Capabilities, Table 10.1.3.1-1 ----
 
-/// IPMC identifier byte: bits 5:4 Layer 00b = Layer 1 IPMC, bits 1:0 Tier 00b = Tier-1.
-const IPMC_IDENTIFIER_LAYER1_TIER1: u8 = 0;
+/// IPMC identifier byte bits 1:0 (Table 10.1.3.1-1): the Tier, 00b Tier-1, 01b Tier-2, 10b Tier-3.
+const IPMC_IDENTIFIER_TIER_MASK: u32 = 0b11;
+/// IPMC identifier byte: bits 5:4 Layer 00b = Layer 1 IPMC, bits 1:0 the Tier, IPMC_TIER - 1
+/// (ipmc-defs guards IPMC_TIER to 1..=3, so the mask only documents the field width). The
+/// Tier is 1 unless the Tier-2/3 extension is built in and raises it.
+const IPMC_IDENTIFIER: u8 = ((ipmc_defs::IPMC_TIER - 1) & IPMC_IDENTIFIER_TIER_MASK) as u8;
 /// IPMB capabilities byte bits 5:4: 00b = 100 kHz (STANDARD-MODE) maximum operating frequency;
 /// the IPMB runs at IPMB_I2C_HZ = 100 kHz.
 const IPMB_MAX_FREQUENCY_100KHZ: u8 = 0;
@@ -51,7 +55,7 @@ pub fn get_vso_capabilities(ctx: &mut Context, req: &Frame, out: &mut [u8]) -> R
     copy_out(
         out,
         &[
-            IPMC_IDENTIFIER_LAYER1_TIER1,
+            IPMC_IDENTIFIER,
             IPMB_MAX_FREQUENCY_100KHZ | interfaces,
             VSO_STANDARD_VITA_46_11,
             vso_revision(VSO_APPROVAL_YEAR),

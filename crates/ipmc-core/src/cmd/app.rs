@@ -11,8 +11,8 @@ pub const CMD_GET_DEVICE_ID: u8 = 0x01;
 /// GET_DEVICE_ID_LEN -- Get Device ID response data length (IPMI v2.0 Table 20-2, bytes 2..16).
 pub const GET_DEVICE_ID_LEN: usize = 15;
 
-/// copy_out -- copies `data` to the front of `out`; Err(UNSPECIFIED) when `out` is too small.
-pub(crate) fn copy_out(out: &mut [u8], data: &[u8]) -> Result<usize, u8> {
+/// copy_out -- shared with the Tier-2/3 extension: copies `data` to the front of `out`; Err(UNSPECIFIED) when `out` is too small.
+pub fn copy_out(out: &mut [u8], data: &[u8]) -> Result<usize, u8> {
     out.get_mut(..data.len())
         .ok_or(cc::UNSPECIFIED)?
         .copy_from_slice(data);

@@ -17,10 +17,12 @@
 
 use cortex_m::peripheral::{DCB, DWT, NVIC};
 use ipmc_core::addr::{self, AddrInfo};
-use ipmc_core::dispatch::Context as DispatchContext;
+use ipmc_core::dispatch::{Context as DispatchContext, ResetRequest};
+use ipmc_core::ext;
 use ipmc_core::ipmb::IPMB_MAX_LEN;
 use ipmc_core::link::{Link, LinkConfig};
 use ipmc_core::queue::Bus;
+use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
 use ipmc_core::trace::Trace;
 use ipmc_fru::persist::{FlashError, FlashLog, LogSector, PersistError, Status};
@@ -33,7 +35,7 @@ use crate::bsp::i2c_hw::{self, I2cError, I2cPeripheral, RxConsumer};
 use crate::bsp::ipmb_common;
 use crate::bsp::ipmb_master::{self, IpmbMaster, MasterError, Recovery, SelectedMaster};
 use crate::bsp::ipmb_pins::IpmbPins;
-use crate::bsp::{fault, ga, systick, uart};
+use crate::bsp::{fault, ga, reset_cause, systick, uart};
 use crate::console::{ConsoleTrace, Context};
 use crate::fru_log::FruLog;
 
@@ -311,6 +313,16 @@ pub struct IpmbLink {
     /// SysTick time of the latest frame taken from a driver queue (any frame: it is bus traffic);
     /// None before the first. A run-time erase waits for FRU_ERASE_QUIET_MS after it.
     last_rx_ms: Option<u32>,
+    /// The extension this build runs: the Tier-2/3 extension when built in, else none.
+    ext: ipmc_ext::Active,
+    /// The one decision when a pending Cold Reset runs (`service_reset` only performs it).
+    reset_gate: ResetGate,
+    /// A save tried while a Cold Reset was pending failed: the normal delay applies again, so a
+    /// failing flash does not stall every pass until the reset wait runs out.
+    reset_save_failed: bool,
+    /// The evaluation period ended and both slaves are off: nothing resumes them.
+    #[cfg(ipmc_eval)]
+    ipmb_stopped: bool,
 }
 
 /// BusPause -- what an erase does to one bus's slave.
@@ -460,15 +472,29 @@ impl IpmbLink {
         io: IpmbIo,
         fru_log: FruLog,
         fru_image: Option<FruStore>,
+        kept_requests: (u8, u64),
     ) -> Option<&'static mut IpmbLink> {
-        cortex_m::singleton!(: IpmbLink = IpmbLink::new(io, fru_log, fru_image))
+        cortex_m::singleton!(: IpmbLink = IpmbLink::new(io, fru_log, fru_image, kept_requests))
     }
 
     /// new -- a link in the power-up state (IPMB-A on, IPMB-B off) for the resolved address; a
     /// bus that failed its start-up gets its local fault, which disables it (Rule 9.3-10).
-    fn new(io: IpmbIo, fru_log: FruLog, fru_image: Option<FruStore>) -> Self {
+    fn new(
+        io: IpmbIo,
+        fru_log: FruLog,
+        fru_image: Option<FruStore>,
+        (first_request_seq, recent_request_seqs): (u8, u64),
+    ) -> Self {
         let resolved = addr::resolve(ga::read_raw());
-        let mut link = Link::new(LinkConfig::from_defs(), &resolved);
+        // The kept values count as sent at 0 ms, the start of this boot's clock: each stays out
+        // of use for a full T9 from the restart.
+        let mut link = Link::with_first_request_seq(
+            LinkConfig::from_defs(),
+            &resolved,
+            first_request_seq,
+            recent_request_seqs,
+            0,
+        );
         let mut faults = [FaultTracker::default(); FaultTracker::COUNT];
         for (bus, fault) in [(Bus::A, io.fault_a), (Bus::B, io.fault_b)] {
             if let Some(failure) = fault {
@@ -498,6 +524,11 @@ impl IpmbLink {
             periph: io.periph,
             fru_log,
             last_rx_ms: None,
+            ext: ipmc_ext::Active::default(),
+            reset_gate: ResetGate::new(),
+            reset_save_failed: false,
+            #[cfg(ipmc_eval)]
+            ipmb_stopped: false,
         }
     }
 
@@ -512,6 +543,27 @@ impl IpmbLink {
         self.fru_log.status()
     }
 
+    /// stopped -- the evaluation stop switched both slaves off (always false in a normal build).
+    const fn stopped(&self) -> bool {
+        #[cfg(ipmc_eval)]
+        {
+            self.ipmb_stopped
+        }
+        #[cfg(not(ipmc_eval))]
+        {
+            false
+        }
+    }
+
+    /// erase_plan -- what an erase does to each slave: nothing after the evaluation stop (a
+    /// stopped slave is never resumed), else `pause_plan`.
+    fn erase_plan(&self) -> [BusPause; FaultTracker::COUNT] {
+        if self.stopped() {
+            return [BusPause::Absent; FaultTracker::COUNT];
+        }
+        pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults)
+    }
+
     /// fru_restore -- FRU RESTORE: saves the built image as a new record with the next sequence
     /// number, at once (`Persist::restore`; an erase it needs pauses the IPMB as for any save), and
     /// puts the built image in the store, rerunning the self test. A power cut at any point loads
@@ -522,7 +574,7 @@ impl IpmbLink {
         if ga::nvmro_asserted() {
             return Err(RestoreError::Nvmro);
         }
-        let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
+        let plan = self.erase_plan();
         let (persist, flash) = self.fru_log.parts().ok_or(RestoreError::LogOff)?;
         let mut paused = PausedErase {
             flash,
@@ -548,12 +600,26 @@ impl IpmbLink {
                 .is_none_or(|t| now_ms.wrapping_sub(t) >= FRU_ERASE_QUIET_MS)
     }
 
+    /// fru_unsaved -- an accepted Write FRU Data is not in flash yet (the store's dirty mark or
+    /// the log's pending save); false while the log is off (the store is RAM only then).
+    fn fru_unsaved(&self) -> bool {
+        self.fru_log
+            .status()
+            .is_some_and(|s| s.pending || self.dispatch.fru.is_dirty())
+    }
+
     /// service_fru_log -- the save step of the main loop (`Persist::poll`): one console line per
-    /// save or failed save. Nothing runs while the log is off.
-    fn service_fru_log(&mut self) {
-        let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
+    /// save or failed save. Nothing runs while the log is off. While a Cold Reset is pending the
+    /// save runs at once, with no persist delay and no quiet-bus wait: the IPMB is about to go
+    /// away, and the one erase it may need is bounded (a failed attempt returns to the normal
+    /// delay).
+    pub fn service_fru_log(&mut self) {
+        let plan = self.erase_plan();
         let now_ms = systick::millis();
-        let quiet = self.bus_quiet(now_ms);
+        let reset_pending = self.dispatch.pending_reset.is_some();
+        let urgent = reset_pending && !self.reset_save_failed;
+        let quiet = urgent || self.bus_quiet(now_ms);
+        let delay_ms = if urgent { 0 } else { FRU_PERSIST_DELAY_MS };
         let Some((persist, flash)) = self.fru_log.parts() else {
             return;
         };
@@ -568,9 +634,13 @@ impl IpmbLink {
             &mut self.dispatch.fru,
             now_ms,
             nvmro,
-            FRU_PERSIST_DELAY_MS,
+            delay_ms,
             quiet,
         );
+        // An attempt made while a reset is pending that fails falls back to the normal delay and
+        // quiet-bus rule; the flag clears when no reset is pending.
+        self.reset_save_failed =
+            reset_pending && (self.reset_save_failed || matches!(outcome, Some(Err(_))));
         match outcome {
             Some(Ok(saved)) => out!(
                 "FRU log: saved record {} to sector {} offset {}\n",
@@ -590,10 +660,16 @@ impl IpmbLink {
 
     /// feed_sensors -- hands the latest sensor sample to the command handlers and steps the FRU
     /// state machine with it (owner decision 3). The main loop calls it once per sample; a state
-    /// change prints one console line (`Context::update_sensors` writes it).
+    /// change prints one console line (`Context::update_sensors` writes it). The extension's
+    /// `on_sample` hook runs after it (`ext::feed_sensors`).
     pub fn feed_sensors(&mut self, snapshot: &SensorSnapshot) {
-        self.dispatch
-            .update_sensors(systick::millis(), snapshot, &mut ConsoleTrace);
+        ext::feed_sensors(
+            &mut self.dispatch,
+            &mut self.ext,
+            systick::millis(),
+            snapshot,
+            &mut ConsoleTrace,
+        );
     }
 
     /// service -- main-loop step.
@@ -604,6 +680,8 @@ impl IpmbLink {
     /// 4. Sends at most one queued response through the master (`transmit`).
     /// 5. Saves the FRU image to the flash log when a Write FRU Data has been quiet long enough
     ///    (a save that must erase a sector also waits for a quiet bus, `bus_quiet`).
+    /// 6. Restarts the processor when a handler left a Cold Reset in `pending_reset` and its
+    ///    response has left (`service_reset`).
     ///
     /// The bus-fault bookkeeping runs around step 4: `track_slave_faults` before it (frames
     /// received in this pass reset the streak, the writes then add to it) and
@@ -618,12 +696,78 @@ impl IpmbLink {
             ));
         }
         self.drain_rx();
-        self.link
-            .poll(&mut self.dispatch, systick::millis(), &mut ConsoleTrace);
+        self.link.poll(
+            &mut self.dispatch,
+            &mut self.ext,
+            systick::millis(),
+            &mut ConsoleTrace,
+        );
         self.track_slave_faults();
         self.transmit();
         self.clear_faulted_buses();
         self.service_fru_log();
+        self.service_reset();
+    }
+
+    /// stop_for_eval -- the end of the evaluation period: switches both IPMB slaves off and drops
+    /// what is queued. Each running slave goes through the driver's own suspend (waiting up to
+    /// PAUSE_WAIT_MS for an idle bus, as an erase pause does); a faulted bus, or one that stays
+    /// busy past the wait, goes through `suspend_faulted`. The pins stay as the suspended state
+    /// leaves them (released, open drain) and nothing resumes the slaves. The main loop never
+    /// calls `service` afterwards.
+    #[cfg(ipmc_eval)]
+    pub fn stop_for_eval(&mut self) {
+        let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
+        for bus in Bus::BOTH {
+            let off = match plan[tracker_index(bus)] {
+                BusPause::Absent => continue,
+                BusPause::Faulted => false,
+                BusPause::Healthy => {
+                    let start = systick::millis();
+                    let mut idle = false;
+                    while !idle && systick::millis().wrapping_sub(start) < PAUSE_WAIT_MS {
+                        idle = i2c_hw::suspend(bus);
+                    }
+                    idle
+                }
+            };
+            if !off {
+                let _ = i2c_hw::suspend_faulted(bus);
+            }
+        }
+        for consumer in [self.rx_a.as_mut(), self.rx_b.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            while consumer.dequeue().is_some() {}
+        }
+        self.ipmb_stopped = true;
+    }
+
+    /// service_reset -- performs `Context::pending_reset` when `ResetGate` says so (the response
+    /// left and no accepted FRU write is unsaved, or IPMC_RESET_WAIT_MS passed). One console
+    /// line goes out before the reset, and the console is flushed. The requester's next
+    /// sequence number is kept across the reset (`reset_cause::keep_sequence`).
+    fn service_reset(&mut self) {
+        let now_ms = systick::millis();
+        let pending = matches!(self.dispatch.pending_reset, Some(ResetRequest::Cold));
+        let egress_empty = self.link.egress_empty();
+        let fru_clean = !self.fru_unsaved();
+        if self
+            .reset_gate
+            .poll(pending, now_ms, egress_empty, fru_clean, &mut ConsoleTrace)
+        {
+            out!(
+                "Cold Reset: restarting
+"
+            );
+            uart::flush();
+            reset_cause::keep_sequence(
+                self.link.next_request_seq(),
+                self.link.recent_request_seqs(now_ms),
+            );
+            reset_cause::system_reset();
+        }
     }
 
     /// tracker -- the fault tracker of `bus`.
@@ -878,11 +1022,12 @@ fn print_bus_stats(link: &Link, bus: Bus) {
     let e = &c.rx_errors;
     let name = bus.name();
     out!(
-        "IPMB-{} rx:    ok={} not-for-us={} response={} unavailable={} ingress-full={}\n",
+        "IPMB-{} rx:    ok={} not-for-us={} response={} answers={} unavailable={} ingress-full={}\n",
         name,
         c.rx_ok,
         c.not_for_us,
         c.rx_response,
+        c.rx_answers,
         c.bus_unavailable,
         c.ingress_full
     );
@@ -897,9 +1042,10 @@ fn print_bus_stats(link: &Link, bus: Bus) {
         e.other
     );
     out!(
-        "IPMB-{} tx:    ok={} fail={} fail-streak={} dropped={} resends={} replays={}\n",
+        "IPMB-{} tx:    ok={} requests={} fail={} fail-streak={} dropped={} resends={} replays={}\n",
         name,
         c.tx_ok,
+        c.tx_requests,
         c.tx_fail,
         c.tx_fail_streak,
         c.tx_dropped,

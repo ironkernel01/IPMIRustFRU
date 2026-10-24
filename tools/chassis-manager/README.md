@@ -63,6 +63,11 @@ reads the same define as its default). The line protocol is documented in the
 | `--discovery-tries` | 2 | transmissions per discovery probe; an empty slot never answers |
 | `--bus-fail-streak` | 2 | suspect timeouts in a row before a bus counts as failed |
 | `--emu-bus-down A\|B`, `--emu-bus-down-at-s` | off, half the duration | emu: break a bus during polling |
+| `--cm-tier 1\|2` | 2 | 2: Event Receiver, answers Platform Event with 00h; 1: not an Event Receiver (Rule 7-2), answers C1h |
+| `--withhold-events N` | 0 | leave the first N Platform Event frames unanswered (retries count), so a run shows the IPMC retrying with the same sequence number |
+| `--set-event-receiver` | off | after discovery, send Set Event Receiver (NetFn 04h, cmd 00h, data: this manager's address, 00h) to each IPMC found; the completion code is logged (a Tier-1 IPMC answers C1h, which is not an error) |
+| `--cold-reset-at-s T` | off | T seconds into the polling, send Cold Reset (NetFn 06h, cmd 02h) once to each IPMC found |
+| `--cold-reset-recovery-s T` | 5.0 | seconds after the Cold Reset request in which the IPMC must answer again; polling timeouts inside it are expected, later ones are lost readings, and the check "recovered after Cold Reset" needs one answered reading inside it |
 | `--json PATH` | none | write the JSON summary |
 
 Defaults that the tool chooses (failure streak, discovery tries, poll interval and
@@ -79,6 +84,34 @@ the SDR walk complete (ends at FFFFh, every record ID as asked, sensor count equ
 to Get Device SDR Info), the locator record ID found in the SDRs, Get Self Test
 Results, polling (cycles ran, no timeout, no error completion code) and no request to a
 found IPMC timed out.
+
+## Event Receiver (`cm_events.py`)
+
+The Chassis Manager at 20h is the Event Receiver of a VITA 46.11 system (Rules 7-3, 7-5). A
+request addressed to it (even NetFn, both checksums valid) is not a response: `Link` hands it
+to `EventReceiver` while a request waits and between requests (the run loop receives in slices
+of `SERVICE_PERIOD_S`, 10 ms, so a request is answered promptly). The answer goes back on the
+bus the request arrived on, built with the same frame builder as the requests (rqSA of the
+request, NetFn + 1, the request's sequence number and LUNs, our address as rsSA).
+
+- Platform Event (NetFn 04h, cmd 02h): answered 00h at `--cm-tier 2`, C1h at `--cm-tier 1`
+  (recorded as refused). Any other request to the Chassis Manager is answered C1h and listed
+  under `other_requests`.
+- The first `--withhold-events` Platform Event frames are not answered and are recorded as
+  withheld.
+- A repeat of a request (same rqSA, sequence number, command and data within T9, 5 s) is
+  answered again and recorded as a duplicate of the first, not as a new event.
+- The log prints one line per event: bus, requester, sequence number, EvMRev, sensor type and
+  number, direction, event type, ED1..ED3 and a text for the VITA sensors: FRU State (F0h:
+  current state, previous state, cause of Table 10.2.1-3), System IPMB Link (F1h: A/B on/off,
+  400 kHz), FRU Health (F2h), FRU Voltage (02h), FRU Temperature (F3h: threshold, assert or
+  deassert), Payload Test Results (F4h), Payload Test Status (F5h), Payload Mode (F7h), IPMC
+  Reset Type (F8h). Any other sensor type prints its event data in hex.
+- After Cold Reset the polling continues: a missing response to the reset, and the polling
+  timeouts until the IPMC answers again, are logged as expected (`reset_lost_readings` under
+  `poll`) and do not fail the run, but only within `--cold-reset-recovery-s` of the reset: after
+  that a timeout is a lost reading, and the check "recovered after Cold Reset" fails unless a
+  reading was answered inside that time. The run keeps receiving events.
 
 ## Steps
 
@@ -122,6 +155,12 @@ The run log prints `[seconds] command to address seq bus (round trip) tx <frame>
 rx <frame> -> decoded result`. The JSON summary holds the totals, one entry per
 command (requests, transmissions, responses, retries, timeouts, completion codes,
 buses), the distinct request/response pairs and the run-length command sequence.
+It also holds `events` (one entry per Platform Event frame received: `t_s`, `bus`, `rq_sa`,
+`seq`, `ev_m_rev`, `sensor_type`, `sensor_number`, `direction`, `event_type`, `ed1`..`ed3`,
+`text`, `duplicate`, `withheld`, `answered_cc` (null when withheld)), `other_requests` (requests
+to the Chassis Manager that are not Platform Events, answered C1h) and the counts
+`events_received` (distinct events), `events_duplicates`, `events_withheld` and
+`events_refused` (Tier-1 answers).
 
 ## Cross-check (`crosscheck.py`)
 

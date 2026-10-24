@@ -1,0 +1,13 @@
+[package]
+name = "ipmc-ext"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lints.rust]
+# tier23 is set by build.rs when ipmc-defs found the Tier-2/3 extension folder.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tier23)"] }
+
+[dependencies]
+ipmc-core = { path = "../ipmc-core" }
+ipmc-defs = { path = "../ipmc-defs" }

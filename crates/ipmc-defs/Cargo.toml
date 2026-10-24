@@ -3,5 +3,10 @@ name = "ipmc-defs"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
+links = "ipmc_defs"
+
+[lints.rust]
+# tier23 is set by build.rs when the Tier-2/3 extension is built in; ipmc_eval for IPMC_EVAL=1.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tier23)", "cfg(ipmc_eval)"] }
 
 [dependencies]

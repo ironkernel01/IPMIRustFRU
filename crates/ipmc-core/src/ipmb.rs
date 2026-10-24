@@ -51,6 +51,8 @@ const NETFN_MAX: u8 = 0x3F;
 const SEQ_MAX: u8 = 0x3F;
 /// Odd netFn marks a response.
 const NETFN_RESPONSE_BIT: u8 = 0x01;
+/// NETFN_SHIFT -- the NetFn sits in bits 7:2 of byte 1 (the other two bits are the LUN).
+const NETFN_SHIFT: u32 = 2;
 /// Bit 0 of a slave address byte is the R/W bit of the I2C address phase; an IPMB frame
 /// carries 8-bit addresses with bit 0 clear (IPMI v2.0 section 6.3 message format).
 const ADDRESS_RW_BIT: u8 = 0x01;
@@ -113,6 +115,16 @@ pub struct Header {
     pub src_lun: u8,
     /// Command code.
     pub cmd: u8,
+}
+
+/// is_request_frame -- true when the raw frame's NetFn (byte 1, bits 7:2) is even: a request.
+/// The one classification of a frame by its bytes, for frames `parse` may have rejected: an even
+/// NetFn is a request, an odd one a response (IPMB message format); `Header::is_response` is the
+/// same rule on a parsed header. False for a frame too short to hold a NetFn.
+pub fn is_request_frame(bytes: &[u8]) -> bool {
+    bytes
+        .get(1)
+        .is_some_and(|b| (b >> NETFN_SHIFT) & NETFN_RESPONSE_BIT == 0)
 }
 
 impl Header {
@@ -359,6 +371,17 @@ mod tests {
         let mut again = [0u8; IPMB_MAX_LEN];
         let m = encode_response(&frame.header, 0, frame.data, &mut again).unwrap();
         assert_eq!(&again[..m], &out[..n]);
+    }
+
+    #[test]
+    fn raw_frames_are_classified_by_the_netfn_parity() {
+        // NetFn 04h (even) is a request, 05h a response; the LUN bits do not matter.
+        assert!(is_request_frame(&[0x20, 0x10, 0xD0]));
+        assert!(is_request_frame(&[0x20, 0x11, 0xD0]));
+        assert!(!is_request_frame(&[0x20, 0x14, 0xD0]));
+        assert!(!is_request_frame(&[0x20, 0x17, 0xD0]));
+        assert!(!is_request_frame(&[0x20]), "too short for a NetFn");
+        assert!(!is_request_frame(&[]));
     }
 
     #[test]

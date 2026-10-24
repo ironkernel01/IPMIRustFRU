@@ -5,7 +5,9 @@ Reassembles every Device SDR record the captured SBC IPMC returned to the Chassi
 the two Saleae exports (IPMB-A, IPMB-B), decodes each field per the IPMI v2.0 tables and the
 VITA 46.11-2022 sensor definitions, checks the records against those rules, and compares the
 first seven sensors and the locator with the records of this project's IPMC
-(`cargo run -q -p ipmc-emu -- sdr`, decoded by the same decoder).
+(`cargo run -q -p ipmc-emu -- sdr`, decoded by the same decoder). That run sets IPMC_TIER23=0:
+the document compares the captured system with the public Tier-1 records, whatever extension
+folder sits beside this repository.
 
 Inputs (read only):  References/CodeReferences/ipmi-pic32/traces/sbca.csv and sbcb.csv
 Output:              Documentation/captured_sdr.md
@@ -25,6 +27,7 @@ Frame layout used (IPMI v2.0 IPMB message, first byte = 8-bit destination addres
 import difflib
 import importlib.util
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -991,6 +994,7 @@ def our_records():
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
     try:
         out = subprocess.run([cargo, "run", "-q", "-p", "ipmc-emu", "--", "sdr"], cwd=ROOT,
+                             env={**os.environ, "IPMC_TIER23": "0"},
                              capture_output=True, text=True, check=False)
     except OSError as exc:
         raise InputError("cannot run cargo: %s" % exc)

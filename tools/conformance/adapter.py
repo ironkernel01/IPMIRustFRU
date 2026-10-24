@@ -30,7 +30,7 @@ from cm_link import (  # noqa: E402
 )
 from cm_settings import (  # noqa: E402
     EMU_HOST, EMU_RESET_TIMEOUT_S, EMU_START_TIMEOUT_S, OWN_ADDRESS_BENCH, PENDING_FRAMES_KEEP,
-    PENDING_FRAMES_MAX, RECEIVE_TIMEOUT_MS_DEFAULT, RESET_SETTLE_S,
+    PENDING_FRAMES_MAX, RECEIVE_TIMEOUT_MS_DEFAULT,
 )
 # The one IPMB checksum and request encoder (python-ipmi's, as the Chassis Manager uses them);
 # `checksum` is also the TRANSPORT.md helper of that name.
@@ -173,16 +173,15 @@ class Target:
     def reset(self):
         if self.transport != "emu":
             raise NotImplementedError("the board cannot be reset from this interface")
+        # No frame of the old board survives. The connection's reader thread tags every frame
+        # with its board's epoch in stream order; after `#ready` the collector refuses and
+        # forgets every frame of an earlier epoch, whichever receiver thread still holds one.
+        # Nothing of the new board is drained: a Tier-2/3 board sends its first event at once
+        # and the caller must see it.
+        self._pending.clear()
         # The new board starts with both buses up (`#reset` in the ipmc-emu line protocol).
         self._connection.reset(EMU_RESET_TIMEOUT_S)
-        # No frame of the old board survives: the connection's per-bus queues, then (after the
-        # receiver threads delivered what they had already taken) the collector and our list.
-        self._connection.drain_frames()
-        time.sleep(RESET_SETTLE_S)
-        self._connection.drain_frames()
-        self._pending.clear()
-        while self._collector.poll() is not None:
-            pass
+        self._collector.drop_before(self._connection.epoch)
         self._connection.errors.clear()
 
 

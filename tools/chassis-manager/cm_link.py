@@ -23,11 +23,14 @@ the transports are python-ipmi `IpmbInterface` objects, one per bus. Tool-chosen
 
 import math
 import queue
+import threading
 import time
 from dataclasses import dataclass, field
 
-from cm_settings import BUS_FAIL_STREAK_DEFAULT
-from pyipmi.interfaces.ipmb import IpmbHeaderReq, encode_ipmb_msg, rx_filter
+from cm_settings import BUS_FAIL_STREAK_DEFAULT, SERVICE_PERIOD_S
+from pyipmi.interfaces.ipmb import (
+    IpmbHeaderReq, IpmbHeaderRsp, checksum, encode_ipmb_msg, rx_filter,
+)
 
 # Table 4.1.1-1 (section 4.1.1 p.31) and the rules next to each value.
 T3_MIN_S = 0.060  # response time-out, T3 min: a shorter wait is not a time-out
@@ -52,6 +55,31 @@ def frame_payload(frame: bytes) -> bytes:
     return bytes(frame[IPMB_DATA_INDEX:-1])
 
 
+IPMB_MIN_FRAME = IPMB_DATA_INDEX + 1  # header (6 bytes) plus the data checksum
+NETFN_SHIFT = 2  # the NetFn sits in bits 7:2 of byte 1, the LUN in bits 1:0
+NETFN_RESPONSE_BIT = 1  # a response NetFn is odd (request NetFn + 1)
+SEQ_SHIFT = 2  # the sequence number sits in bits 7:2 of byte 4, the LUN in bits 1:0
+LUN_MASK = 0x03
+
+
+def request_to(frame: bytes, address: int) -> bool:
+    """True when `frame` is a well-formed request (even NetFn, both checksums valid) addressed to
+    `address` (8-bit form): the frames a Chassis Manager answers rather than collects."""
+    return (len(frame) >= IPMB_MIN_FRAME and frame[0] == address
+            and not frame[1] >> NETFN_SHIFT & NETFN_RESPONSE_BIT
+            and checksum(frame[:2]) == frame[2] and checksum(frame[3:-1]) == frame[-1])
+
+
+def response_to(request: bytes, payload: bytes) -> bytes:
+    """The response frame to the well-formed request `request`, with `payload` (completion code
+    and data): rqSA and rsSA swapped, NetFn + 1, the request's sequence number, LUNs and command,
+    both checksums. The one response builder of the tool."""
+    req = IpmbHeaderReq(data=request)
+    rsp = IpmbHeaderRsp()
+    rsp.from_req_header(req)
+    return bytes(encode_ipmb_msg(rsp, bytes(payload)))
+
+
 @dataclass
 class Exchange:
     """One request with its tries and its outcome."""
@@ -68,6 +96,7 @@ class Exchange:
     response_bus: str | None = None
     response_frame: bytes | None = None
     rtt_s: float | None = None
+    expected_loss: bool = False  # a missing response the run expects (the IPMC is resetting)
 
     @property
     def timed_out(self) -> bool:
@@ -93,8 +122,10 @@ class Link:
     def __init__(self, interfaces: dict, collector, cm_address: int = CM_ADDRESS_DEFAULT,
                  retries: int = C1_MIN, timeout_s: float = T3_MAX_S,
                  bus_fail_streak: int = BUS_FAIL_STREAK_DEFAULT, clock=time.monotonic,
-                 test_mode: bool = False) -> None:
-        """`test_mode` is for unit tests only: it lifts the T3 minimum so a test need not wait a
+                 test_mode: bool = False, receiver=None) -> None:
+        """`receiver` answers the requests that arrive for `cm_address` (an object with
+        `handle(bus, frame)` returning the response frame or None; without one such frames are
+        dropped). `test_mode` is for unit tests only: it lifts the T3 minimum so a test need not wait a
         production time-out, and paces a retry after a failed transmission by the (short)
         time-out instead of T6. Production runs never set it."""
         if not C1_MIN <= retries <= C1_MAX:
@@ -109,6 +140,7 @@ class Link:
             raise ValueError("IPMB-A is mandatory")
         self.interfaces = interfaces
         self.collector = collector
+        self.receiver = receiver
         self.cm_address = cm_address
         self.retries = retries
         self.timeout_s = timeout_s
@@ -248,9 +280,33 @@ class Link:
         return True
 
     def _drain(self) -> None:
-        """Drop frames left from earlier requests (late responses carry an older sequence)."""
-        while self.collector.poll() is not None:
-            pass
+        """Drop frames left from earlier requests (late responses carry an older sequence);
+        requests to the Chassis Manager are answered."""
+        self.service()
+
+    def _receive_request(self, bus: str, frame: bytes) -> bool:
+        """Answer `frame` on `bus` when it is a request to this Chassis Manager and there is a
+        receiver; True when it was one (it is not a response to anything we wait for)."""
+        if self.receiver is None or not request_to(frame, self.cm_address):
+            return False
+        answer = self.receiver.handle(bus, frame)
+        if answer is not None:
+            self._transmit(bus, answer, False)
+        return True
+
+    def service(self) -> None:
+        """Answer every request to the Chassis Manager that is queued; drop other frames."""
+        while (item := self.collector.poll()) is not None:
+            self._receive_request(*item)
+
+    def idle(self, seconds: float) -> None:
+        """Wait `seconds`, receiving: a request is answered within SERVICE_PERIOD_S of its
+        arrival."""
+        end = self._clock() + seconds
+        while (remaining := end - self._clock()) > 0:
+            item = self.collector.get(min(remaining, SERVICE_PERIOD_S))
+            if item is not None:
+                self._receive_request(*item)
 
     def _wait(self, header: IpmbHeaderReq, deadline: float):
         """The (bus, frame) that answers `header` before `deadline`, or None."""
@@ -262,6 +318,8 @@ class Link:
             if item is None:
                 return None
             bus, frame = item
+            if self._receive_request(bus, frame):
+                continue
             if rx_filter(header, frame, rq_sa=True, rs_sa=True):
                 return bus, frame
 
@@ -284,30 +342,55 @@ class FrameCollector:
     """python-ipmi "router" that queues every received frame with its bus tag.
 
     Passed as `router=` to the interfaces: they call `handle_frame` from their receive thread.
+    A frame may carry an `epoch` attribute (the emulator stream's board generation, see
+    `ipmc_emu_interface.EpochFrame`); `drop_before` makes the collector refuse and forget the
+    frames of earlier generations, whichever thread delivers them.
     """
 
     def __init__(self) -> None:
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue()  # (bus, frame, epoch or None)
         self._bus_of: dict = {}
+        self._lock = threading.Lock()  # orders `handle_frame` against `drop_before`
+        self._min_epoch = 0
 
     def register(self, interface, bus: str) -> None:
         """Name the bus `interface` belongs to."""
         self._bus_of[id(interface)] = bus
 
     def handle_frame(self, interface, frame: bytes) -> None:
-        self._queue.put((self._bus_of[id(interface)], bytes(frame)))
+        epoch = getattr(frame, "epoch", None)
+        with self._lock:
+            if epoch is not None and epoch < self._min_epoch:
+                return  # a frame of a board that was reset away
+            self._queue.put((self._bus_of[id(interface)], bytes(frame), epoch))
+
+    def drop_before(self, epoch: int) -> None:
+        """From now on refuse frames of an epoch below `epoch`, and drop the queued ones. Frames
+        without an epoch and of epoch `epoch` or later are kept."""
+        with self._lock:
+            self._min_epoch = max(self._min_epoch, epoch)
+            kept = []
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item[2] is None or item[2] >= self._min_epoch:
+                    kept.append(item)
+            for item in kept:
+                self._queue.put(item)
 
     def close(self) -> None:
         """Nothing to stop: the collector has no thread."""
 
     def get(self, timeout: float):
         try:
-            return self._queue.get(timeout=timeout)
+            return self._queue.get(timeout=timeout)[:2]
         except queue.Empty:
             return None
 
     def poll(self):
         try:
-            return self._queue.get_nowait()
+            return self._queue.get_nowait()[:2]
         except queue.Empty:
             return None

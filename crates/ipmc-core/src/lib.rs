@@ -15,6 +15,10 @@ pub mod commands;
 pub mod dispatch;
 /// dupcache -- duplicate-request cache holding answered responses for IPMB_DUP_WINDOW_MS.
 pub mod dupcache;
+/// event_enable -- the per-sensor event enables.
+pub mod event_enable;
+/// ext -- the extension hook: the Tier-2/3 commands and their poll hook.
+pub mod ext;
 /// fru_state -- the FRU 0 Operational State machine.
 pub mod fru_state;
 /// identity -- the device identity the IPMC reports.
@@ -25,12 +29,18 @@ pub mod ipmb;
 pub mod link;
 /// queue -- fixed-capacity egress queue of response frames.
 pub mod queue;
+/// requester -- the IPMB requester: the one request this IPMC sends at a time (Tier-2/3).
+pub mod requester;
+/// reset_gate -- when a pending processor reset may run.
+pub mod reset_gate;
 /// sdr -- the Device SDR repository and its reservation.
 pub mod sdr;
 /// selftest -- the startup self test and the result Get Self Test Results reports.
 pub mod selftest;
 /// sensor -- Tier-1 sensor data types and Get Sensor Reading encoders.
 pub mod sensor;
+/// tier -- the choices derived from the Tier the IPMC reports.
+pub mod tier;
 /// trace -- the trace hook, a sink for single formatted lines.
 pub mod trace;
 

@@ -6,6 +6,7 @@
 //! frames the IPMC transmits. The line protocol is documented in the crate documentation.
 
 use crate::emulator::{EmuConfig, EmuError, Emulator};
+use crate::replay::is_request_frame;
 use crate::trace::Hex;
 use crate::vectors::{self, VectorErrorKind, LINE_MAX_CHARS};
 use core::fmt::Arguments;
@@ -93,6 +94,16 @@ pub fn parse_client_line(line: &str) -> Result<Option<ClientMsg>, String> {
         ("#quit", []) => Ok(Some(ClientMsg::Quit)),
         _ => Err("unknown message".to_string()),
     }
+}
+
+/// is_request_line -- true when the protocol line `A <hex>` / `B <hex>` is a request the IPMC
+/// originated (Tier 2 and 3: a Platform Event to the Event Receiver), told from a response by the
+/// one classification `replay::is_request_frame`. False for responses and for `#` lines.
+pub fn is_request_line(line: &str) -> bool {
+    matches!(
+        parse_client_line(line),
+        Ok(Some(ClientMsg::Frame(_, bytes))) if is_request_frame(&bytes)
+    )
 }
 
 /// LineTrace -- collects the emulator's trace lines for the client; discards them when off.
@@ -415,9 +426,12 @@ mod tests {
         format!("{bus} {}", Hex(&frame[..len]))
     }
 
-    /// frames_out -- the `A`/`B` lines of an output batch.
+    /// frames_out -- the `A`/`B` response lines of an output batch (the IPMC's own requests, sent
+    /// at Tier 2 and 3, are no responses).
     fn frames_out(out: &[String]) -> Vec<&String> {
-        out.iter().filter(|l| !l.starts_with('#')).collect()
+        out.iter()
+            .filter(|l| !l.starts_with('#') && !is_request_line(l))
+            .collect()
     }
 
     /// run_ms -- steps the board once per millisecond from `from` to `to` (exclusive).

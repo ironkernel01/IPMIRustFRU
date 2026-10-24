@@ -11,6 +11,7 @@ cortex-m-rt = "=0.7.7"
 heapless = { version = "=0.8.0", default-features = false }
 ipmc-core = { path = "../ipmc-core" }
 ipmc-defs = { path = "../ipmc-defs" }
+ipmc-ext = { path = "../ipmc-ext" }
 ipmc-fru = { path = "../ipmc-fru" }
 ipmc-menu = { path = "../ipmc-menu" }
 ipmc-sensors = { path = "../ipmc-sensors", features = ["stm32f401"] }
@@ -25,3 +26,7 @@ debug = true
 
 [profile.dev.package."*"]
 opt-level = "z"
+
+[lints.rust]
+# ipmc_eval is set by build.rs for the evaluation build (IPMC_EVAL=1).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipmc_eval)"] }

@@ -353,6 +353,18 @@ impl Console {
         self.ctx.ipmb.service();
     }
 
+    /// service_fru_log -- the FRU save step alone, for the stopped evaluation image.
+    #[cfg(ipmc_eval)]
+    pub fn service_fru_log(&mut self) {
+        self.ctx.ipmb.service_fru_log();
+    }
+
+    /// stop_ipmb_for_eval -- the evaluation build's end of period: both IPMB slaves off.
+    #[cfg(ipmc_eval)]
+    pub fn stop_ipmb_for_eval(&mut self) {
+        self.ctx.ipmb.stop_for_eval();
+    }
+
     /// banner -- prints the start-up banner (the first prompt follows from `prompt`).
     pub fn banner(&self) {
         let profile = if cfg!(debug_assertions) {
@@ -363,6 +375,11 @@ impl Console {
         out!("\n");
         print_version();
         out!("Build:        {}\n", profile);
+        #[cfg(ipmc_eval)]
+        out!(
+            "EVALUATION BUILD: the IPMB stops after {} minutes\n",
+            ipmc_defs::IPMC_EVAL_MINUTES
+        );
         out!("Last reset:   {}\n", self.ctx.reset_cause.text());
         print_clock(&self.ctx);
         print_ga(&self.ctx.ipmb.dispatch().addr);

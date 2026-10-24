@@ -13,6 +13,23 @@ include!(concat!(env!("OUT_DIR"), "/ipmi_defs.rs"));
 // Compile-time type and {0, 1} assertions for every define (types.rs).
 mod types;
 
+/// TIER23_BUILT -- true when build.rs found the Tier-2/3 extension folder (or IPMC_TIER23=1
+/// demanded it) and compiled its header into these constants; false in the Tier-1 build.
+/// The bridge crate `ipmc-ext` selects the extension from the same detection.
+pub const TIER23_BUILT: bool = cfg!(tier23);
+
+// The guards of the Tier-2/3 defines live with that header in the extension folder.
+#[cfg(tier23)]
+#[rustfmt::skip] // formatted by the Tier23 gate; absent, rustfmt cannot open it
+#[path = "../../../../IPMIRustFRU_Tier23/defs_guards.rs"]
+mod tier23_guards;
+
+// IPMC_TIER comes from ipmi_defs_tier23.h, or is 1 when the extension is not built.
+const _: () = assert!(
+    IPMC_TIER >= 1 && IPMC_TIER <= 3,
+    "IPMC_TIER must be 1, 2 or 3 (VITA 46.11 section 4)"
+);
+
 // The alternatives carry their documented values: a collapsed pair (both 0) would make the `==`
 // checks below select the first.
 const _: () = assert!(
@@ -100,6 +117,25 @@ const _: () = assert!(
 const _: () = assert!(
     IPMB_TX_RETRIES >= 3 && IPMB_TX_RETRIES <= 10,
     "IPMB_TX_RETRIES must be 3..=10 (VITA 46.11 retry count C1)"
+);
+// VITA 46.11 Table 4.1.1-1 and Rules 4.1.1-9, 4.1.1-10: a request this IPMC sends waits T3max =
+// 250 ms for its response, T6 spaces the retries (60..250 ms), the retry count C1 is 3..10 and
+// successive new requests are at least T4 = 5 ms apart.
+const _: () = assert!(
+    IPMB_REQ_TIMEOUT_MS >= 60 && IPMB_REQ_TIMEOUT_MS <= 250,
+    "IPMB_REQ_TIMEOUT_MS must be 60..=250 (VITA 46.11 Rule 4.1.1-9 T3max, Table 4.1.1-1 T6)"
+);
+const _: () = assert!(
+    IPMB_REQ_RETRIES >= 3 && IPMB_REQ_RETRIES <= 10,
+    "IPMB_REQ_RETRIES must be 3..=10 (VITA 46.11 Rule 4.1.1-10 retry count C1)"
+);
+const _: () = assert!(
+    IPMB_REQ_GAP_MS >= 5,
+    "IPMB_REQ_GAP_MS must be at least 5 (VITA 46.11 Table 4.1.1-1 T4)"
+);
+const _: () = assert!(
+    IPMC_RESET_WAIT_MS >= 1 && IPMC_RESET_WAIT_MS <= 5_000,
+    "IPMC_RESET_WAIT_MS must be 1..=5000"
 );
 const _: () = assert!(
     IPMB_INGRESS_DEPTH >= 1 && IPMB_INGRESS_DEPTH <= 32,

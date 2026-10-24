@@ -20,6 +20,20 @@ DISCOVERY_TRIES_DEFAULT = 2
 # ten seconds is enough cycles to see the readings settle.
 POLL_S_DEFAULT = 1.0
 DURATION_S_DEFAULT = 10.0
+# Time after a Cold Reset (--cold-reset-recovery-s, seconds from the request) in which the IPMC
+# must answer again: until then a timeout is an expected loss, after it a timeout is a lost
+# reading, and the run needs at least one answered reading inside it. Five seconds is the
+# restart (IPMC_RESET_WAIT_MS at most, then the boot) with margin.
+COLD_RESET_RECOVERY_S = 5.0
+# Tier of the Chassis Manager (--cm-tier): 2 is an Event Receiver and answers Platform Event with
+# 00h; 1 is not (Rule 7-2) and answers C1h. The bench default is the richer behaviour.
+CM_TIER_DEFAULT = 2
+# Platform Event frames to leave unanswered (--withhold-events), so a run can prove that the
+# IPMC retries with the same sequence number: none unless asked.
+WITHHOLD_EVENTS_DEFAULT = 0
+# The run loop receives for at most this long between looks at the bus queues, so a request to
+# the Chassis Manager is answered within the requester's response wait (T5) and not a poll later.
+SERVICE_PERIOD_S = 0.010
 # Read FRU Data and Get Device SDR chunk size in bytes (the captured Chassis Manager's).
 CHUNK_BYTES = 16
 # Bound on the SDR next-ID walk, so a looping repository ends the walk.
@@ -37,9 +51,6 @@ EMU_HOST = "127.0.0.1"
 EMU_START_TIMEOUT_S = 180.0
 # Wait for the new board's `#ready` after `#reset`.
 EMU_RESET_TIMEOUT_S = 5.0
-# After `#ready`, time for python-ipmi's receiver threads to hand the frames the old board sent
-# before the reset to the collector, so the drain that follows removes them.
-RESET_SETTLE_S = 0.05
 # Socket read granularity of the emulator reader thread, and the connect / `#ready` waits.
 EMU_RECV_TIMEOUT_S = 0.2
 EMU_READY_TIMEOUT_S = 5.0

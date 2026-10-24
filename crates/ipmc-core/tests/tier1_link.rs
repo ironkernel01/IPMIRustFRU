@@ -3,7 +3,7 @@
 // and multi-message SDR reads whose chunks arrive on alternating buses.
 
 mod common;
-use common::{Answer, Rig};
+use common::{by_tier, sensor0, Answer, Rig};
 use ipmc_core::addr;
 use ipmc_core::ipmb::{NETFN_GROUP_EXT, NETFN_SE};
 use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
@@ -53,9 +53,14 @@ fn set_ipmb_state_enables_b_like_the_captured_chassis_manager() {
     assert_eq!((answer.cc, answer.data.len()), (CC_OK, 0));
     assert!(rig.link.bus_state(Bus::A).enabled());
     assert!(rig.link.bus_state(Bus::B).enabled());
-    // The IPMB Link sensor now reads both enabled and in local control: 88h 40h 08h.
+    // The IPMB Link sensor now reads both enabled and in local control: 88h, status, 08h; the
+    // status byte has bit 7 (events enabled) set at Tier-2/3.
     let reading = rig.send(Bus::B, NETFN_SE, 0x2D, &[1]);
-    assert_eq!((reading.cc, reading.data), (CC_OK, vec![0x88, 0x40, 0x08]));
+    let status = by_tier([0x40, 0xC0, 0xC0]);
+    assert_eq!(
+        (reading.cc, reading.data),
+        (CC_OK, vec![0x88, status, 0x08])
+    );
 }
 
 #[test]
@@ -81,6 +86,7 @@ fn a_refused_set_ipmb_state_leaves_the_buses_alone() {
         LinkConfig {
             b_fitted: false,
             tx_policy: TxPolicy::Alternate,
+            requests_allowed: false,
         },
         &addr::resolve(0x7F),
     );
@@ -99,13 +105,6 @@ fn a_retried_set_ipmb_state_is_replayed_and_not_applied_twice() {
     assert_eq!((retry.cc, retry.data), (CC_OK, first.data));
     assert_eq!(rig.link.counters(Bus::B).replays, 1);
 }
-
-/// Sensor 0's record (IPMI v2.0 Table 43-2), written out for the comparison below.
-const SENSOR0: [u8; 41] = [
-    0x00, 0x00, 0x51, 0x02, 0x24, 0x82, 0x00, 0x00, 0xA0, 0x60, 0x01, 0x43, 0xF0, 0x6F, 0x00, 0x00,
-    0x00, 0x00, 0x53, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC9,
-    b'F', b'R', b'U', b' ', b'S', b't', b'a', b't', b'e',
-];
 
 fn sdr_request(reservation: [u8; 2], id: u16, offset: u8, count: u8) -> Vec<u8> {
     let [id_lo, id_hi] = id.to_le_bytes();
@@ -134,7 +133,7 @@ fn an_sdr_record_reads_back_across_both_buses_with_one_reservation() {
         assert_eq!(&answer.data[..2], &[0x01, 0x00]);
         record.extend_from_slice(&answer.data[2..]);
     }
-    assert_eq!(record, SENSOR0);
+    assert_eq!(record, sensor0());
     // A second Reserve, from the other bus, makes the first reservation stale (C5h) on both.
     let second = rig.send(Bus::B, NETFN_SE, RESERVE_DEVICE_SDR, &[]);
     assert_eq!(second.data, vec![0x02, 0x00]);

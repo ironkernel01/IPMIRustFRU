@@ -13,6 +13,9 @@ NETFN_GROUP_EXTENSION = 0x2C  # VITA 46.11 request NetFn (Table 10.1.2-1); the r
 
 VSO_ID = 0x03  # VITA 46.11 group-extension identifier (section 10.1.2)
 
+CMD_SET_EVENT_RECEIVER = 0x00  # NetFn 04h (IPMI v2.0 section 29.1)
+CMD_PLATFORM_EVENT = 0x02  # NetFn 04h (IPMI v2.0 section 29.3): sent to the Event Receiver
+CMD_COLD_RESET = 0x02  # NetFn 06h (IPMI v2.0 section 20.2)
 CMD_GET_DEVICE_ID = 0x01
 CMD_GET_SELF_TEST_RESULTS = 0x04
 CMD_GET_DEVICE_SDR_INFO = 0x20
@@ -162,6 +165,9 @@ def decode_plain(rsp: bytes) -> str:
 
 
 COMMANDS = {
+    (NETFN_SENSOR, CMD_SET_EVENT_RECEIVER): ("Set Event Receiver", decode_plain),
+    (NETFN_SENSOR, CMD_PLATFORM_EVENT): ("Platform Event", decode_plain),
+    (NETFN_APP, CMD_COLD_RESET): ("Cold Reset", decode_plain),
     (NETFN_APP, CMD_GET_DEVICE_ID): ("Get Device ID", decode_device_id),
     (NETFN_APP, CMD_GET_SELF_TEST_RESULTS): ("Get Self Test Results", decode_self_test),
     (NETFN_SENSOR, CMD_GET_DEVICE_SDR_INFO): ("Get Device SDR Info", decode_sdr_info),

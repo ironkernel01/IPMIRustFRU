@@ -1,7 +1,8 @@
 """ipmc_emu_interface.py - python-ipmi IPMB transport into `ipmc-emu serve`.
 
 One `EmuConnection` is one TCP connection to the emulator. A reader thread splits the received
-lines and queues each IPMC frame by its bus tag. `IpmcEmuInterface` is one bus over that
+lines and queues each IPMC frame by its bus tag, with the epoch of the board that sent it (the
+count of `#ready` lines so far). `IpmcEmuInterface` is one bus over that
 connection: a subclass of python-ipmi's `IpmbInterface`, so the Chassis Manager drives it like the
 `aardvark` interface. The line protocol is documented in the ipmc-emu crate documentation
 (`crates/ipmc-emu/src/lib.rs`).
@@ -27,6 +28,18 @@ CONTROL_PREFIX = "#"
 ADDRESS_SHIFT = 1
 
 
+class EpochFrame(bytes):
+    """An IPMC frame with the epoch of the board that sent it. The receiver (a router such as
+    `cm_link.FrameCollector`) reads `epoch` to refuse a frame of a board that was reset away."""
+
+    epoch: int
+
+    def __new__(cls, data: bytes, epoch: int) -> "EpochFrame":
+        frame = super().__new__(cls, data)
+        frame.epoch = epoch
+        return frame
+
+
 class EmuConnection:
     """A TCP connection to `ipmc-emu serve`, shared by the per-bus interfaces."""
 
@@ -34,8 +47,13 @@ class EmuConnection:
         self._sock = socket.create_connection((host, port), timeout=EMU_CONNECT_TIMEOUT_S)
         self._sock.settimeout(EMU_RECV_TIMEOUT_S)
         self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self._queues = {tag: queue.Queue() for tag in BUS_TAGS}
+        self._queues = {tag: queue.Queue() for tag in BUS_TAGS}  # (epoch, frame) per bus
         self._ready = threading.Event()
+        # Boards seen so far: the reader thread counts the `#ready` lines, and every frame line
+        # it queues carries the count at that point. The emulator writes its lines in order on
+        # one stream, so a frame's epoch is decided in the one reader thread, whatever the
+        # timing of the threads that deliver the frames later.
+        self._epoch = 0
         self.own_address: int | None = None
         self.errors: list[str] = []
         self.traces: list[str] = []
@@ -61,33 +79,32 @@ class EmuConnection:
         with self._write_lock:
             self._sock.sendall(data)
 
+    @property
+    def epoch(self) -> int:
+        """The number of `#ready` lines seen: the epoch of the board now running. After `reset`
+        returns it is the epoch of the new board."""
+        return self._epoch
+
     def reset(self, timeout: float = EMU_READY_TIMEOUT_S) -> int:
         """Power-cycle the emulated board (`#reset`) and wait for its new `#ready` line; returns
-        the IPMC's own IPMB address (8-bit form). Frames the old board sent before the reset may
-        still sit in the bus queues, or in a receiver thread that already took them; the caller
-        calls `drain_frames` after the receivers had time to deliver them."""
+        the IPMC's own IPMB address (8-bit form). Frames of the old board stay in the queues with
+        their old epoch; the receiver of the frames drops them by epoch (`epoch` after this call
+        is the new board's, `FrameCollector.drop_before`), and every frame after the `#ready` is
+        the new board's (a Tier-2/3 IPMC transmits its first event at once)."""
         self._ready.clear()
         self.write_line("#reset")
         return self.wait_ready(timeout)
-
-    def drain_frames(self) -> None:
-        """Drop every frame waiting in the per-bus queues (the one way to discard frames of a
-        board that was reset)."""
-        for frames in self._queues.values():
-            while True:
-                try:
-                    frames.get_nowait()
-                except queue.Empty:
-                    break
 
     def set_bus_down(self, bus: str, down: bool) -> None:
         """Break or repair `bus` in the emulator (`#bus A down` / `#bus A up`)."""
         self.write_line(f"#bus {bus} {'down' if down else 'up'}")
 
-    def read_frame(self, bus: str, timeout: float) -> bytes | None:
-        """The next IPMC frame received for `bus`, or None after `timeout` seconds."""
+    def read_frame(self, bus: str, timeout: float) -> EpochFrame | None:
+        """The next IPMC frame received for `bus` with its epoch, or None after `timeout`
+        seconds."""
         try:
-            return self._queues[bus].get(timeout=timeout)
+            epoch, frame = self._queues[bus].get(timeout=timeout)
+            return EpochFrame(frame, epoch)
         except queue.Empty:
             if self.closed_by_peer:
                 raise ConnectionError("ipmc-emu serve closed the connection") from None
@@ -123,6 +140,7 @@ class EmuConnection:
     def _on_line(self, line: str) -> None:
         if line.startswith(READY_PREFIX):
             self.own_address = int(line[len(READY_PREFIX):], 16)
+            self._epoch += 1
             self._ready.set()
         elif line.startswith(ERROR_PREFIX):
             self.errors.append(line)
@@ -135,7 +153,7 @@ class EmuConnection:
             except ValueError:  # a bad hex token or a value above FFh: keep the reader running
                 logger.warning("ipmc-emu: bad frame line %r", line)
                 return
-            self._queues[line[0]].put(frame)
+            self._queues[line[0]].put((self._epoch, frame))
         elif line:
             logger.warning("ipmc-emu: unrecognised line %r", line)
 
@@ -176,3 +194,8 @@ class IpmcEmuInterface(IpmbInterface):
 
     def _read_frame(self, timeout: float) -> bytes | None:
         return self.connection.read_frame(self.bus, timeout)
+
+    def _receive_frame(self, frame: bytes) -> None:
+        """Pass the received frame, epoch attribute included, to the router (python-ipmi's
+        version copies it into a plain `bytes`)."""
+        self.router.handle_frame(self, frame)

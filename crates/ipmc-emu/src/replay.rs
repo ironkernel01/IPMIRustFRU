@@ -12,9 +12,10 @@ use crate::vectors::Vector;
 use core::fmt;
 use ipmc_core::commands;
 use ipmc_core::dispatch::cc;
-use ipmc_core::ipmb::{self, Header};
+use ipmc_core::ipmb::{self, Header, IPMB_MAX_LEN, NETFN_SE};
 use ipmc_core::link::{FrameDrop, TxPolicy, TX_RETRIES};
 use ipmc_core::queue::Bus;
+use ipmc_core::requester;
 use ipmc_core::trace::Trace;
 use std::collections::BTreeMap;
 
@@ -27,7 +28,17 @@ const REPORT_LINES_MAX: usize = ipmc_defs::IPMC_EMU_REPORT_LINES_MAX as usize;
 /// DRAIN_ATTEMPTS_MAX -- bound on transmissions drained after one request: the first attempt and
 /// TX_RETRIES resends of the one response a request produces, with margin for a replayed
 /// duplicate.
-const DRAIN_ATTEMPTS_MAX: usize = 2 * (TX_RETRIES as usize + 1);
+const DRAIN_ATTEMPTS_MAX: usize = 2 * (TX_RETRIES as usize + 1) + REQUEST_ATTEMPTS_MAX;
+/// REQUEST_ATTEMPTS_MAX -- bound on transmissions drained after one request that the IPMC's own
+/// requests add: one request with every retry, twice (an event raised by the poll and one the
+/// answer to it releases).
+const REQUEST_ATTEMPTS_MAX: usize = 2 * requester::MAX_TRANSMISSIONS as usize;
+/// EVENT_RECEIVER_ADDR -- IPMB address (8-bit form) of the Event Receiver, the Chassis Manager
+/// (VITA 46.11 Rule 7-5).
+const EVENT_RECEIVER_ADDR: u8 = 0x20;
+/// PLATFORM_EVENT_CMD -- Platform Event Message, command 02h of NetFn Sensor/Event (IPMI v2.0
+/// Table G-1).
+const PLATFORM_EVENT_CMD: u8 = 0x02;
 /// NOT_IMPLEMENTED_NAME -- row name of a command the COMMANDS table does not hold: dispatch
 /// answers it C1h, and the names come only from that table (no second name list).
 const NOT_IMPLEMENTED_NAME: &str = "(not implemented)";
@@ -167,6 +178,12 @@ pub struct ReplayReport {
     pub malformed: u32,
     /// Vector line numbers of the first malformed frames, at most REPORT_LINES_MAX.
     pub malformed_lines: Vec<usize>,
+    /// Requests the IPMC originated (Tier 2 and 3), each transmission that was delivered; the
+    /// replay answers them as the Chassis Manager's Event Receiver (00h to a Platform Event
+    /// for 20h, C1h to any other).
+    pub ipmc_requests: u32,
+    /// Of `ipmc_requests`, the Platform Event Messages addressed to the Event Receiver.
+    pub events: u32,
 }
 
 impl ReplayReport {
@@ -243,6 +260,18 @@ impl ReplayReport {
             t.bus_not_fitted,
             self.bus_differs,
             self.malformed
+        ) + &self.requests_text()
+    }
+
+    /// requests_text -- ` ipmc_requests=N events=M` for the summary line; empty when the IPMC
+    /// sent no request of its own (Tier 1), so a Tier-1 line reads as before.
+    fn requests_text(&self) -> String {
+        if self.ipmc_requests == 0 {
+            return String::new();
+        }
+        format!(
+            " ipmc_requests={} events={}",
+            self.ipmc_requests, self.events
         )
     }
 }
@@ -322,6 +351,13 @@ impl fmt::Display for ReplayReport {
                 f,
                 "responses on another bus than captured: {} (informational)",
                 self.bus_differs
+            )?;
+        }
+        if self.ipmc_requests > 0 {
+            writeln!(
+                f,
+                "IPMC requests answered as the Event Receiver: {} ({} Platform Events)",
+                self.ipmc_requests, self.events
             )?;
         }
         write!(f, "malformed frames: {}", self.malformed)?;
@@ -428,6 +464,8 @@ pub fn replay(
         fail_every: options.fail_every,
         malformed: 0,
         malformed_lines: Vec::new(),
+        ipmc_requests: 0,
+        events: 0,
     };
     let mut attempts: u32 = 0;
     for (index, v) in vectors.iter().enumerate() {
@@ -539,21 +577,72 @@ fn empty_bus(bus: Bus) -> BusSummary {
     }
 }
 
-/// looks_like_request_to -- a frame whose first byte is `own` and whose NetFn is even (a
-/// request); used only for frames `ipmb::parse` rejected.
+/// is_request_frame -- the classification of a frame the IPMC transmits, `ipmb::is_request_frame`:
+/// an even NetFn is a request the IPMC originated (Tier 2 and 3), an odd one the response to a
+/// request it received.
+pub use ipmc_core::ipmb::is_request_frame;
+
+/// looks_like_request_to -- a frame whose first byte is `own` and that is a request; used only
+/// for frames `ipmb::parse` rejected.
 fn looks_like_request_to(bytes: &[u8], own: u8) -> bool {
-    const NETFN_SHIFT: u32 = 2;
-    bytes.first() == Some(&own)
-        && bytes
-            .get(1)
-            .is_some_and(|b| (b >> NETFN_SHIFT).is_multiple_of(2))
+    bytes.first() == Some(&own) && is_request_frame(bytes)
+}
+
+/// event_receiver_answer -- the completion code the replay answers the IPMC's request `frame`
+/// with, as the captured Chassis Manager's Event Receiver: 00h for a Platform Event addressed to
+/// 20h, C1h for anything else. Also whether it was a Platform Event.
+fn event_receiver_answer(request: &ipmb::Frame) -> (u8, bool) {
+    let h = &request.header;
+    if h.dest == EVENT_RECEIVER_ADDR && h.netfn == NETFN_SE && h.cmd == PLATFORM_EVENT_CMD {
+        (cc::OK, true)
+    } else {
+        (cc::INVALID_CMD, false)
+    }
+}
+
+/// answer_request -- feeds the Event Receiver's response to the IPMC request `bytes` (delivered
+/// on `bus`) back through the Link on that bus at `at_ms`, polls, and counts it in `report`.
+fn answer_request(
+    emu: &mut Emulator,
+    bus: Bus,
+    bytes: &[u8],
+    at_ms: u32,
+    report: &mut ReplayReport,
+    trace: &mut dyn Trace,
+) {
+    let Ok(request) = ipmb::parse(bytes) else {
+        return;
+    };
+    let (code, is_event) = event_receiver_answer(&request);
+    report.ipmc_requests += 1;
+    report.events += u32::from(is_event);
+    let Ok(header) = ipmb::response_header_for(&request) else {
+        return;
+    };
+    let mut out = [0u8; IPMB_MAX_LEN];
+    let Ok(len) = ipmb::encode_response(&header, code, &[], &mut out) else {
+        return;
+    };
+    let frame = out.get(..len).unwrap_or_default();
+    trace.line(format_args!(
+        "rx IPMB-{} t={} ms: {}",
+        bus.name(),
+        at_ms,
+        Hex(frame)
+    ));
+    if let Err(drop) = emu.rx(bus, frame, at_ms) {
+        trace.line(format_args!("rx dropped: {}", drop.name()));
+    }
+    emu.poll(at_ms, trace);
 }
 
 /// drain -- takes every frame the emulator wants transmitted, reporting each transmission done
 /// at `request_ms` + TX_DONE_DELAY_MS (failed for every `fail_every`th one). Returns the
 /// responses completed: one entry per response that a transmission delivered, with the bus and
 /// bytes of that successful attempt. A response whose every attempt failed has no entry (it is
-/// lost, and the link counts it in tx_dropped).
+/// lost, and the link counts it in tx_dropped). A request the IPMC originated (`is_request_frame`)
+/// is no response: it is answered as the Event Receiver (`answer_request`) and counted in
+/// `report`.
 fn drain(
     emu: &mut Emulator,
     request_ms: u32,
@@ -589,7 +678,10 @@ fn drain(
         if emu.tx_done(bus, ok, done_ms, trace).is_err() {
             break;
         }
-        if ok {
+        if ok && is_request_frame(&bytes) {
+            // Its own request, not an answer: the Event Receiver answers it one step later.
+            answer_request(emu, bus, &bytes, done_ms.saturating_add(1), report, trace);
+        } else if ok {
             sent.push(Sent { bus, bytes });
         }
         failed_bus = (!ok).then_some(bus);

@@ -83,10 +83,17 @@ fn requests_and_responses_pair_up_on_the_same_bus() {
 
 /// Get Device ID data per owner decision 1, typed from IPMI v2.0 Table 20-2: device ID 01h,
 /// revision 80h (provides Device SDRs), firmware 0 / 01h BCD, IPMI 02h, support 09h (FRU
-/// inventory + sensor device), manufacturer 000000h, product 494Bh little-endian, aux 0.
-const DEVICE_ID_DATA: [u8; 15] = [
-    0x01, 0x80, 0x00, 0x01, 0x02, 0x09, 0x00, 0x00, 0x00, 0x4B, 0x49, 0x00, 0x00, 0x00, 0x00,
-];
+/// inventory + sensor device), manufacturer 000000h, product 494Bh little-endian, aux 0. From
+/// Tier 2 the support byte adds Event Generator (bit 5, Rule 7-3), at Tier 3 SEL Device (bit 2,
+/// Rule 7-8).
+fn device_id_data() -> [u8; 15] {
+    let support = 0x09
+        | (u8::from(ipmc_defs::IPMC_TIER >= 2) << 5)
+        | (u8::from(ipmc_defs::IPMC_TIER >= 3) << 2);
+    [
+        0x01, 0x80, 0x00, 0x01, 0x02, support, 0x00, 0x00, 0x00, 0x4B, 0x49, 0x00, 0x00, 0x00, 0x00,
+    ]
+}
 
 /// The oracle for the response addressing is the captured controller's own response to the
 /// same request: our response header must match it field for field. Every request is
@@ -134,7 +141,7 @@ fn dispatcher_answers_every_captured_request() {
             }
             Some(row) if (row.netfn, row.cmd) == (0x06, 0x01) => {
                 assert_eq!(resp.completion_code, Some(cc::OK));
-                assert_eq!(resp.data, &DEVICE_ID_DATA[..]);
+                assert_eq!(resp.data, &device_id_data()[..]);
                 device_ids += 1;
             }
             // Completion codes of the implemented commands are checked in tier1_replay.rs, which

@@ -46,6 +46,13 @@
 //! | NoCap | the emulator answered, the file holds no response to compare |
 //! | NoBus | the request arrived on a bus that is not fitted in this build; expected, not a fault |
 //!
+//! At Tier 2 and 3 the IPMC sends requests of its own (Platform Event to the Event Receiver at
+//! 20h). A frame the IPMC transmits with an even NetFn is such a request (`replay::is_request_frame`,
+//! the one classification), an odd one is a response. The replay is no answer-count for a request:
+//! it plays the Chassis Manager's Event Receiver, answers a Platform Event with 00h and any other
+//! request with C1h one step later on the bus it left on, and reports `ipmc_requests` and `events`
+//! (in the summary line and the report only when nonzero, so a Tier-1 report is unchanged).
+//!
 //! Under the table the report prints these lines. Each states a designed behaviour of the
 //! changed conditions, not a defect:
 //!

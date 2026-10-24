@@ -11,22 +11,28 @@
 //! second oracle; every place this file differs from its records is listed here:
 //!
 //! - Entity instance 60h (device-relative, Rule 6.4.3-5); the capture has 00h.
-//! - Sensor initialization 01h (scanning on at power-up, events off) and capabilities 43h (auto
-//!   re-arm, no hysteresis, no thresholds, no events from the sensor: a Tier-1 IPMC generates
-//!   none, Rule 7-4); the capture has 00h and 68h, whose threshold-access field 10b is reserved.
-//! - Assertion and deassertion event masks 0000h (no events) and the reading mask LS byte first
-//!   (Table 43-2: "LS byte first"); the capture writes the masks MS byte first and the reading
-//!   mask 0000h.
+//! - Sensor initialization and capabilities by Tier (`tier.rs`). Tier-1: 01h (scanning on at
+//!   power-up, events off) and 43h (auto re-arm, no hysteresis, no thresholds, no events from the
+//!   sensor: a Tier-1 IPMC generates none, Rule 7-4). Tier-2/3: 03h (events on at power-up) and
+//!   capabilities 42h (Tier-2, event message control 10b: global disable only) or 40h (Tier-3,
+//!   00b: per-state enable, Set Sensor Event Enable). The capture has 00h and 68h, whose
+//!   threshold-access field 10b is reserved.
+//! - Assertion and deassertion event masks LS byte first (Table 43-2: "LS byte first"): 0000h at
+//!   Tier-1 (no events); at Tier-2/3 the offsets the IPMC sends events for (`SENSORS`). The
+//!   reading mask is also LS byte first; the capture writes the masks MS byte first and the
+//!   reading mask 0000h.
 //! - Units 1 is C0h (Table 43-2: bits 7:6 "write as 11b"), share count 1; the capture has 00h and 0.
 //! - The record length byte counts exactly the bytes that follow (27 + N for a compact record,
 //!   11 + N for the locator); the capture's compact records carry two extra 00h bytes after the
 //!   ID string, its locator record one, and the length byte counts them.
 //! - The type 12h record: both follow the Table 43-8 layout (three reserved bytes before the
-//!   entity ID); ours has global initialization 01b (events off), device capabilities 0Bh and
+//!   entity ID); ours has global initialization 01b (events off; 00b at Tier-2/3, event message
+//!   generation enabled), device capabilities 0Bh (Get Device ID's additional support plus the
+//!   Device SDR bit: bit 5 IPMB Event Generator from Tier-2, bit 2 SEL Device at Tier-3) and
 //!   entity instance 60h where the capture has 00h, 3Dh and 00h.
 
 use crate::fru_state::State;
-use crate::identity::DEVICE_IDENTITY;
+use crate::identity::{additional_support, DEVICE_IDENTITY};
 use crate::sensor::{
     EVENT_TYPE_LIMIT, EVENT_TYPE_PREDICTIVE_FAILURE, EVENT_TYPE_SENSOR_SPECIFIC, EVENT_TYPE_STATE,
     SENSOR_FRU_HEALTH, SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE,
@@ -36,6 +42,7 @@ use crate::sensor::{
     SENSOR_TYPE_SYSTEM_IPMB_LINK, TEMP_FLAG_LC, TEMP_FLAG_LNC, TEMP_FLAG_UC, TEMP_FLAG_UNC,
     TEMP_FLAG_UNR,
 };
+use crate::tier;
 use ipmc_wire::Builder;
 
 /// SENSOR_COUNT -- the mandatory sensors on FRU 0, sensor numbers 0..=6 (Table 10.2-1; sensor 7,
@@ -69,18 +76,30 @@ const ENTITY_INSTANCE_DEVICE_RELATIVE: u8 = 0x60;
 /// SENSOR_INIT_SCANNING_ON -- Sensor Initialization byte, bit 0: sensor scanning enabled at
 /// power-up (Table 43-2); the other bits are 0 because no init agent configures the sensors.
 const SENSOR_INIT_SCANNING_ON: u8 = 1 << 0;
-/// SENSOR_CAPS_AUTO_REARM_NO_EVENTS -- Sensor Capabilities byte: bit 6 auto re-arm, hysteresis
-/// 00b, thresholds 00b, event message control 11b = no events from the sensor (Table 43-2).
-const SENSOR_CAPS_AUTO_REARM_NO_EVENTS: u8 = (1 << 6) | 0b11;
+/// SENSOR_INIT_EVENTS_ON -- Sensor Initialization byte, bit 1: event generation enabled at
+/// power-up (Table 43-2); set when the IPMC generates events (Tier-2/3).
+const SENSOR_INIT_EVENTS_ON: u8 = 1 << 1;
+/// SENSOR_CAPS_AUTO_REARM -- Sensor Capabilities byte: bit 6 auto re-arm, hysteresis 00b,
+/// thresholds 00b; bits 1:0 (event message control) are added per Tier (Table 43-2).
+const SENSOR_CAPS_AUTO_REARM: u8 = 1 << 6;
+/// EVENT_CONTROL_NONE -- event message control 11b: no events from the sensor (Tier-1).
+const EVENT_CONTROL_NONE: u8 = 0b11;
+/// EVENT_CONTROL_GLOBAL -- event message control 10b: the global disable only (Tier-2).
+const EVENT_CONTROL_GLOBAL: u8 = 0b10;
+/// EVENT_CONTROL_PER_STATE -- event message control 00b: each state can be enabled (Tier-3).
+const EVENT_CONTROL_PER_STATE: u8 = 0b00;
 /// UNITS1_RESERVED -- Sensor Units 1: bits 7:6 "reserved, write as 11b", no rate, modifier or
 /// percentage (Table 43-2).
 const UNITS1_RESERVED: u8 = 0b1100_0000;
 /// SHARE_COUNT_ONE -- Table 43-2 sensor direction/instance modifier byte: share count 1, one
 /// sensor per record, no direction, numeric modifier.
 const SHARE_COUNT_ONE: u8 = 1;
-/// LOCATOR_GLOBAL_INIT -- Table 43-8 byte 8: static controller bit 5 clear (dynamic), global
+/// LOCATOR_INIT_EVENTS_OFF -- Table 43-8 byte 8: static controller bit 5 clear (dynamic), global
 /// initialization bits 1:0 = 01b: event message generation disabled (a Tier-1 IPMC sends none).
-const LOCATOR_GLOBAL_INIT: u8 = 0b01;
+const LOCATOR_INIT_EVENTS_OFF: u8 = 0b01;
+/// LOCATOR_INIT_EVENTS_ON -- the same byte with bits 1:0 = 00b: event message generation
+/// enabled (Tier-2/3).
+const LOCATOR_INIT_EVENTS_ON: u8 = 0b00;
 /// DEVICE_SUPPORT_SDR_BIT -- Table 43-8 byte 9 bit 1: "controller accepts Device SDR commands";
 /// the same fact as the Device Revision "provides Device SDRs" bit of Get Device ID.
 const DEVICE_SUPPORT_SDR_BIT: u8 = 1 << 1;
@@ -95,6 +114,10 @@ struct SensorDef {
     event_type: u8,
     /// Reading mask: bit n set when state n can be returned in Get Sensor Reading byte 4.
     reading_mask: u16,
+    /// Assertion event mask: bit n set when the IPMC sends an event for entering state n.
+    assertion_mask: u16,
+    /// Deassertion event mask: bit n set when the IPMC sends an event for leaving state n.
+    deassertion_mask: u16,
     name: &'static str,
 }
 
@@ -115,6 +138,17 @@ const MASK_TEMPERATURE: u16 =
     (TEMP_FLAG_LNC | TEMP_FLAG_LC | TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 const MASK_TWO_STATES: u16 = 0x0003;
 
+/// Event masks, the offsets the IPMC sends events for at Tier-2/3 (written 0000h at Tier-1):
+/// - FRU State: every reachable state entry (Rule 4.1.5.2-1), `MASK_FRU_STATE`.
+/// - IPMB Link: offsets 0..=3 (Rule 9.3-7); offsets 4 and 5 are FAST-MODE (Tier-3, later).
+/// - Health, Voltage: the new state offset is asserted (Tables 10.2.3-2, 10.2.4-2).
+/// - Temperature: offsets 3, 4, 5 asserted on crossing and deasserted when it clears (Rules
+///   4.1.7-4, -6, -8).
+/// - Payload Test Results and Status: the state never changes on this module.
+const EVENTS_NONE: u16 = 0;
+const EVENTS_IPMB_LINK: u16 = 0x000F;
+const EVENTS_TEMPERATURE: u16 = (TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
+
 /// SENSORS -- sensors 0..=6 in number order; the record ID of a sensor equals its number.
 const SENSORS: [SensorDef; SENSOR_COUNT] = [
     SensorDef {
@@ -122,6 +156,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_FRU_STATE,
         event_type: EVENT_TYPE_SENSOR_SPECIFIC,
         reading_mask: MASK_FRU_STATE,
+        assertion_mask: MASK_FRU_STATE,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_FRU_STATE_NAME,
     },
     SensorDef {
@@ -129,6 +165,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_SYSTEM_IPMB_LINK,
         event_type: EVENT_TYPE_SENSOR_SPECIFIC,
         reading_mask: MASK_IPMB_LINK,
+        assertion_mask: EVENTS_IPMB_LINK,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_IPMB_LINK_NAME,
     },
     SensorDef {
@@ -136,6 +174,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_FRU_HEALTH,
         event_type: EVENT_TYPE_PREDICTIVE_FAILURE,
         reading_mask: MASK_TWO_STATES,
+        assertion_mask: MASK_TWO_STATES,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_FRU_HEALTH_NAME,
     },
     SensorDef {
@@ -143,6 +183,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_FRU_VOLTAGE,
         event_type: EVENT_TYPE_LIMIT,
         reading_mask: MASK_TWO_STATES,
+        assertion_mask: MASK_TWO_STATES,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_FRU_VOLTAGE_NAME,
     },
     SensorDef {
@@ -150,6 +192,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_FRU_TEMPERATURE,
         event_type: EVENT_TYPE_SENSOR_SPECIFIC,
         reading_mask: MASK_TEMPERATURE,
+        assertion_mask: EVENTS_TEMPERATURE,
+        deassertion_mask: EVENTS_TEMPERATURE,
         name: ipmc_defs::IPMC_SDR_FRU_TEMP_NAME,
     },
     SensorDef {
@@ -157,6 +201,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_PAYLOAD_TEST_RESULTS,
         event_type: EVENT_TYPE_PREDICTIVE_FAILURE,
         reading_mask: MASK_TWO_STATES,
+        assertion_mask: EVENTS_NONE,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_PAYLOAD_RESULTS_NAME,
     },
     SensorDef {
@@ -164,6 +210,8 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         sensor_type: SENSOR_TYPE_PAYLOAD_TEST_STATUS,
         event_type: EVENT_TYPE_STATE,
         reading_mask: MASK_TWO_STATES,
+        assertion_mask: EVENTS_NONE,
+        deassertion_mask: EVENTS_NONE,
         name: ipmc_defs::IPMC_SDR_PAYLOAD_STATUS_NAME,
     },
 ];
@@ -196,22 +244,66 @@ const fn finish_record(mut record: Record) -> Record {
     record
 }
 
+/// sensor_init -- Sensor Initialization byte (Table 43-2 byte 11) at `tier`.
+const fn sensor_init(tier: u32) -> u8 {
+    if tier::event_generator(tier) {
+        SENSOR_INIT_SCANNING_ON | SENSOR_INIT_EVENTS_ON
+    } else {
+        SENSOR_INIT_SCANNING_ON
+    }
+}
+
+/// sensor_capabilities -- Sensor Capabilities byte (Table 43-2 byte 12) at `tier`: the event
+/// message control of Tier-1 (none), Tier-2 (global disable only) or Tier-3 (per state).
+const fn sensor_capabilities(tier: u32) -> u8 {
+    let control = if !tier::event_generator(tier) {
+        EVENT_CONTROL_NONE
+    } else if tier::per_state_event_enables(tier) {
+        EVENT_CONTROL_PER_STATE
+    } else {
+        EVENT_CONTROL_GLOBAL
+    };
+    SENSOR_CAPS_AUTO_REARM | control
+}
+
+/// event_masks_of -- (assertion, deassertion) masks of `def` at `tier`: 0000h unless the IPMC
+/// generates events.
+const fn event_masks_of(tier: u32, def: &SensorDef) -> (u16, u16) {
+    if tier::event_generator(tier) {
+        (def.assertion_mask, def.deassertion_mask)
+    } else {
+        (0, 0)
+    }
+}
+
+/// event_masks -- (assertion, deassertion) event masks of sensor `number` (0..SENSOR_COUNT) at
+/// `tier`, the values the SDR record carries and the power-up event enables start from
+/// (`event_enable`); None for a number outside the table.
+pub(crate) const fn event_masks(tier: u32, number: usize) -> Option<(u16, u16)> {
+    if number < SENSORS.len() {
+        Some(event_masks_of(tier, &SENSORS[number]))
+    } else {
+        None
+    }
+}
+
 /// compact_record -- the type 02h record of `def` owned by the controller at `owner_address`
 /// (the 8-bit IPMB address: bits 7:1 are the 7-bit slave address, bit 0 = 0 "IPMB slave address",
 /// Table 43-2 byte 6).
-const fn compact_record(id: u16, owner_address: u8, def: &SensorDef) -> Record {
+const fn compact_record(id: u16, owner_address: u8, tier: u32, def: &SensorDef) -> Record {
+    let (assertion, deassertion) = event_masks_of(tier, def);
     let mut r = start_record(id, RECORD_TYPE_COMPACT);
     r.push(owner_address); // 5: sensor owner ID
     r.push(0); // 6: channel 0, FRU inventory device owner LUN 0, sensor owner LUN 0
     r.push(def.number); // 7: sensor number
     r.push(ENTITY_ID_VPX_MODULE); // 8
     r.push(ENTITY_INSTANCE_DEVICE_RELATIVE); // 9
-    r.push(SENSOR_INIT_SCANNING_ON); // 10
-    r.push(SENSOR_CAPS_AUTO_REARM_NO_EVENTS); // 11
+    r.push(sensor_init(tier)); // 10
+    r.push(sensor_capabilities(tier)); // 11
     r.push(def.sensor_type); // 12
     r.push(def.event_type); // 13
-    r.push_all(&0u16.to_le_bytes()); // 14..=15: assertion event mask, no events
-    r.push_all(&0u16.to_le_bytes()); // 16..=17: deassertion event mask, no events
+    r.push_all(&assertion.to_le_bytes()); // 14..=15: assertion event mask
+    r.push_all(&deassertion.to_le_bytes()); // 16..=17: deassertion event mask
     r.push_all(&def.reading_mask.to_le_bytes()); // 18..=19: reading mask
     r.push(UNITS1_RESERVED); // 20: sensor units 1
     r.push(0); // 21: base unit, none
@@ -227,13 +319,18 @@ const fn compact_record(id: u16, owner_address: u8, def: &SensorDef) -> Record {
 }
 
 /// locator_record -- the type 12h management controller device locator record (Table 43-8).
-const fn locator_record(id: u16, owner_address: u8) -> Record {
-    let capabilities = DEVICE_IDENTITY.additional_support
+const fn locator_record(id: u16, owner_address: u8, tier: u32) -> Record {
+    let capabilities = additional_support(tier)
         | (((DEVICE_IDENTITY.device_revision >> REVISION_SDRS_SHIFT) & 1) * DEVICE_SUPPORT_SDR_BIT);
+    let global_init = if tier::event_generator(tier) {
+        LOCATOR_INIT_EVENTS_ON
+    } else {
+        LOCATOR_INIT_EVENTS_OFF
+    };
     let mut r = start_record(id, RECORD_TYPE_MC_LOCATOR);
     r.push(owner_address); // 5: device slave address
     r.push(0); // 6: channel 0 (the System IPMB)
-    r.push(LOCATOR_GLOBAL_INIT); // 7: power state notification, global initialization
+    r.push(global_init); // 7: power state notification, global initialization
     r.push(capabilities); // 8: device capabilities, as Get Device ID reports them
     r.push_all(&[0, 0, 0]); // 9..=11: reserved
     r.push(ENTITY_ID_VPX_MODULE); // 12: entity ID of the FRU this device manages
@@ -243,8 +340,9 @@ const fn locator_record(id: u16, owner_address: u8) -> Record {
     finish_record(r)
 }
 
-/// build_records -- the eight records: sensors 0..=6 as record IDs 0..=6, the locator as 7.
-const fn build_records(owner_address: u8) -> [Record; RECORD_COUNT] {
+/// build_records -- the eight records at `tier`: sensors 0..=6 as record IDs 0..=6, the locator
+/// as 7.
+const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT] {
     let mut records = [EMPTY_RECORD; RECORD_COUNT];
     let mut i = 0;
     while i < SENSOR_COUNT {
@@ -252,20 +350,20 @@ const fn build_records(owner_address: u8) -> [Record; RECORD_COUNT] {
             SENSORS[i].number as usize == i,
             "the sensor table is in number order"
         );
-        records[i] = compact_record(i as u16, owner_address, &SENSORS[i]);
+        records[i] = compact_record(i as u16, owner_address, tier, &SENSORS[i]);
         i += 1;
     }
-    records[SENSOR_COUNT] = locator_record(SENSOR_COUNT as u16, owner_address);
+    records[SENSOR_COUNT] = locator_record(SENSOR_COUNT as u16, owner_address, tier);
     records
 }
 
 // Builds every record once at compile time: an ID string outside 2..=16 bytes, a record past
 // RECORD_MAX or an out-of-order sensor table fails the build here.
-const _: [Record; RECORD_COUNT] = build_records(0x82);
+const _: [Record; RECORD_COUNT] = build_records(0x82, ipmc_defs::IPMC_TIER);
 // ipmi_defs.h IPMC_SDR_IPMC_NAME: the locator record fits one Get Device SDR response, the
 // response data less the 2-byte next record ID (Table 35-3), so a "whole record" read works.
 const _: () = assert!(
-    locator_record(0, 0x82).len() + NO_NEXT_RECORD.to_le_bytes().len()
+    locator_record(0, 0x82, ipmc_defs::IPMC_TIER).len() + NO_NEXT_RECORD.to_le_bytes().len()
         <= crate::ipmb::IPMB_RESPONSE_DATA_MAX,
     "IPMC_SDR_IPMC_NAME is too long for the locator record to fit one Get Device SDR response"
 );
@@ -319,8 +417,14 @@ pub struct SdrRepository {
 impl SdrRepository {
     /// new -- the repository for the controller at `owner_address` (8-bit IPMB address).
     pub const fn new(owner_address: u8) -> SdrRepository {
+        SdrRepository::for_tier(owner_address, ipmc_defs::IPMC_TIER)
+    }
+
+    /// for_tier -- the repository as a Tier-`tier` IPMC describes itself (`new` passes the
+    /// build's `IPMC_TIER`); the Tier changes the event bytes of the records, not their lengths.
+    pub const fn for_tier(owner_address: u8, tier: u32) -> SdrRepository {
         SdrRepository {
-            records: build_records(owner_address),
+            records: build_records(owner_address, tier),
             reservation: 0,
         }
     }
@@ -453,9 +557,26 @@ mod tests {
 
     #[test]
     fn sensor_zero_and_the_locator_are_byte_exact() {
+        // The constants above are the Tier-1 records; Tier-2/3 differ in the sensor initialization
+        // (byte 10), capabilities (byte 11) and assertion mask (bytes 14..16) of sensor 0 and in
+        // the locator's global initialization (byte 7) and capabilities (byte 8).
+        let tier = ipmc_defs::IPMC_TIER as usize - 1;
+        let (init, caps, assertion) = [
+            (0x01, 0x43, 0x0000u16),
+            (0x03, 0x42, 0x0053),
+            (0x03, 0x40, 0x0053),
+        ][tier];
+        let (global_init, locator_caps) = [(0x01, 0x0B), (0x00, 0x2B), (0x00, 0x2F)][tier];
+        let mut sensor0 = SENSOR0;
+        sensor0[10] = init;
+        sensor0[11] = caps;
+        sensor0[14..16].copy_from_slice(&assertion.to_le_bytes());
+        let mut locator = LOCATOR;
+        locator[7] = global_init;
+        locator[8] = locator_caps;
         let r = repo();
-        assert_eq!(r.record(0).unwrap(), &SENSOR0);
-        assert_eq!(r.record(7).unwrap(), &LOCATOR);
+        assert_eq!(r.record(0).unwrap(), &sensor0);
+        assert_eq!(r.record(7).unwrap(), &locator);
     }
 
     #[test]
@@ -471,6 +592,19 @@ mod tests {
             (5, 0xF4, 0x04, 0x0003, "Payload Results"),
             (6, 0xF5, 0x03, 0x0003, "Payload Status"),
         ];
+        // Sensor initialization and capabilities (bytes 10, 11) per Tier, and the event masks
+        // (bytes 14..18: assertion, deassertion) of sensors 0..=6 at Tier-2/3 (Tier-1: all zero).
+        let tier = ipmc_defs::IPMC_TIER as usize - 1;
+        let (init, caps) = [(0x01, 0x43), (0x03, 0x42), (0x03, 0x40)][tier];
+        let masks: [[u8; 4]; 7] = [
+            [0x53, 0x00, 0x00, 0x00],
+            [0x0F, 0x00, 0x00, 0x00],
+            [0x03, 0x00, 0x00, 0x00],
+            [0x03, 0x00, 0x00, 0x00],
+            [0x38, 0x00, 0x38, 0x00],
+            [0; 4],
+            [0; 4],
+        ];
         let r = repo();
         for (id, (number, ty, ev, mask, name)) in expect.into_iter().enumerate() {
             let b = r.record(id as u16).unwrap();
@@ -485,9 +619,13 @@ mod tests {
             assert_eq!(b[5], OWNER, "sensor owner is our IPMB address");
             assert_eq!((b[6], b[7]), (0, number));
             assert_eq!((b[8], b[9]), (0xA0, 0x60));
-            assert_eq!((b[10], b[11]), (0x01, 0x43));
+            assert_eq!((b[10], b[11]), (init, caps));
             assert_eq!((b[12], b[13]), (ty, ev));
-            assert_eq!(&b[14..18], &[0, 0, 0, 0], "no event masks");
+            assert_eq!(
+                &b[14..18],
+                &[[0; 4], masks[id], masks[id]][tier],
+                "event masks"
+            );
             assert_eq!(u16::from_le_bytes([b[18], b[19]]), mask);
             assert_eq!(&b[20..23], &[0xC0, 0, 0]);
             assert_eq!(b[23], 1);
@@ -495,6 +633,63 @@ mod tests {
             assert_eq!(b[31], 0xC0 | name.len() as u8);
             assert_eq!(&b[32..], name.as_bytes());
         }
+    }
+
+    #[test]
+    fn event_bytes_follow_the_tier() {
+        // Per tier: sensor initialization (byte 10), capabilities (byte 11), the locator global
+        // initialization (byte 7) and capabilities (byte 8); literals from IPMI v2.0 Tables 43-2
+        // and 43-8, with the offsets of the VITA masks table in the module comment.
+        // (tier, init, capabilities, locator global init, locator capabilities)
+        let tiers = [
+            (1u32, 0x01u8, 0x43u8, 0x01u8, 0x0Bu8),
+            (2, 0x03, 0x42, 0x00, 0x2B),
+            (3, 0x03, 0x40, 0x00, 0x2F),
+        ];
+        // (assertion, deassertion) of sensors 0..=6 at Tier-2/3.
+        let masks: [(u16, u16); 7] = [
+            (0x0053, 0),
+            (0x000F, 0),
+            (0x0003, 0),
+            (0x0003, 0),
+            (0x0038, 0x0038),
+            (0, 0),
+            (0, 0),
+        ];
+        for (tier, init, caps, global_init, locator_caps) in tiers {
+            let r = SdrRepository::for_tier(OWNER, tier);
+            for (id, (assertion, deassertion)) in masks.into_iter().enumerate() {
+                let b = r.record(id as u16).unwrap();
+                assert_eq!((b[10], b[11]), (init, caps), "tier {tier} sensor {id}");
+                let (want_a, want_d) = if tier == 1 {
+                    (0, 0)
+                } else {
+                    (assertion, deassertion)
+                };
+                assert_eq!(
+                    u16::from_le_bytes([b[14], b[15]]),
+                    want_a,
+                    "tier {tier} sensor {id} assertion"
+                );
+                assert_eq!(
+                    u16::from_le_bytes([b[16], b[17]]),
+                    want_d,
+                    "tier {tier} sensor {id} deassertion"
+                );
+                assert_eq!(usize::from(b[4]), b.len() - 5, "length unchanged by tier");
+            }
+            let l = r.record(7).unwrap();
+            assert_eq!(
+                (l[7], l[8]),
+                (global_init, locator_caps),
+                "tier {tier} locator"
+            );
+            assert_eq!(l.len(), LOCATOR.len(), "tier {tier} locator length");
+        }
+        assert_eq!(
+            SdrRepository::new(OWNER).record(0),
+            SdrRepository::for_tier(OWNER, ipmc_defs::IPMC_TIER).record(0)
+        );
     }
 
     #[test]

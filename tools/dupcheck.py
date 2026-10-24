@@ -3,8 +3,13 @@
 Usage:
     python -I tools/dupcheck.py                scan crates/ and gate
     python -I tools/dupcheck.py --self-test    prove the scanner on a built-in fixture
-    python -I tools/dupcheck.py --root DIR     scan another tree
+    python -I tools/dupcheck.py --root DIR     scan only another tree
     python -I tools/dupcheck.py --test-ratio R explore with a lower test threshold (not the gate)
+
+Tier-2/3 extension
+    Without --root, the sibling folder ../IPMIRustFRU_Tier23/crates is scanned together with crates/
+    when it exists, so a pair across the two repositories counts; its paths print as
+    IPMIRustFRU_Tier23/crates/... . With --root only that tree is scanned.
 
 What it does
     Every `.rs` file under crates/ (skipping target/) is lexed as Rust (string, raw string, byte string,
@@ -46,6 +51,7 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+TIER23_FOLDER = "IPMIRustFRU_Tier23"  # sibling folder of the private Tier-2/3 extension
 PROD_RATIO, PROD_TOK = 0.85, 30
 TEST_RATIO, TEST_TOK = 0.92, 25
 MIN_BODY = min(PROD_TOK, TEST_TOK)
@@ -416,7 +422,11 @@ def run(fns, skipped, label, blocks=()):
     return 1 if pairs else 0
 
 
-def scan(root):
+def scan(root, base=None):
+    """Functions, skipped-table count and blocks of the .rs files under root; paths print relative to
+    base (default: the parent of a folder named crates, else root itself)."""
+    if base is None:
+        base = os.path.dirname(root) if os.path.basename(root) == "crates" else root
     fns, skipped, blocks = [], 0, []
     for d, dirs, files in os.walk(root):
         dirs[:] = [x for x in dirs if x != "target"]
@@ -425,7 +435,7 @@ def scan(root):
                 path = os.path.join(d, f)
                 with open(path, encoding="utf-8") as fh:
                     src = fh.read()
-                rel = os.path.relpath(path, os.path.dirname(root) if os.path.basename(root) == "crates" else root)
+                rel = os.path.relpath(path, base)
                 got, sk, blk = extract(rel.replace(os.sep, "/"), src, os.sep + "tests" + os.sep in path)
                 fns += got
                 blocks += blk
@@ -523,12 +533,23 @@ def main(argv):
     if "--self-test" in argv:
         return self_test()
     global TEST_RATIO
-    root = "crates"
+    roots = [("crates", None)]
     if "--root" in argv:
-        root = argv[argv.index("--root") + 1]
+        roots = [(argv[argv.index("--root") + 1], None)]
+    else:
+        tier23 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", TIER23_FOLDER, "crates")
+        if os.path.isdir(tier23):
+            tier23 = os.path.normpath(tier23)
+            roots.append((tier23, os.path.dirname(os.path.dirname(tier23))))
     if "--test-ratio" in argv:  # exploration only: look for weaker test duplicates
         TEST_RATIO = float(argv[argv.index("--test-ratio") + 1])
-    fns, skipped, blocks = scan(root)
+    fns, skipped, blocks = [], 0, []
+    for root, base in roots:
+        got, sk, blk = scan(root, base)
+        fns += got
+        skipped += sk
+        blocks += blk
+        print("scanned %s: %d functions" % (root, len(got)))
     return run(fns, skipped, "dupcheck", blocks)
 
 
