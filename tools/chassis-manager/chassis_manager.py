@@ -11,7 +11,10 @@ Steps (each logged with a timestamp, the request and response bytes and the deco
   4 SDR              Get Device SDR Info, Reserve, every record by its next-ID chain, decode
   5 polling          Get Sensor Reading for every sensor each --poll-s for --duration-s, Get Self
                      Test Results once; only changes are printed
-The request policy (T3 timeout, C1 retries, same sequence number, bus alternation) is cm_link.py.
+The request policy (T3 timeout, C1 retries, same sequence number, bus alternation) is cm_link.py;
+the tool-chosen values are cm_settings.py. The exit status is 0 only when every check the run
+lists in its summary passed (discovery, capabilities, locator, FRU complete and decoded, SDR walk,
+polling).
 Run `python chassis_manager.py --help`; the README has the venv command line.
 """
 
@@ -27,30 +30,31 @@ from pathlib import Path
 
 from cm_commands import (
     CC_OK, CMD_GET_DEVICE_ID, CMD_GET_DEVICE_LOCATOR_RECORD_ID, CMD_GET_DEVICE_SDR,
-    CMD_GET_DEVICE_SDR_INFO, CMD_GET_FRU_AREA_INFO, CMD_GET_SELF_TEST_RESULTS, CMD_GET_SENSOR_READING, CMD_GET_VSO_CAPABILITIES,
-    CMD_READ_FRU_DATA, CMD_RESERVE_DEVICE_SDR, CMD_SET_IPMB_STATE, IPMB_STATE_LOCAL_CONTROL,
-    IPMB_STATE_NO_CHANGE, IPMB_STATE_OVERRIDE, NETFN_APP, NETFN_GROUP_EXTENSION, NETFN_SENSOR,
-    NETFN_STORAGE, VSO_ID, command_name, decode_response, ipmb_interfaces, locator_record_id,
+    CMD_GET_DEVICE_SDR_INFO, CMD_GET_FRU_AREA_INFO, CMD_GET_SELF_TEST_RESULTS,
+    CMD_GET_SENSOR_READING, CMD_GET_VSO_CAPABILITIES, CMD_READ_FRU_DATA, CMD_RESERVE_DEVICE_SDR,
+    CMD_SET_IPMB_STATE, IPMB_STATE_LOCAL_CONTROL, IPMB_STATE_NO_CHANGE, IPMB_STATE_OVERRIDE,
+    NETFN_APP, NETFN_GROUP_EXTENSION, NETFN_SENSOR, NETFN_STORAGE, VSO_ID, command_name,
+    decode_response, fru_access_unit, ipmb_interfaces, locator_record_id,
 )
 from cm_link import C1_MAX, C1_MIN, CM_ADDRESS_DEFAULT, T3_MAX_S, FrameCollector, Link
+from cm_settings import (
+    AARDVARK_PORT_DEFAULT, AARDVARK_PULLUPS_DEFAULT, BUS_FAIL_STREAK_DEFAULT, CHUNK_BYTES,
+    DISCOVERY_TRIES_DEFAULT, DURATION_S_DEFAULT, POLL_S_DEFAULT, SDR_RECORDS_MAX,
+)
 
 # Slot addressing (Rule 4.1.4.1.2-1, Rule 4.1.4.2-2): slot N is hardware address 40h + N, IPMB
 # address 2 x that: slot 1 = 82h ... slot 31 = BEh.
 SLOT_FIRST, SLOT_LAST = 1, 31
 IPMB_ADDRESS_OF_SLOT_0 = 0x80
 
-CHUNK_BYTES = 16  # Read FRU Data and Get Device SDR chunk size (the captured Chassis Manager's)
 SDR_HEADER_BYTES = 5  # record ID (2), version, type, length
 SDR_NEXT_NONE = 0xFFFF  # next-record ID after the last record (IPMI v2.0 section 33.12)
-SDR_RECORDS_MAX = 256  # bound on the next-ID walk
 SDR_TYPES_WITH_SENSOR = (0x01, 0x02)  # full and compact sensor records
 SDR_TYPE_MC_LOCATOR = 0x12  # Management Controller Device Locator record (IPMI v2.0 Table 37-8)
 FRU_DEVICE_ID_IPMC = 0  # the IPMC's own FRU (VITA 46.11 section 10.1.3.11)
 CC_RESERVATION_CANCELLED = 0xC5
 FRU_OFFSET_BYTES = 2  # Read FRU Data offset, LS byte first
 
-DISCOVERY_TRIES_DEFAULT = 1  # probes per address; an empty slot never answers
-BUS_FAIL_STREAK_DEFAULT = 2  # tool choice: consecutive suspect timeouts before a bus is failed
 IPMI_DEFS = Path(__file__).resolve().parents[2] / "ipmi_defs.h"
 
 
@@ -84,8 +88,24 @@ class Session:
     def __init__(self, link: Link, log: RunLog, args) -> None:
         self.link, self.log, self.args = link, log, args
         self.ipmcs: dict = {}
-        self.poll_stats = {"cycles": 0, "readings": 0, "lost_readings": 0, "late_cycles": 0}
-        self._announced: set = set()
+        self.poll_stats = {"cycles": 0, "readings": 0, "lost_readings": 0, "late_cycles": 0,
+                           "bad_completion_codes": 0, "sensors": 0}
+        self.checks: list = []  # every pass/fail result that decides the exit status
+        self._announced: set = set()  # (dest, bus) pairs already told to use the other bus
+
+    def check(self, name: str, ok: bool, detail: str = "", dest: int | None = None) -> bool:
+        """Record one result that decides the exit status, and log it."""
+        where = "" if dest is None else f" of {dest:02X}h"
+        self.checks.append({"dest": None if dest is None else f"0x{dest:02X}", "name": name,
+                            "ok": bool(ok), "detail": detail})
+        self.log.line(f"check {name}{where}: {'PASS' if ok else 'FAIL'}"
+                      + (f" ({detail})" if detail else ""))
+        return bool(ok)
+
+    def check_cc(self, name: str, ex, dest: int) -> bool:
+        """Check a mandatory command: it answered with completion code 00h."""
+        detail = ("timed out" if ex.timed_out else f"completion code {ex.completion_code:02X}h")
+        return self.check(name, not ex.timed_out and ex.completion_code == CC_OK, detail, dest)
 
     def ask(self, dest: int, netfn: int, cmd: int, data: bytes = b"", *, show: bool = True,
             quiet: bool = False, **kwargs):
@@ -98,13 +118,17 @@ class Session:
         return ex
 
     def _announce_failed_buses(self) -> None:
-        """Section 9.3: tell every IPMC to use the other bus exclusively (Set IPMB State)."""
-        for bus in sorted(self.link.failed - self._announced):
-            self._announced.add(bus)
-            self.log.line(f"IPMB-{bus} marked failed ({self.link.bus_fail_streak} timeouts "
-                          f"answered on the other bus); directing traffic to IPMB-"
-                          f"{self.link.usable_buses()[0]}")
-            for dest in self.ipmcs:
+        """Section 9.3: tell an IPMC whose bus failed to use the other bus exclusively (Set IPMB
+        State to that IPMC only: a bus failed for one target is not failed for another)."""
+        for dest in list(self.ipmcs):
+            for bus in sorted(self.link.failed_for(dest)):
+                if (dest, bus) in self._announced:
+                    continue
+                self._announced.add((dest, bus))
+                self.log.line(f"IPMB-{bus} marked failed for {dest:02X}h "
+                              f"({self.link.bus_fail_streak} timeouts answered on the other "
+                              f"bus); directing its traffic to IPMB-"
+                              f"{self.link.usable_buses(dest)[0]}")
                 states = [IPMB_STATE_NO_CHANGE, IPMB_STATE_NO_CHANGE]
                 states[0 if bus == "A" else 1] = IPMB_STATE_OVERRIDE
                 self.ask(dest, NETFN_GROUP_EXTENSION, CMD_SET_IPMB_STATE,
@@ -126,11 +150,13 @@ class Session:
                 continue
             for ex in (direct, broadcast):
                 self.log.exchange(ex)
-            if not direct.timed_out and direct.completion_code == CC_OK:
+            # An IPMC that answers only one of the two forms is discovered too (Rule 5.2.2-1).
+            if any(not ex.timed_out and ex.completion_code == CC_OK for ex in (direct, broadcast)):
                 found.append(dest)
                 self.ipmcs[dest] = {"address": f"0x{dest:02X}"}
         self.log.line("no response from: " + (" ".join(f"{a:02X}h" for a in silent) or "none"))
         self.log.line("found: " + (" ".join(f"{a:02X}h" for a in found) or "none"))
+        self.check("discovery found an IPMC", bool(found))
         return found
 
     # ---- step 2 ----
@@ -140,7 +166,7 @@ class Session:
         caps = self.ask(dest, NETFN_GROUP_EXTENSION, CMD_GET_VSO_CAPABILITIES, bytes([VSO_ID]))
         info = self.ipmcs[dest]
         info["vso_capabilities"] = caps.response.hex(" ")
-        if caps.timed_out or caps.completion_code != CC_OK:
+        if not self.check_cc("Get VSO Capabilities", caps, dest):
             return
         interfaces = ipmb_interfaces(caps.response)
         info["ipmb_interfaces"] = interfaces
@@ -152,8 +178,9 @@ class Session:
             return
         state = self.ask(dest, NETFN_GROUP_EXTENSION, CMD_SET_IPMB_STATE,
                          bytes([VSO_ID, IPMB_STATE_NO_CHANGE, IPMB_STATE_LOCAL_CONTROL]))
+        self.check_cc("Set IPMB State (enable IPMB-B)", state, dest)
         if not state.timed_out and state.completion_code == CC_OK:
-            self.link.enable_bus("B")
+            self.link.enable_bus("B", dest)
             info["ipmb_b_enabled"] = True
             self.log.line("IPMB-B enabled: messages alternate between IPMB-A and IPMB-B "
                           "(Rule 5.1.1-5)")
@@ -163,33 +190,48 @@ class Session:
     def read_fru(self, dest: int) -> None:
         self.log.step(f"3 FRU of {dest:02X}h")
         area = self.ask(dest, NETFN_STORAGE, CMD_GET_FRU_AREA_INFO, bytes([0]))
-        if area.timed_out or area.completion_code != CC_OK or len(area.response) < 4:
+        if not self.check_cc("Get FRU Inventory Area Info", area, dest) or len(area.response) < 4:
+            self.check("FRU read complete", False, "no FRU size", dest)
             return
         size = area.response[1] | area.response[2] << 8
+        # IPMI Tables 34-2/34-3: the offset and the count of Read FRU Data are in words when the
+        # device is accessed by words.
+        unit = fru_access_unit(area.response)
         data = bytearray()
         while len(data) < size:
-            count = min(CHUNK_BYTES, size - len(data))
-            offset = len(data).to_bytes(FRU_OFFSET_BYTES, "little")
+            count_bytes = min(CHUNK_BYTES, size - len(data))
+            count = -(-count_bytes // unit)
+            offset = (len(data) // unit).to_bytes(FRU_OFFSET_BYTES, "little")
             chunk = self.ask(dest, NETFN_STORAGE, CMD_READ_FRU_DATA,
                              bytes([0]) + offset + bytes([count]), show=False)
-            got = chunk.response[2:2 + chunk.response[1]] if len(chunk.response) >= 2 else b""
+            got = (chunk.response[2:2 + chunk.response[1] * unit]
+                   if len(chunk.response) >= 2 else b"")
             if chunk.timed_out or chunk.completion_code != CC_OK or not got:
                 self.log.exchange(chunk)
                 break
-            data += got
-        self.log.line(f"read {len(data)} of {size} FRU bytes in {CHUNK_BYTES}-byte chunks")
+            data += got[:size - len(data)]
+        self.log.line(f"read {len(data)} of {size} FRU bytes in {CHUNK_BYTES}-byte chunks, "
+                      f"accessed by {'words' if unit > 1 else 'bytes'}")
+        self.check("FRU read complete", size > 0 and len(data) == size,
+                   f"{len(data)} of {size} bytes", dest)
+        self.ipmcs[dest]["fru_size"] = size
         self.ipmcs[dest]["fru_bytes"] = len(data)
         self.ipmcs[dest]["fru"] = self._decode_fru(bytes(data))
+        self.check("FRU decoded", "error" not in self.ipmcs[dest]["fru"],
+                   self.ipmcs[dest]["fru"].get("error", ""), dest)
 
     def _decode_fru(self, data: bytes) -> dict:
         from pyipmi.errors import DecodingError
         from pyipmi.fru import FruInventory
         try:
             inv = FruInventory(array.array("B", data))
-        except (DecodingError, IndexError) as exc:
+        except (DecodingError, IndexError, AttributeError, ValueError) as exc:
             self.log.line(f"FRU decode failed: {exc}")
             return {"error": str(exc)}
-        head = inv.common_header
+        head = getattr(inv, "common_header", None)
+        if head is None:
+            self.log.line("FRU decode failed: no common header")
+            return {"error": "no common header"}
         self.log.line(f"FRU common header v{head.format_version}: internal use "
                       f"{head.internal_use_area_offset}, chassis {head.chassis_info_area_offset}, "
                       f"board {head.board_info_area_offset}, product "
@@ -217,9 +259,12 @@ class Session:
     def read_sdr(self, dest: int) -> list:
         from pyipmi.sdr import SdrCommon
         self.log.step(f"4 SDR of {dest:02X}h")
-        self.ask(dest, NETFN_SENSOR, CMD_GET_DEVICE_SDR_INFO)
+        info = self.ask(dest, NETFN_SENSOR, CMD_GET_DEVICE_SDR_INFO)
+        info_ok = self.check_cc("Get Device SDR Info", info, dest)
         reservation = self._reserve(dest)
-        sensors, records, record_id, locator_ids = [], 0, 0, []
+        self.check("Reserve Device SDR Repository", reservation is not None, "", dest)
+        sensors, lengths, record_id, locator_ids = [], [], 0, []
+        walk_complete, id_mismatches = False, 0
         for _ in range(SDR_RECORDS_MAX):
             if reservation is None:
                 break
@@ -231,24 +276,37 @@ class Session:
                 reservation = self._reserve(dest)
                 continue
             decoded = SdrCommon.from_data(list(record))
-            records += 1
+            lengths.append(len(record))
             name = getattr(decoded, "device_id_string", "")
             number = getattr(decoded, "number", None)
             sensor_type = getattr(decoded, "sensor_type_code", None)
-            self.log.line(f"SDR {record_id:04X}h type {decoded.type:02X}h {len(record)} bytes: "
+            self.log.line(f"SDR {decoded.id:04X}h type {decoded.type:02X}h {len(record)} bytes: "
                           + (f"sensor {number} type {sensor_type:02X}h " if number is not None
                              and sensor_type is not None else "") + f'"{name}"')
+            if record_id != 0 and decoded.id != record_id:
+                id_mismatches += 1
+            # The decoded ID of the record header, not the lookup alias (0000h = first record).
             if decoded.type == SDR_TYPE_MC_LOCATOR:
-                locator_ids.append(record_id)
+                locator_ids.append(decoded.id)
             if decoded.type in SDR_TYPES_WITH_SENSOR and number is not None:
                 sensors.append({"number": number, "name": str(name), "type": sensor_type})
             if next_id == SDR_NEXT_NONE:
+                walk_complete = True
                 break
             record_id = next_id
+        records = len(lengths)
         self.ipmcs[dest]["sdr_records"] = records
+        self.ipmcs[dest]["sdr_record_lengths"] = lengths
         self.ipmcs[dest]["sdr_locator_ids"] = locator_ids
         self.ipmcs[dest]["sensors"] = sensors
         self.log.line(f"{records} SDR records read and decoded, {len(sensors)} sensors")
+        self.check("SDR walk complete", walk_complete and records > 0 and id_mismatches == 0,
+                   f"{records} records, {'ended at FFFFh' if walk_complete else 'no end marker'}"
+                   f", {id_mismatches} record ID mismatches", dest)
+        if info_ok and len(info.response) >= 2:
+            self.check("SDR sensor count equals Get Device SDR Info",
+                       len(sensors) == info.response[1],
+                       f"{len(sensors)} read, {info.response[1]} reported", dest)
         return sensors
 
     def locator(self, dest: int) -> None:
@@ -259,7 +317,7 @@ class Session:
         ex = self.ask(dest, NETFN_GROUP_EXTENSION, CMD_GET_DEVICE_LOCATOR_RECORD_ID,
                       bytes([VSO_ID, FRU_DEVICE_ID_IPMC]))
         record = None
-        if not ex.timed_out and ex.completion_code == CC_OK:
+        if self.check_cc("Get Device Locator Record ID", ex, dest):
             record = locator_record_id(ex.response)
         self.ipmcs[dest]["locator_record_id"] = record
 
@@ -269,6 +327,7 @@ class Session:
         info = self.ipmcs[dest]
         record = info["locator_record_id"]
         info["locator_ok"] = record is not None and record in info["sdr_locator_ids"]
+        self.check("device locator record ID matches the SDR", info["locator_ok"], "", dest)
         self.log.line(
             "locator record ID " + ("missing" if record is None else f"{record:04X}h") +
             (" matches" if info["locator_ok"] else " does NOT match") +
@@ -313,8 +372,10 @@ class Session:
         a = self.args
         self.log.step(f"5 polling {dest:02X}h: {len(sensors)} sensors every {a.poll_s} s "
                       f"for {a.duration_s} s")
-        self.ask(dest, NETFN_APP, CMD_GET_SELF_TEST_RESULTS)
+        self.check_cc("Get Self Test Results", self.ask(dest, NETFN_APP, CMD_GET_SELF_TEST_RESULTS),
+                      dest)
         names = {s["number"]: s["name"] for s in sensors}
+        self.poll_stats["sensors"] = len(names)
         last: dict = {}
         start = self.link.now_s()
         fault_at = (a.emu_bus_down_at_s if a.emu_bus_down_at_s is not None
@@ -333,6 +394,8 @@ class Session:
                 state = "timeout" if ex.timed_out else ex.response.hex(" ").upper()
                 if ex.timed_out:
                     self.poll_stats["lost_readings"] += 1
+                elif ex.completion_code != CC_OK:
+                    self.poll_stats["bad_completion_codes"] += 1
                 if last.get(number) != state:
                     last[number] = state
                     self.log.line(f'sensor {number} "{names[number]}": '
@@ -345,6 +408,12 @@ class Session:
                 self.poll_stats["late_cycles"] += 1
             else:
                 time.sleep(max(0.0, slot_end - self.link.now_s()))
+        stats = self.poll_stats
+        self.check("polling answered", stats["cycles"] > 0 and stats["readings"] > 0
+                   and stats["lost_readings"] == 0 and stats["bad_completion_codes"] == 0,
+                   f"{stats['cycles']} cycles, {stats['readings']} readings, "
+                   f"{stats['lost_readings']} lost, {stats['bad_completion_codes']} with an "
+                   f"error completion code", dest)
 
     def link_fault(self, bus: str) -> None:
         """Emulator only: break `bus` (`#bus A down`) to exercise failover."""
@@ -401,6 +470,14 @@ class Session:
             "duration_s": round(self.link.now_s(), 3),
             "buses_enabled": self.link.enabled, "buses_failed": sorted(self.link.failed),
             "ipmcs": list(self.ipmcs.values()), "poll": self.poll_stats, "totals": totals,
+            "run": {"poll_s": self.args.poll_s, "duration_s_requested": self.args.duration_s},
+            "checks": self.checks,
+            "transmissions": [
+                {"dest": e.dest, "buses": "".join(bus for bus, _ in e.tries),
+                 "broadcast": e.broadcast, "timed_out": e.timed_out}
+                for e in self.link.exchanges],
+            "bus_enable_events": [{"after_exchanges": n, "dest": d, "bus": b}
+                                  for n, d, b in self.link.enable_events],
             "commands": commands, "exchanges": list(unique.values()), "sequence": sequence,
         }
 
@@ -428,15 +505,17 @@ def parse_args(argv=None):
     p.add_argument("--transport", choices=("aardvark", "emu"), required=True)
     p.add_argument("--host", default="127.0.0.1", help="emu: ipmc-emu serve host")
     p.add_argument("--port", type=int, default=default_emu_port(), help="emu: ipmc-emu serve TCP port")
-    p.add_argument("--aardvark-port", type=int, default=0, help="aardvark: adapter port number")
+    p.add_argument("--aardvark-port", type=int, default=AARDVARK_PORT_DEFAULT,
+                   help="aardvark: adapter port number")
     p.add_argument("--aardvark-serial", default=None, help="aardvark: adapter serial number")
-    p.add_argument("--aardvark-pullups", type=int, choices=(0, 1), default=1,
+    p.add_argument("--aardvark-pullups", type=int, choices=(0, 1),
+                   default=AARDVARK_PULLUPS_DEFAULT,
                    help="aardvark: enable the I2C pull-ups (target power stays off)")
     p.add_argument("--cm-address", type=lambda s: int(s, 0), default=CM_ADDRESS_DEFAULT,
                    help="requester IPMB address (default 0x20; 0x10 as the captured manager)")
     p.add_argument("--slots", default=None, help="slot numbers to probe, e.g. 1,2 (default 1..31)")
-    p.add_argument("--poll-s", type=float, default=1.0)
-    p.add_argument("--duration-s", type=float, default=10.0)
+    p.add_argument("--poll-s", type=float, default=POLL_S_DEFAULT)
+    p.add_argument("--duration-s", type=float, default=DURATION_S_DEFAULT)
     p.add_argument("--retries", type=int, default=C1_MIN, help=f"{C1_MIN}..{C1_MAX} (VITA C1)")
     p.add_argument("--timeout-s", type=float, default=T3_MAX_S,
                    help=f"response timeout, at most {T3_MAX_S} (VITA T3 max)")
@@ -500,19 +579,24 @@ def run(args) -> int:
             sensors = session.read_sdr(dest)
             session.check_locator(dest)
             session.poll(dest, sensors)
+        late = sum(1 for e in link.exchanges if e.timed_out and e.dest in session.ipmcs)
+        session.check("no request to a found IPMC timed out", late == 0,
+                      f"{late} timeouts")
         summary = session.summary(started)
         t = summary["totals"]
         log.line(f"done: {len(found)} IPMC(s), {t['requests']} requests, {t['retries']} retries, "
                  f"{t['timeouts']} timeouts ({t['timeouts_after_discovery']} to a found IPMC), "
                  f"poll cycles {session.poll_stats['cycles']}, lost readings "
                  f"{session.poll_stats['lost_readings']}")
+        failed = [c for c in session.checks if not c["ok"]]
+        log.line(f"checks: {len(session.checks) - len(failed)} passed, {len(failed)} failed")
+        for c in failed:
+            log.line(f"FAILED: {c['name']} {c['dest'] or ''} {c['detail']}".replace("  ", " "))
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=1)
             log.line(f"summary written to {args.json}")
-        ok = (bool(found) and t["timeouts_after_discovery"] == 0
-              and all(i.get("locator_ok", True) for i in session.ipmcs.values()))
-        return 0 if ok else 1
+        return 0 if not failed else 1
     finally:
         cleanup()
 

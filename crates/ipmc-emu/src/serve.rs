@@ -281,7 +281,7 @@ impl LineSplitter {
 fn serve_client(mut stream: TcpStream, config: &ServeConfig) -> io::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(POLL_PERIOD))?;
-    let start = Instant::now();
+    let mut start = Instant::now();
     let mut board = Board::new(config).map_err(io::Error::other)?;
     let mut out = vec![ready_line(&board)];
     let mut splitter = LineSplitter::default();
@@ -290,13 +290,22 @@ fn serve_client(mut stream: TcpStream, config: &ServeConfig) -> io::Result<()> {
         let read = stream.read(&mut chunk);
         // Taken after the read (which waits up to POLL_PERIOD), so a frame is stamped with its
         // arrival time. Wraps after about 49 days; every compare uses wrapping arithmetic.
-        let now_ms = start.elapsed().as_millis() as u32;
+        let mut now_ms = start.elapsed().as_millis() as u32;
         match read {
             Ok(0) => return Ok(()),
             Ok(n) => {
                 for line in splitter.push(&chunk[..n]) {
                     let keep = match line {
-                        Ok(text) => handle_line(&mut board, config, &text, now_ms, &mut out),
+                        Ok(text) => handle_line(
+                            &mut board,
+                            config,
+                            &text,
+                            &mut Clock {
+                                start: &mut start,
+                                now_ms: &mut now_ms,
+                            },
+                            &mut out,
+                        ),
                         Err(()) => {
                             out.push("#error line too long".to_string());
                             true
@@ -320,13 +329,20 @@ fn serve_client(mut stream: TcpStream, config: &ServeConfig) -> io::Result<()> {
     }
 }
 
-/// handle_line -- one client line: errors answer `#error`, `#reset` rebuilds the board. Returns
-/// false for `#quit`.
+/// Clock -- the session's time origin and the current time in milliseconds since it. A reset
+/// moves the origin to the reset, like a power cycle: the new board's clock starts at zero.
+struct Clock<'a> {
+    start: &'a mut Instant,
+    now_ms: &'a mut u32,
+}
+
+/// handle_line -- one client line: errors answer `#error`, `#reset` rebuilds the board and
+/// restarts the clock at zero. Returns false for `#quit`.
 fn handle_line(
     board: &mut Board,
     config: &ServeConfig,
     text: &str,
-    now_ms: u32,
+    clock: &mut Clock,
     out: &mut Vec<String>,
 ) -> bool {
     match parse_client_line(text) {
@@ -335,13 +351,15 @@ fn handle_line(
             match Board::new(config) {
                 Ok(fresh) => {
                     *board = fresh;
+                    *clock.start = Instant::now();
+                    *clock.now_ms = 0;
                     out.push(ready_line(board));
                 }
                 Err(e) => out.push(format!("#error {}: {e}", echo(text))),
             }
             true
         }
-        Ok(Some(msg)) => board.handle(msg, now_ms),
+        Ok(Some(msg)) => board.handle(msg, *clock.now_ms),
         Err(reason) => {
             out.push(format!("#error {}: {reason}", echo(text)));
             true
@@ -493,6 +511,56 @@ mod tests {
         let mut parts = splitter.push(b"A 82");
         parts.extend(splitter.push(b" 18\r\n"));
         assert_eq!(parts, vec![Ok("A 82 18\r".to_string())]);
+    }
+
+    #[test]
+    fn reset_restarts_the_clock_at_zero_like_a_power_cycle() {
+        let config = config(true);
+        let mut board = Board::new(&config).expect("board");
+        // A session that has run for a long time (past any start-up timeout).
+        let old_ms = ipmc_defs::IPMC_PGOOD_TIMEOUT_MS + 5000;
+        let mut start = Instant::now();
+        if let Some(earlier) = start.checked_sub(Duration::from_millis(u64::from(old_ms))) {
+            start = earlier;
+        }
+        let mut now_ms = old_ms;
+        let before = start;
+        let mut out = Vec::new();
+        let keep = handle_line(
+            &mut board,
+            &config,
+            "#reset",
+            &mut Clock {
+                start: &mut start,
+                now_ms: &mut now_ms,
+            },
+            &mut out,
+        );
+        assert!(keep);
+        assert_eq!(out, vec!["#ready 82".to_string()]);
+        assert_eq!(now_ms, 0, "the new board's clock starts at the reset");
+        assert!(start > before, "the time origin moved to the reset");
+        // The next steps are stamped from the reset: a fresh board waits its whole start-up
+        // interval instead of finding it already expired.
+        let mut out = Vec::new();
+        board.step(now_ms, &mut out);
+        assert!(out.iter().all(|l| !l.contains("timeout")), "{out:?}");
+
+        // Other messages leave the clock alone.
+        let mut now_ms = 1234;
+        let mut start2 = Instant::now();
+        let mut out = Vec::new();
+        handle_line(
+            &mut board,
+            &config,
+            "#bus A down",
+            &mut Clock {
+                start: &mut start2,
+                now_ms: &mut now_ms,
+            },
+            &mut out,
+        );
+        assert_eq!(now_ms, 1234);
     }
 
     #[test]

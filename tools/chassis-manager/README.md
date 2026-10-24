@@ -60,13 +60,25 @@ reads the same define as its default). The line protocol is documented in the
 | `--poll-s`, `--duration-s` | 1.0, 10.0 | polling interval and length |
 | `--retries` | 3 | request retries, 3..10 (C1) |
 | `--timeout-s` | 0.25 | response timeout, at most 0.25 (T3 max) |
-| `--discovery-tries` | 1 | transmissions per discovery probe; an empty slot never answers |
+| `--discovery-tries` | 2 | transmissions per discovery probe; an empty slot never answers |
 | `--bus-fail-streak` | 2 | suspect timeouts in a row before a bus counts as failed |
 | `--emu-bus-down A\|B`, `--emu-bus-down-at-s` | off, half the duration | emu: break a bus during polling |
 | `--json PATH` | none | write the JSON summary |
 
-Exit status 0 when an IPMC answered and no request to a found IPMC timed out, 1
-otherwise.
+Defaults that the tool chooses (failure streak, discovery tries, poll interval and
+duration, chunk size, transport waits) live in `cm_settings.py`, the one settings
+module of the bench tools (shared by the conformance adapter); the options above
+override them.
+
+Exit status 0 when every check of the run passed, 1 otherwise. The log prints each
+check (`check <name> of <address>: PASS|FAIL`) and the summary lists them under
+`checks`: an IPMC discovered (by the direct or the broadcast Get Device ID), Get
+VSO Capabilities, Set IPMB State, Get Device Locator Record ID, Get FRU Inventory
+Area Info, the FRU read complete and decoded, Get Device SDR Info, the reservation,
+the SDR walk complete (ends at FFFFh, every record ID as asked, sensor count equal
+to Get Device SDR Info), the locator record ID found in the SDRs, Get Self Test
+Results, polling (cycles ran, no timeout, no error completion code) and no request to a
+found IPMC timed out.
 
 ## Steps
 
@@ -90,18 +102,19 @@ otherwise.
 
 | Constant | Value | Rule |
 |---|---|---|
-| `T3_MAX_S` | 0.250 s | response time-out, Rule 4.1.1-9 |
+| `T3_MIN_S`, `T3_MAX_S` | 0.060 s, 0.250 s | response time-out, Rule 4.1.1-9; the Chassis Manager refuses a time-out outside the range (unit tests may shorten it with `test_mode`) |
 | `T6_MIN_S` | 0.060 s | time between retries after a failed transmission, Table 4.1.1-1 |
 | `C1_MIN`, `C1_MAX` | 3, 10 | request retry count, Rule 4.1.1-10 |
 | retries keep the sequence number | | Obs 4.1.1-6 |
 | `T9_S` | 5 s | a sequence number is not reused sooner for the same target and command (sequence value expiration, Table 4.1.1-1); such a request waits |
 | retry on the other bus | | Rule 5.1.1-6 |
-| messages alternate between buses | first on IPMB-A | Rule 5.1.1-5 |
-| IPMB-A only until IPMB-B is enabled | | Rule 4.1.8-2 |
+| messages alternate between buses | first on IPMB-A; the next bus follows the last transmission, retries included | Rule 5.1.1-5 |
+| IPMB-A only until IPMB-B is enabled | per target: after its Get VSO Capabilities reported two interfaces and its Set IPMB State succeeded | Rule 4.1.8-2 |
 
 A bus that times out for requests the other bus answers (`--bus-fail-streak`
-times in a row) is marked failed: first tries go to the other bus, and Set IPMB
-State puts the failed bus in Override (section 9.3).
+times in a row) is marked failed for that target: its first tries go to the other
+bus, and Set IPMB State puts the failed bus of that target in Override (section
+9.3). A timeout for one target never marks a bus failed for another.
 
 ## Output
 
@@ -118,7 +131,13 @@ of the responses, and the IPMC's responses to the same requests. Every
 difference prints as `expected:<reason>` (the tables at the top of the file name
 each reason) or `unexpected`; exit status 1 when any is unexpected. A reason
 covers named bytes and bits of a response only; any other differing bit is
-unexpected. When our run's Get VSO Capabilities reports one IPMB interface
+unexpected. A response may lack bytes only past the command's mandatory length
+(`LENGTH_VARIES`); a request answered in one run and timed out in the other, and
+any timeout of ours to the IPMC, is unexpected; a request-count difference is
+expected only when the count it explains is verified from the run data
+(`COUNT_CHECKS`: records and chunks, reservations, poll cycles times sensors,
+FRU chunks); bus alternation is expected only when our consecutive transmissions
+alternate after Set IPMB State. When our run's Get VSO Capabilities reports one IPMB interface
 (IPMB-B not fitted, the bench build), the differences that follow from it (no
 Set IPMB State, the interface count, the IPMB-B half of the IPMB Link sensor,
 every response on IPMB-A) are expected; with two interfaces they are not.

@@ -25,19 +25,18 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "chassis-manager"))
 
-from cm_link import SEQUENCE_MODULUS, FrameCollector  # noqa: E402
+from cm_link import (  # noqa: E402
+    CM_ADDRESS_DEFAULT, SEQUENCE_MODULUS, FrameCollector, frame_payload,
+)
+from cm_settings import (  # noqa: E402
+    EMU_HOST, EMU_RESET_TIMEOUT_S, EMU_START_TIMEOUT_S, OWN_ADDRESS_BENCH, PENDING_FRAMES_KEEP,
+    PENDING_FRAMES_MAX, RECEIVE_TIMEOUT_MS_DEFAULT, RESET_SETTLE_S,
+)
 # The one IPMB checksum and request encoder (python-ipmi's, as the Chassis Manager uses them);
 # `checksum` is also the TRANSPORT.md helper of that name.
 from pyipmi.interfaces.ipmb import IpmbHeaderReq, checksum, encode_ipmb_msg  # noqa: E402,F401
 
-OWN_ADDRESS_BENCH = 0x82  # the IPMC's 8-bit IPMB address on the bench (GA strapped)
-REQUESTER_ADDRESS = 0x20  # Chassis Manager address (Rule 4.1.4.2-5)
-EMU_HOST = "127.0.0.1"
-EMU_START_TIMEOUT_S = 180.0  # first cargo build can be slow
-EMU_RESET_TIMEOUT_S = 5.0
-# RESET_SETTLE_S -- after `#ready`, time for python-ipmi's receiver threads to hand the frames
-# the old board sent before the reset to the collector, so the drain that follows removes them.
-RESET_SETTLE_S = 0.05
+REQUESTER_ADDRESS = CM_ADDRESS_DEFAULT  # Chassis Manager address (Rule 4.1.4.2-5)
 # IPMB header field widths (IPMB v1.0 message format): netFn and rqSeq 6 bits, LUNs 2 bits.
 NETFN_MASK, SEQ_MASK, LUN_MASK = 0x3F, 0x3F, 0x03
 # I2C_STATUS_SLA_NACK -- Aardvark status for an address no device acknowledged (pyaardvark
@@ -112,7 +111,7 @@ class Target:
             return False
         return True
 
-    def receive(self, bus=None, timeout_ms=250):
+    def receive(self, bus=None, timeout_ms=RECEIVE_TIMEOUT_MS_DEFAULT):
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
             for item in self._pending:
@@ -125,7 +124,7 @@ class Target:
             self._pending.append(got)
 
     def request(self, netfn, cmd, data=b"", *, bus="A", rs_lun=0, seq=None,
-                timeout_ms=250, retries=0):
+                timeout_ms=RECEIVE_TIMEOUT_MS_DEFAULT, retries=0):
         if seq is None:
             seq = self._seq
             self._seq = (self._seq + 1) % SEQUENCE_MODULUS
@@ -147,13 +146,14 @@ class Target:
                 if (len(rx) >= 8 and rx[0] == self.requester_address
                         and rx[3] == self.own_address and rx[4] >> 2 == seq and rx[5] == cmd
                         and rx[1] >> 2 == netfn + 1):
-                    return Response(cc=rx[6], data=bytes(rx[7:-1]), bus=rx_bus,
+                    payload = frame_payload(rx)  # completion code, then the data
+                    return Response(cc=payload[0], data=payload[1:], bus=rx_bus,
                                     elapsed_ms=(arrived - start) * 1000.0, frame=bytes(rx),
                                     netfn=rx[1] >> 2, seq=rx[4] >> 2, rq_lun=rx[1] & 3,
                                     rs_lun=rx[4] & 3)
                 self._pending.append(got)  # not ours: keep it for receive()
-                if len(self._pending) > 4096:
-                    del self._pending[:2048]
+                if len(self._pending) > PENDING_FRAMES_MAX:
+                    del self._pending[:PENDING_FRAMES_MAX - PENDING_FRAMES_KEEP]
         nack = (f"; address {self.own_address:02x} not acknowledged on {unacknowledged} of "
                 f"{retries + 1} tries" if unacknowledged else "")
         raise NoResponse(f"no response to nf={netfn:02x} cmd={cmd:02x} seq={seq} on bus {bus} "
@@ -175,7 +175,11 @@ class Target:
             raise NotImplementedError("the board cannot be reset from this interface")
         # The new board starts with both buses up (`#reset` in the ipmc-emu line protocol).
         self._connection.reset(EMU_RESET_TIMEOUT_S)
+        # No frame of the old board survives: the connection's per-bus queues, then (after the
+        # receiver threads delivered what they had already taken) the collector and our list.
+        self._connection.drain_frames()
         time.sleep(RESET_SETTLE_S)
+        self._connection.drain_frames()
         self._pending.clear()
         while self._collector.poll() is not None:
             pass

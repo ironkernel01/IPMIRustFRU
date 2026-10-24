@@ -12,11 +12,12 @@ import queue
 import socket
 import threading
 
+from cm_link import BUS_TAGS
+from cm_settings import EMU_CONNECT_TIMEOUT_S, EMU_READY_TIMEOUT_S, EMU_RECV_TIMEOUT_S
 from pyipmi.interfaces.ipmb import IpmbInterface
 
 logger = logging.getLogger(__name__)
 
-BUS_TAGS = ("A", "B")
 # Protocol line prefixes (crates/ipmc-emu/src/lib.rs, "Serve mode").
 READY_PREFIX = "#ready "
 ERROR_PREFIX = "#error "
@@ -24,17 +25,14 @@ TRACE_PREFIX = "# "
 CONTROL_PREFIX = "#"
 # One 7-bit address in an 8-bit IPMB address byte (IPMI writes slave addresses in 8-bit form).
 ADDRESS_SHIFT = 1
-RECV_TIMEOUT_S = 0.2  # socket read granularity of the reader thread
-READY_TIMEOUT_S = 5.0
-CONNECT_TIMEOUT_S = 5.0
 
 
 class EmuConnection:
     """A TCP connection to `ipmc-emu serve`, shared by the per-bus interfaces."""
 
     def __init__(self, host: str, port: int) -> None:
-        self._sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S)
-        self._sock.settimeout(RECV_TIMEOUT_S)
+        self._sock = socket.create_connection((host, port), timeout=EMU_CONNECT_TIMEOUT_S)
+        self._sock.settimeout(EMU_RECV_TIMEOUT_S)
         self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self._queues = {tag: queue.Queue() for tag in BUS_TAGS}
         self._ready = threading.Event()
@@ -47,7 +45,7 @@ class EmuConnection:
         self._reader = threading.Thread(target=self._read_loop, name="ipmc-emu-rx", daemon=True)
         self._reader.start()
 
-    def wait_ready(self, timeout: float = READY_TIMEOUT_S) -> int:
+    def wait_ready(self, timeout: float = EMU_READY_TIMEOUT_S) -> int:
         """Wait for `#ready <addr>` and return the IPMC's own IPMB address (8-bit form)."""
         if not self._ready.wait(timeout) or self.own_address is None:
             raise TimeoutError("no #ready line from ipmc-emu serve")
@@ -63,13 +61,24 @@ class EmuConnection:
         with self._write_lock:
             self._sock.sendall(data)
 
-    def reset(self, timeout: float = READY_TIMEOUT_S) -> int:
+    def reset(self, timeout: float = EMU_READY_TIMEOUT_S) -> int:
         """Power-cycle the emulated board (`#reset`) and wait for its new `#ready` line; returns
         the IPMC's own IPMB address (8-bit form). Frames the old board sent before the reset may
-        still sit in the bus queues; the caller drains them."""
+        still sit in the bus queues, or in a receiver thread that already took them; the caller
+        calls `drain_frames` after the receivers had time to deliver them."""
         self._ready.clear()
         self.write_line("#reset")
         return self.wait_ready(timeout)
+
+    def drain_frames(self) -> None:
+        """Drop every frame waiting in the per-bus queues (the one way to discard frames of a
+        board that was reset)."""
+        for frames in self._queues.values():
+            while True:
+                try:
+                    frames.get_nowait()
+                except queue.Empty:
+                    break
 
     def set_bus_down(self, bus: str, down: bool) -> None:
         """Break or repair `bus` in the emulator (`#bus A down` / `#bus A up`)."""
@@ -91,7 +100,7 @@ class EmuConnection:
         except OSError:
             pass
         self._stop.set()
-        self._reader.join(timeout=2 * RECV_TIMEOUT_S)
+        self._reader.join(timeout=2 * EMU_RECV_TIMEOUT_S)
         self._sock.close()
 
     def _read_loop(self) -> None:

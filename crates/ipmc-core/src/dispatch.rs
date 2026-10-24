@@ -535,6 +535,12 @@ mod tests {
         Ok(ipmb::IPMB_RESPONSE_DATA_MAX + 1)
     }
 
+    /// Reports the byte count named by its first request data byte, writing nothing; shows where
+    /// the handler output limit lies.
+    fn length_handler(_c: &mut Context, r: &Frame, _o: &mut [u8]) -> Result<usize, u8> {
+        Ok(usize::from(r.data[0]))
+    }
+
     static RAN: AtomicBool = AtomicBool::new(false);
     fn recording_handler(_c: &mut Context, _r: &Frame, _o: &mut [u8]) -> Result<usize, u8> {
         RAN.store(true, Ordering::Relaxed);
@@ -665,6 +671,47 @@ mod tests {
             (resp.completion_code, resp.data),
             (Some(cc::INVALID_CMD), &[0x03][..])
         );
+    }
+
+    #[test]
+    fn group_extension_handler_length_limit_counts_the_echoed_defining_body() {
+        let table = [cmd(NETFN_GROUP_EXT, 0x00, "Length", "test", length_handler)];
+        // The handler output holds one byte less than the response data: the echoed defining
+        // body byte takes the first.
+        let fits = ipmb::IPMB_RESPONSE_DATA_MAX - 1;
+        // (handler result length, whether the response is built)
+        let cases = [
+            (0, true),
+            (1, true),
+            (fits - 1, true),
+            (fits, true),
+            (fits + 1, false),
+            (fits + 2, false),
+        ];
+        for (len, built) in cases {
+            let request_data = [VSO_IDENTIFIER, u8::try_from(len).unwrap()];
+            let (buf, n) = request_bytes(NETFN_GROUP_EXT, 0x00, &request_data);
+            let req = ipmb::parse(&buf[..n]).unwrap();
+            let mut out = [0u8; ipmb::IPMB_MAX_LEN];
+            let result = build_response_with(&table, &mut context(), &req, &mut out);
+            if built {
+                let b = result.unwrap_or_else(|e| panic!("handler length {len}: {e:?}"));
+                assert_eq!(b.data_len, len + 1, "handler length {len}");
+                assert_eq!(b.completion_code, cc::OK);
+                let resp = ipmb::parse(&out[..b.len]).unwrap();
+                assert_eq!(resp.data.len(), len + 1, "handler length {len}");
+                assert_eq!(resp.data[0], VSO_IDENTIFIER);
+            } else {
+                assert_eq!(result, Err(IpmbError::TooLong), "handler length {len}");
+            }
+        }
+        // The largest fitting response fills the frame exactly.
+        let request_data = [VSO_IDENTIFIER, u8::try_from(fits).unwrap()];
+        let (buf, n) = request_bytes(NETFN_GROUP_EXT, 0x00, &request_data);
+        let req = ipmb::parse(&buf[..n]).unwrap();
+        let mut out = [0u8; ipmb::IPMB_MAX_LEN];
+        let b = build_response_with(&table, &mut context(), &req, &mut out).unwrap();
+        assert_eq!(b.len, ipmb::IPMB_MAX_LEN);
     }
 
     #[test]

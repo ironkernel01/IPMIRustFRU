@@ -48,6 +48,7 @@ COMPLETION_CODES = {
 SELF_TEST_NO_ERROR = 0x55
 SELF_TEST_CORRUPTED = 0x57
 FRU_ACCESS_BY_WORDS = 0x01  # Get FRU Inventory Area Info byte 4 bit 0
+FRU_WORD_BYTES = 2  # a word is 16 bits (IPMI v2.0 Table 34-3)
 
 VSO_CAPS_MIN_LEN = 8  # cc + VSO id + six data bytes (section 10.1.3.1)
 DEVICE_ID_MIN_LEN = 12  # cc + the 11 bytes up to the product ID
@@ -65,6 +66,12 @@ def cc_text(cc: int) -> str:
     return f"{cc:02X}h {COMPLETION_CODES.get(cc, 'unknown')}"
 
 
+def ipmi_version(byte: int) -> str:
+    """IPMI version `major.minor` of the Get Device ID version byte: the major version in the
+    low nibble, the minor in the high nibble, both BCD (IPMI v2.0 Table 20-2): 02h is 2.0."""
+    return f"{byte & 0x0F}.{byte >> 4 & 0x0F}"
+
+
 def decode_device_id(rsp: bytes) -> str:
     if len(rsp) < DEVICE_ID_MIN_LEN:
         return f"short response ({len(rsp)} bytes)"
@@ -72,7 +79,7 @@ def decode_device_id(rsp: bytes) -> str:
     mfr = rsp[7] | rsp[8] << 8 | rsp[9] << 16
     product = rsp[10] | rsp[11] << 8
     return (f"device {dev_id:02X}h rev {rev & 0x0F} sdr={rev >> 7} fw {fw1 & 0x7F}.{fw2:02X} "
-            f"ipmi {ipmi_ver >> 4 & 0x0F}.{ipmi_ver & 0x0F} support {rsp[6]:02X}h "
+            f"ipmi {ipmi_version(ipmi_ver)} support {rsp[6]:02X}h "
             f"mfr {mfr:06X}h product {product:04X}h")
 
 
@@ -98,11 +105,18 @@ def ipmb_interfaces(rsp: bytes) -> int:
     return (rsp[3] & 3) + 1 if len(rsp) >= VSO_CAPS_MIN_LEN else 0
 
 
+def fru_access_unit(rsp: bytes) -> int:
+    """Bytes per unit of the FRU offset and count fields of Read FRU Data, from byte 4 bit 0 of
+    the Get FRU Inventory Area Info response (IPMI v2.0 Table 34-2): 1 = by bytes, 2 = by words
+    (Table 34-3: the offset and the count are then in words)."""
+    return FRU_WORD_BYTES if len(rsp) >= 4 and rsp[3] & FRU_ACCESS_BY_WORDS else 1
+
+
 def decode_fru_area_info(rsp: bytes) -> str:
     if len(rsp) < 4:
         return f"short response ({len(rsp)} bytes)"
     size = rsp[1] | rsp[2] << 8
-    unit = "words" if rsp[3] & FRU_ACCESS_BY_WORDS else "bytes"
+    unit = "words" if fru_access_unit(rsp) == FRU_WORD_BYTES else "bytes"
     return f"{size} bytes, accessed by {unit}"
 
 

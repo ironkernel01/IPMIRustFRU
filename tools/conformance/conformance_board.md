@@ -169,465 +169,465 @@ Raw send/receive has no STOP timestamps or receive-bus metadata; those limits ar
 
 ```text
 TX A nf=2c cmd=0b lun=0 seq=51 data=03 00
-RX A 13.100 ms 20 b4 2c 82 cc 0b c1 03 e3
+RX A 14.072 ms 20 b4 2c 82 cc 0b c1 03 e3
 ```
 
 ## CMD-OPTIONAL-CONTROL-CAP: observed frames
 
 ```text
 TX A nf=2c cmd=1e lun=0 seq=52 data=03 00
-RX A 13.451 ms 20 b4 2c 82 d0 1e c1 03 cc
+RX A 6.215 ms 20 b4 2c 82 d0 1e c1 03 cc
 TX A nf=2c cmd=04 lun=0 seq=53 data=03 00 ff
-RX A 13.673 ms 20 b4 2c 82 d4 04 c1 03 e2
+RX A 13.990 ms 20 b4 2c 82 d4 04 c1 03 e2
 TX A nf=2c cmd=0c lun=0 seq=54 data=03 00 ff
-RX A 14.088 ms 20 b4 2c 82 d8 0c c1 03 d6
+RX A 14.384 ms 20 b4 2c 82 d8 0c c1 03 d6
 ```
 
 ## SENSOR-MANDATORY-NUMBERS: observed frames
 
 ```text
 TX A nf=04 cmd=2d lun=0 seq=53 data=00
-RX A 13.958 ms 20 14 cc 82 d4 2d 00 00 40 10 2d
+RX A 13.168 ms 20 14 cc 82 d4 2d 00 00 40 10 2d
 TX A nf=2c cmd=44 lun=0 seq=54 data=03 00
-RX A 13.110 ms 20 b4 2c 82 d8 44 c1 03 9e
+RX A 19.353 ms 20 b4 2c 82 d8 44 c1 03 9e
 ```
 
 ## LINK-INFO-OPTIONAL: observed frames
 
 ```text
 TX A nf=2c cmd=18 lun=0 seq=61 data=03 00 00
-RX A 8.570 ms 20 b4 2c 82 f4 18 c1 03 ae
+RX A 12.831 ms 20 b4 2c 82 f4 18 c1 03 ae
 ```
 
 ## PROTECTION-OFFSETS: observed frames
 
 ```text
 TX A nf=0a cmd=10 lun=0 seq=19 data=00
-RX A 23.728 ms 20 2c b4 82 4c 10 00 00 01 00 21
+RX A 16.580 ms 20 2c b4 82 4c 10 00 00 01 00 21
 TX A nf=0a cmd=11 lun=0 seq=20 data=00 00 00 10
-RX A 12.806 ms 20 2c b4 82 50 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 96
+RX A 13.442 ms 20 2c b4 82 50 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 96
 TX A nf=0a cmd=11 lun=0 seq=21 data=00 10 00 10
-RX A 14.831 ms 20 2c b4 82 54 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 af
+RX A 13.968 ms 20 2c b4 82 54 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 af
 TX A nf=0a cmd=11 lun=0 seq=22 data=00 20 00 10
-RX A 13.694 ms 20 2c b4 82 58 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 48
+RX A 14.372 ms 20 2c b4 82 58 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 48
 TX A nf=0a cmd=11 lun=0 seq=23 data=00 30 00 10
-RX A 13.433 ms 20 2c b4 82 5c 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 a7
+RX A 14.066 ms 20 2c b4 82 5c 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 a7
 TX A nf=0a cmd=11 lun=0 seq=24 data=00 40 00 10
-RX A 13.045 ms 20 2c b4 82 60 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 28
+RX A 13.309 ms 20 2c b4 82 60 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 28
 TX A nf=0a cmd=11 lun=0 seq=25 data=00 50 00 10
-RX A 14.181 ms 20 2c b4 82 64 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 4a
+RX A 23.259 ms 20 2c b4 82 64 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 4a
 TX A nf=0a cmd=11 lun=0 seq=26 data=00 60 00 10
-RX A 13.746 ms 20 2c b4 82 68 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 14
+RX A 14.196 ms 20 2c b4 82 68 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 14
 TX A nf=0a cmd=11 lun=0 seq=27 data=00 70 00 10
-RX A 16.836 ms 20 2c b4 82 6c 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 27
+RX A 14.690 ms 20 2c b4 82 6c 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 27
 TX A nf=0a cmd=11 lun=0 seq=28 data=00 80 00 10
-RX A 22.653 ms 20 2c b4 82 70 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 df
+RX A 14.718 ms 20 2c b4 82 70 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 df
 TX A nf=0a cmd=11 lun=0 seq=29 data=00 90 00 10
-RX A 13.639 ms 20 2c b4 82 74 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b 0e
+RX A 14.430 ms 20 2c b4 82 74 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b 0e
 TX A nf=0a cmd=11 lun=0 seq=30 data=00 a0 00 10
-RX A 14.339 ms 20 2c b4 82 78 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e5
+RX A 13.015 ms 20 2c b4 82 78 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e5
 TX A nf=0a cmd=11 lun=0 seq=31 data=00 b0 00 10
-RX A 14.388 ms 20 2c b4 82 7c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e1
+RX A 13.467 ms 20 2c b4 82 7c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 e1
 TX A nf=0a cmd=11 lun=0 seq=32 data=00 c0 00 10
-RX A 14.226 ms 20 2c b4 82 80 11 00 10 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d3
+RX A 13.565 ms 20 2c b4 82 80 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 dd
 TX A nf=0a cmd=11 lun=0 seq=33 data=00 d0 00 10
-RX A 14.164 ms 20 2c b4 82 84 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d9
+RX A 13.444 ms 20 2c b4 82 84 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d9
 TX A nf=0a cmd=11 lun=0 seq=34 data=00 e0 00 10
-RX A 13.826 ms 20 2c b4 82 88 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d5
+RX A 13.749 ms 20 2c b4 82 88 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d5
 TX A nf=0a cmd=11 lun=0 seq=35 data=00 f0 00 10
-RX A 14.528 ms 20 2c b4 82 8c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d1
+RX A 13.517 ms 20 2c b4 82 8c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d1
 TX A nf=0a cmd=10 lun=0 seq=36 data=00
-RX A 13.744 ms 20 2c b4 82 90 10 00 00 01 00 dd
+RX A 14.009 ms 20 2c b4 82 90 10 00 00 01 00 dd
 TX A nf=0a cmd=12 lun=0 seq=37 data=00 00 00 01
-RX A 13.864 ms 20 2c b4 82 94 12 00 01 d7
+RX A 19.227 ms 20 2c b4 82 94 12 00 01 d7
 TX A nf=0a cmd=12 lun=0 seq=38 data=00 01 00 00
-RX A 13.724 ms 20 2c b4 82 98 12 00 01 d3
+RX A 17.084 ms 20 2c b4 82 98 12 00 01 d3
 TX A nf=0a cmd=12 lun=0 seq=39 data=00 02 00 00
-RX A 14.219 ms 20 2c b4 82 9c 12 00 01 cf
+RX A 14.173 ms 20 2c b4 82 9c 12 00 01 cf
 TX A nf=0a cmd=12 lun=0 seq=40 data=00 03 00 01
-RX A 14.484 ms 20 2c b4 82 a0 12 00 01 cb
+RX A 14.168 ms 20 2c b4 82 a0 12 00 01 cb
 TX A nf=0a cmd=12 lun=0 seq=41 data=00 04 00 0b
-RX A 13.731 ms 20 2c b4 82 a4 12 00 01 c7
+RX A 13.800 ms 20 2c b4 82 a4 12 00 01 c7
 TX A nf=0a cmd=12 lun=0 seq=42 data=00 05 00 00
-RX A 14.592 ms 20 2c b4 82 a8 12 00 01 c3
+RX A 14.165 ms 20 2c b4 82 a8 12 00 01 c3
 TX A nf=0a cmd=12 lun=0 seq=43 data=00 06 00 00
-RX A 14.022 ms 20 2c b4 82 ac 12 00 01 bf
+RX A 13.457 ms 20 2c b4 82 ac 12 00 01 bf
 TX A nf=0a cmd=12 lun=0 seq=44 data=00 07 00 f3
-RX A 14.128 ms 20 2c b4 82 b0 12 00 01 bb
+RX A 13.923 ms 20 2c b4 82 b0 12 00 01 bb
 TX A nf=0a cmd=12 lun=0 seq=45 data=00 08 00 01
-RX A 13.843 ms 20 2c b4 82 b4 12 00 01 b7
+RX A 12.705 ms 20 2c b4 82 b4 12 00 01 b7
 TX A nf=0a cmd=12 lun=0 seq=46 data=00 09 00 0a
-RX A 15.117 ms 20 2c b4 82 b8 12 00 01 b3
+RX A 24.661 ms 20 2c b4 82 b8 12 00 01 b3
 TX A nf=0a cmd=12 lun=0 seq=47 data=00 0a 00 00
-RX A 13.791 ms 20 2c b4 82 bc 12 00 01 af
+RX A 13.766 ms 20 2c b4 82 bc 12 00 01 af
 TX A nf=0a cmd=12 lun=0 seq=48 data=00 0b 00 20
-RX A 13.117 ms 20 2c b4 82 c0 12 00 01 ab
+RX A 13.802 ms 20 2c b4 82 c0 12 00 01 ab
 TX A nf=0a cmd=12 lun=0 seq=49 data=00 0c 00 42
-RX A 14.323 ms 20 2c b4 82 c4 12 00 01 a7
+RX A 14.470 ms 20 2c b4 82 c4 12 00 01 a7
 TX A nf=0a cmd=12 lun=0 seq=50 data=00 0d 00 f7
-RX A 13.751 ms 20 2c b4 82 c8 12 00 01 a3
+RX A 13.238 ms 20 2c b4 82 c8 12 00 01 a3
 TX A nf=0a cmd=12 lun=0 seq=51 data=00 0e 00 ca
-RX A 18.713 ms 20 2c b4 82 cc 12 00 01 9f
+RX A 19.209 ms 20 2c b4 82 cc 12 00 01 9f
 TX A nf=0a cmd=12 lun=0 seq=52 data=00 0f 00 49
-RX A 16.415 ms 20 2c b4 82 d0 12 00 01 9b
+RX A 17.540 ms 20 2c b4 82 d0 12 00 01 9b
 TX A nf=0a cmd=12 lun=0 seq=53 data=00 10 00 72
-RX A 14.487 ms 20 2c b4 82 d4 12 00 01 97
+RX A 14.253 ms 20 2c b4 82 d4 12 00 01 97
 TX A nf=0a cmd=12 lun=0 seq=54 data=00 11 00 6f
-RX A 13.947 ms 20 2c b4 82 d8 12 00 01 93
+RX A 13.440 ms 20 2c b4 82 d8 12 00 01 93
 TX A nf=0a cmd=12 lun=0 seq=55 data=00 12 00 6e
-RX A 13.259 ms 20 2c b4 82 dc 12 00 01 8f
+RX A 13.966 ms 20 2c b4 82 dc 12 00 01 8f
 TX A nf=0a cmd=12 lun=0 seq=56 data=00 13 00 4b
-RX A 13.880 ms 20 2c b4 82 e0 12 00 01 8b
+RX A 13.756 ms 20 2c b4 82 e0 12 00 01 8b
 TX A nf=0a cmd=12 lun=0 seq=57 data=00 14 00 65
-RX A 19.672 ms 20 2c b4 82 e4 12 00 01 87
+RX A 12.998 ms 20 2c b4 82 e4 12 00 01 87
 TX A nf=0a cmd=12 lun=0 seq=58 data=00 15 00 72
-RX A 18.247 ms 20 2c b4 82 e8 12 00 01 83
+RX A 19.955 ms 20 2c b4 82 e8 12 00 01 83
 TX A nf=0a cmd=12 lun=0 seq=59 data=00 16 00 6e
-RX A 14.401 ms 20 2c b4 82 ec 12 00 01 7f
+RX A 18.667 ms 20 2c b4 82 ec 12 00 01 7f
 TX A nf=0a cmd=12 lun=0 seq=60 data=00 17 00 65
-RX A 15.071 ms 20 2c b4 82 f0 12 00 01 7b
+RX A 13.502 ms 20 2c b4 82 f0 12 00 01 7b
 TX A nf=0a cmd=12 lun=0 seq=61 data=00 18 00 6c
-RX A 13.540 ms 20 2c b4 82 f4 12 00 01 77
+RX A 14.773 ms 20 2c b4 82 f4 12 00 01 77
 TX A nf=0a cmd=12 lun=0 seq=62 data=00 19 00 cf
-RX A 14.134 ms 20 2c b4 82 f8 12 00 01 73
+RX A 13.615 ms 20 2c b4 82 f8 12 00 01 73
 TX A nf=0a cmd=12 lun=0 seq=63 data=00 1a 00 56
-RX A 14.140 ms 20 2c b4 82 fc 12 00 01 6f
+RX A 14.188 ms 20 2c b4 82 fc 12 00 01 6f
 TX A nf=0a cmd=12 lun=0 seq=0 data=00 1b 00 50
-RX A 17.676 ms 20 2c b4 82 00 12 00 01 6b
+RX A 15.190 ms 20 2c b4 82 00 12 00 01 6b
 TX A nf=0a cmd=12 lun=0 seq=1 data=00 1c 00 58
-RX A 15.964 ms 20 2c b4 82 04 12 00 01 67
+RX A 22.326 ms 20 2c b4 82 04 12 00 01 67
 TX A nf=0a cmd=12 lun=0 seq=2 data=00 1d 00 20
-RX A 19.691 ms 20 2c b4 82 08 12 00 01 63
+RX A 13.504 ms 20 2c b4 82 08 12 00 01 63
 TX A nf=0a cmd=12 lun=0 seq=3 data=00 1e 00 54
-RX A 15.074 ms 20 2c b4 82 0c 12 00 01 5f
+RX A 14.959 ms 20 2c b4 82 0c 12 00 01 5f
 TX A nf=0a cmd=12 lun=0 seq=4 data=00 1f 00 69
-RX A 13.410 ms 20 2c b4 82 10 12 00 01 5b
+RX A 22.187 ms 20 2c b4 82 10 12 00 01 5b
 TX A nf=0a cmd=12 lun=0 seq=5 data=00 20 00 65
-RX A 13.592 ms 20 2c b4 82 14 12 00 01 57
+RX A 11.408 ms 20 2c b4 82 14 12 00 01 57
 TX A nf=0a cmd=12 lun=0 seq=6 data=00 21 00 72
-RX A 13.854 ms 20 2c b4 82 18 12 00 01 53
+RX A 8.100 ms 20 2c b4 82 18 12 00 01 53
 TX A nf=0a cmd=12 lun=0 seq=7 data=00 22 00 2d
-RX A 15.459 ms 20 2c b4 82 1c 12 00 01 4f
+RX A 27.035 ms 20 2c b4 82 1c 12 00 01 4f
 TX A nf=0a cmd=12 lun=0 seq=8 data=00 23 00 31
-RX A 13.040 ms 20 2c b4 82 20 12 00 01 4b
+RX A 14.136 ms 20 2c b4 82 20 12 00 01 4b
 TX A nf=0a cmd=12 lun=0 seq=9 data=00 24 00 20
-RX A 13.201 ms 20 2c b4 82 24 12 00 01 47
+RX A 13.194 ms 20 2c b4 82 24 12 00 01 47
 TX A nf=0a cmd=12 lun=0 seq=10 data=00 25 00 49
-RX A 13.964 ms 20 2c b4 82 28 12 00 01 43
+RX A 14.232 ms 20 2c b4 82 28 12 00 01 43
 TX A nf=0a cmd=12 lun=0 seq=11 data=00 26 00 50
-RX A 20.088 ms 20 2c b4 82 2c 12 00 01 3f
+RX A 21.045 ms 20 2c b4 82 2c 12 00 01 3f
 TX A nf=0a cmd=12 lun=0 seq=12 data=00 27 00 4d
-RX A 13.501 ms 20 2c b4 82 30 12 00 01 3b
+RX A 14.946 ms 20 2c b4 82 30 12 00 01 3b
 TX A nf=0a cmd=12 lun=0 seq=13 data=00 28 00 43
-RX A 21.242 ms 20 2c b4 82 34 12 00 01 37
+RX A 21.736 ms 20 2c b4 82 34 12 00 01 37
 TX A nf=0a cmd=12 lun=0 seq=14 data=00 29 00 cc
-RX A 24.659 ms 20 2c b4 82 38 12 00 01 33
+RX A 14.918 ms 20 2c b4 82 38 12 00 01 33
 TX A nf=0a cmd=12 lun=0 seq=15 data=00 2a 00 49
-RX A 14.096 ms 20 2c b4 82 3c 12 00 01 2f
+RX A 7.587 ms 20 2c b4 82 3c 12 00 01 2f
 TX A nf=0a cmd=12 lun=0 seq=16 data=00 2b 00 4b
-RX A 14.890 ms 20 2c b4 82 40 12 00 01 2b
+RX A 7.992 ms 20 2c b4 82 40 12 00 01 2b
 TX A nf=0a cmd=12 lun=0 seq=17 data=00 2c 00 2d
-RX A 22.316 ms 20 2c b4 82 44 12 00 01 27
+RX A 13.797 ms 20 2c b4 82 44 12 00 01 27
 TX A nf=0a cmd=12 lun=0 seq=18 data=00 2d 00 54
-RX A 11.597 ms 20 2c b4 82 48 12 00 01 23
+RX A 12.509 ms 20 2c b4 82 48 12 00 01 23
 TX A nf=0a cmd=12 lun=0 seq=19 data=00 2e 00 31
-RX A 21.605 ms 20 2c b4 82 4c 12 00 01 1f
+RX A 9.365 ms 20 2c b4 82 4c 12 00 01 1f
 TX A nf=0a cmd=12 lun=0 seq=20 data=00 2f 00 2d
-RX A 12.619 ms 20 2c b4 82 50 12 00 01 1b
+RX A 22.436 ms 20 2c b4 82 50 12 00 01 1b
 TX A nf=0a cmd=12 lun=0 seq=21 data=00 30 00 30
-RX A 14.274 ms 20 2c b4 82 54 12 00 01 17
+RX A 11.970 ms 20 2c b4 82 54 12 00 01 17
 TX A nf=0a cmd=12 lun=0 seq=22 data=00 31 00 30
-RX A 13.599 ms 20 2c b4 82 58 12 00 01 13
+RX A 13.684 ms 20 2c b4 82 58 12 00 01 13
 TX A nf=0a cmd=12 lun=0 seq=23 data=00 32 00 30
-RX A 14.218 ms 20 2c b4 82 5c 12 00 01 0f
+RX A 13.008 ms 20 2c b4 82 5c 12 00 01 0f
 TX A nf=0a cmd=12 lun=0 seq=24 data=00 33 00 30
-RX A 14.087 ms 20 2c b4 82 60 12 00 01 0b
+RX A 13.899 ms 20 2c b4 82 60 12 00 01 0b
 TX A nf=0a cmd=12 lun=0 seq=25 data=00 34 00 30
-RX A 14.284 ms 20 2c b4 82 64 12 00 01 07
+RX A 19.412 ms 20 2c b4 82 64 12 00 01 07
 TX A nf=0a cmd=12 lun=0 seq=26 data=00 35 00 31
-RX A 14.323 ms 20 2c b4 82 68 12 00 01 03
+RX A 16.782 ms 20 2c b4 82 68 12 00 01 03
 TX A nf=0a cmd=12 lun=0 seq=27 data=00 36 00 ce
-RX A 14.139 ms 20 2c b4 82 6c 12 00 01 ff
+RX A 13.653 ms 20 2c b4 82 6c 12 00 01 ff
 TX A nf=0a cmd=12 lun=0 seq=28 data=00 37 00 49
-RX A 13.552 ms 20 2c b4 82 70 12 00 01 fb
+RX A 13.661 ms 20 2c b4 82 70 12 00 01 fb
 TX A nf=0a cmd=12 lun=0 seq=29 data=00 38 00 4b
-RX A 21.321 ms 20 2c b4 82 74 12 00 01 f7
+RX A 14.128 ms 20 2c b4 82 74 12 00 01 f7
 TX A nf=0a cmd=12 lun=0 seq=30 data=00 39 00 2d
-RX A 13.339 ms 20 2c b4 82 78 12 00 01 f3
+RX A 13.050 ms 20 2c b4 82 78 12 00 01 f3
 TX A nf=0a cmd=12 lun=0 seq=31 data=00 3a 00 49
-RX A 14.696 ms 20 2c b4 82 7c 12 00 01 ef
+RX A 14.392 ms 20 2c b4 82 7c 12 00 01 ef
 TX A nf=0a cmd=12 lun=0 seq=32 data=00 3b 00 50
-RX A 12.750 ms 20 2c b4 82 80 12 00 01 eb
+RX A 13.372 ms 20 2c b4 82 80 12 00 01 eb
 TX A nf=0a cmd=12 lun=0 seq=33 data=00 3c 00 4d
-RX A 13.424 ms 20 2c b4 82 84 12 00 01 e7
+RX A 25.562 ms 20 2c b4 82 84 12 00 01 e7
 TX A nf=0a cmd=12 lun=0 seq=34 data=00 3d 00 43
-RX A 13.790 ms 20 2c b4 82 88 12 00 01 e3
+RX A 13.740 ms 20 2c b4 82 88 12 00 01 e3
 TX A nf=0a cmd=12 lun=0 seq=35 data=00 3e 00 2d
-RX A 22.413 ms 20 2c b4 82 8c 12 00 01 df
+RX A 13.169 ms 20 2c b4 82 8c 12 00 01 df
 TX A nf=0a cmd=12 lun=0 seq=36 data=00 3f 00 54
-RX A 14.208 ms 20 2c b4 82 90 12 00 01 db
+RX A 13.741 ms 20 2c b4 82 90 12 00 01 db
 TX A nf=0a cmd=12 lun=0 seq=37 data=00 40 00 31
-RX A 14.026 ms 20 2c b4 82 94 12 00 01 d7
+RX A 13.139 ms 20 2c b4 82 94 12 00 01 d7
 TX A nf=0a cmd=12 lun=0 seq=38 data=00 41 00 2d
-RX A 14.584 ms 20 2c b4 82 98 12 00 01 d3
+RX A 13.329 ms 20 2c b4 82 98 12 00 01 d3
 TX A nf=0a cmd=12 lun=0 seq=39 data=00 42 00 4e
-RX A 13.502 ms 20 2c b4 82 9c 12 00 01 cf
+RX A 13.675 ms 20 2c b4 82 9c 12 00 01 cf
 TX A nf=0a cmd=12 lun=0 seq=40 data=00 43 00 55
-RX A 14.011 ms 20 2c b4 82 a0 12 00 01 cb
+RX A 9.177 ms 20 2c b4 82 a0 12 00 01 cb
 TX A nf=0a cmd=12 lun=0 seq=41 data=00 44 00 43
-RX A 14.179 ms 20 2c b4 82 a4 12 00 01 c7
+RX A 13.944 ms 20 2c b4 82 a4 12 00 01 c7
 TX A nf=0a cmd=12 lun=0 seq=42 data=00 45 00 cb
-RX A 14.771 ms 20 2c b4 82 a8 12 00 01 c3
+RX A 13.438 ms 20 2c b4 82 a8 12 00 01 c3
 TX A nf=0a cmd=12 lun=0 seq=43 data=00 46 00 69
-RX A 13.970 ms 20 2c b4 82 ac 12 00 01 bf
+RX A 13.270 ms 20 2c b4 82 ac 12 00 01 bf
 TX A nf=0a cmd=12 lun=0 seq=44 data=00 47 00 70
-RX A 13.927 ms 20 2c b4 82 b0 12 00 01 bb
+RX A 13.796 ms 20 2c b4 82 b0 12 00 01 bb
 TX A nf=0a cmd=12 lun=0 seq=45 data=00 48 00 6d
-RX A 14.121 ms 20 2c b4 82 b4 12 00 01 b7
+RX A 13.913 ms 20 2c b4 82 b4 12 00 01 b7
 TX A nf=0a cmd=12 lun=0 seq=46 data=00 49 00 63
-RX A 13.758 ms 20 2c b4 82 b8 12 00 01 b3
+RX A 25.798 ms 20 2c b4 82 b8 12 00 01 b3
 TX A nf=0a cmd=12 lun=0 seq=47 data=00 4a 00 2d
-RX A 14.178 ms 20 2c b4 82 bc 12 00 01 af
+RX A 13.972 ms 20 2c b4 82 bc 12 00 01 af
 TX A nf=0a cmd=12 lun=0 seq=48 data=00 4b 00 66
-RX A 14.370 ms 20 2c b4 82 c0 12 00 01 ab
+RX A 13.473 ms 20 2c b4 82 c0 12 00 01 ab
 TX A nf=0a cmd=12 lun=0 seq=49 data=00 4c 00 72
-RX A 14.088 ms 20 2c b4 82 c4 12 00 01 a7
+RX A 13.158 ms 20 2c b4 82 c4 12 00 01 a7
 TX A nf=0a cmd=12 lun=0 seq=50 data=00 4d 00 75
-RX A 13.761 ms 20 2c b4 82 c8 12 00 01 a3
+RX A 14.015 ms 20 2c b4 82 c8 12 00 01 a3
 TX A nf=0a cmd=12 lun=0 seq=51 data=00 4e 00 2d
-RX A 14.347 ms 20 2c b4 82 cc 12 00 01 9f
+RX A 14.111 ms 20 2c b4 82 cc 12 00 01 9f
 TX A nf=0a cmd=12 lun=0 seq=52 data=00 4f 00 76
-RX A 14.075 ms 20 2c b4 82 d0 12 00 01 9b
+RX A 10.072 ms 20 2c b4 82 d0 12 00 01 9b
 TX A nf=0a cmd=12 lun=0 seq=53 data=00 50 00 31
-RX A 13.955 ms 20 2c b4 82 d4 12 00 01 97
+RX A 21.530 ms 20 2c b4 82 d4 12 00 01 97
 TX A nf=0a cmd=12 lun=0 seq=54 data=00 51 00 c1
-RX A 14.071 ms 20 2c b4 82 d8 12 00 01 93
+RX A 13.361 ms 20 2c b4 82 d8 12 00 01 93
 TX A nf=0a cmd=12 lun=0 seq=55 data=00 52 00 00
-RX A 14.478 ms 20 2c b4 82 dc 12 00 01 8f
+RX A 14.080 ms 20 2c b4 82 dc 12 00 01 8f
 TX A nf=0a cmd=12 lun=0 seq=56 data=00 53 00 00
-RX A 22.351 ms 20 2c b4 82 e0 12 00 01 8b
+RX A 12.247 ms 20 2c b4 82 e0 12 00 01 8b
 TX A nf=0a cmd=12 lun=0 seq=57 data=00 54 00 00
-RX A 13.823 ms 20 2c b4 82 e4 12 00 01 87
+RX A 13.410 ms 20 2c b4 82 e4 12 00 01 87
 TX A nf=0a cmd=12 lun=0 seq=58 data=00 55 00 00
-RX A 14.769 ms 20 2c b4 82 e8 12 00 01 83
+RX A 14.325 ms 20 2c b4 82 e8 12 00 01 83
 TX A nf=0a cmd=12 lun=0 seq=59 data=00 56 00 00
-RX A 14.583 ms 20 2c b4 82 ec 12 00 01 7f
+RX A 14.216 ms 20 2c b4 82 ec 12 00 01 7f
 TX A nf=0a cmd=12 lun=0 seq=60 data=00 57 00 51
-RX A 13.941 ms 20 2c b4 82 f0 12 00 01 7b
+RX A 9.347 ms 20 2c b4 82 f0 12 00 01 7b
 TX A nf=0a cmd=12 lun=0 seq=61 data=00 58 00 01
-RX A 14.880 ms 20 2c b4 82 f4 12 00 01 77
+RX A 10.935 ms 20 2c b4 82 f4 12 00 01 77
 TX A nf=0a cmd=12 lun=0 seq=62 data=00 59 00 09
-RX A 13.012 ms 20 2c b4 82 f8 12 00 01 73
+RX A 10.834 ms 20 2c b4 82 f8 12 00 01 73
 TX A nf=0a cmd=12 lun=0 seq=63 data=00 5a 00 00
-RX A 13.980 ms 20 2c b4 82 fc 12 00 01 6f
+RX A 12.146 ms 20 2c b4 82 fc 12 00 01 6f
 TX A nf=0a cmd=12 lun=0 seq=0 data=00 5b 00 ca
-RX A 21.983 ms 20 2c b4 82 00 12 00 01 6b
+RX A 15.769 ms 20 2c b4 82 00 12 00 01 6b
 TX A nf=0a cmd=12 lun=0 seq=1 data=00 5c 00 49
-RX A 22.064 ms 20 2c b4 82 04 12 00 01 67
+RX A 23.130 ms 20 2c b4 82 04 12 00 01 67
 TX A nf=0a cmd=12 lun=0 seq=2 data=00 5d 00 72
-RX A 8.846 ms 20 2c b4 82 08 12 00 01 63
+RX A 14.076 ms 20 2c b4 82 08 12 00 01 63
 TX A nf=0a cmd=12 lun=0 seq=3 data=00 5e 00 6f
-RX A 26.347 ms 20 2c b4 82 0c 12 00 01 5f
+RX A 27.239 ms 20 2c b4 82 0c 12 00 01 5f
 TX A nf=0a cmd=12 lun=0 seq=4 data=00 5f 00 6e
-RX A 14.298 ms 20 2c b4 82 10 12 00 01 5b
+RX A 16.272 ms 20 2c b4 82 10 12 00 01 5b
 TX A nf=0a cmd=12 lun=0 seq=5 data=00 60 00 4b
-RX A 14.361 ms 20 2c b4 82 14 12 00 01 57
+RX A 11.174 ms 20 2c b4 82 14 12 00 01 57
 TX A nf=0a cmd=12 lun=0 seq=6 data=00 61 00 65
-RX A 13.428 ms 20 2c b4 82 18 12 00 01 53
+RX A 22.517 ms 20 2c b4 82 18 12 00 01 53
 TX A nf=0a cmd=12 lun=0 seq=7 data=00 62 00 72
-RX A 14.008 ms 20 2c b4 82 1c 12 00 01 4f
+RX A 13.462 ms 20 2c b4 82 1c 12 00 01 4f
 TX A nf=0a cmd=12 lun=0 seq=8 data=00 63 00 6e
-RX A 14.056 ms 20 2c b4 82 20 12 00 01 4b
+RX A 18.597 ms 20 2c b4 82 20 12 00 01 4b
 TX A nf=0a cmd=12 lun=0 seq=9 data=00 64 00 65
-RX A 13.675 ms 20 2c b4 82 24 12 00 01 47
+RX A 14.207 ms 20 2c b4 82 24 12 00 01 47
 TX A nf=0a cmd=12 lun=0 seq=10 data=00 65 00 6c
-RX A 13.500 ms 20 2c b4 82 28 12 00 01 43
+RX A 24.526 ms 20 2c b4 82 28 12 00 01 43
 TX A nf=0a cmd=12 lun=0 seq=11 data=00 66 00 d5
-RX A 18.811 ms 20 2c b4 82 2c 12 00 01 3f
+RX A 13.172 ms 20 2c b4 82 2c 12 00 01 3f
 TX A nf=0a cmd=12 lun=0 seq=12 data=00 67 00 54
-RX A 13.680 ms 20 2c b4 82 30 12 00 01 3b
+RX A 22.264 ms 20 2c b4 82 30 12 00 01 3b
 TX A nf=0a cmd=12 lun=0 seq=13 data=00 68 00 69
-RX A 13.585 ms 20 2c b4 82 34 12 00 01 37
+RX A 8.307 ms 20 2c b4 82 34 12 00 01 37
 TX A nf=0a cmd=12 lun=0 seq=14 data=00 69 00 65
-RX A 14.968 ms 20 2c b4 82 38 12 00 01 33
+RX A 15.412 ms 20 2c b4 82 38 12 00 01 33
 TX A nf=0a cmd=12 lun=0 seq=15 data=00 6a 00 72
-RX A 19.951 ms 20 2c b4 82 3c 12 00 01 2f
+RX A 10.256 ms 20 2c b4 82 3c 12 00 01 2f
 TX A nf=0a cmd=12 lun=0 seq=16 data=00 6b 00 2d
-RX A 9.263 ms 20 2c b4 82 40 12 00 01 2b
+RX A 12.732 ms 20 2c b4 82 40 12 00 01 2b
 TX A nf=0a cmd=12 lun=0 seq=17 data=00 6c 00 31
-RX A 15.882 ms 20 2c b4 82 44 12 00 01 27
+RX A 11.984 ms 20 2c b4 82 44 12 00 01 27
 TX A nf=0a cmd=12 lun=0 seq=18 data=00 6d 00 20
-RX A 7.644 ms 20 2c b4 82 48 12 00 01 23
+RX A 12.141 ms 20 2c b4 82 48 12 00 01 23
 TX A nf=0a cmd=12 lun=0 seq=19 data=00 6e 00 49
-RX A 15.422 ms 20 2c b4 82 4c 12 00 01 1f
+RX A 21.768 ms 20 2c b4 82 4c 12 00 01 1f
 TX A nf=0a cmd=12 lun=0 seq=20 data=00 6f 00 50
-RX A 22.956 ms 20 2c b4 82 50 12 00 01 1b
+RX A 14.491 ms 20 2c b4 82 50 12 00 01 1b
 TX A nf=0a cmd=12 lun=0 seq=21 data=00 70 00 4d
-RX A 18.227 ms 20 2c b4 82 54 12 00 01 17
+RX A 19.310 ms 20 2c b4 82 54 12 00 01 17
 TX A nf=0a cmd=12 lun=0 seq=22 data=00 71 00 43
-RX A 14.566 ms 20 2c b4 82 58 12 00 01 13
+RX A 14.654 ms 20 2c b4 82 58 12 00 01 13
 TX A nf=0a cmd=12 lun=0 seq=23 data=00 72 00 20
-RX A 13.428 ms 20 2c b4 82 5c 12 00 01 0f
+RX A 14.404 ms 20 2c b4 82 5c 12 00 01 0f
 TX A nf=0a cmd=12 lun=0 seq=24 data=00 73 00 52
-RX A 14.375 ms 20 2c b4 82 60 12 00 01 0b
+RX A 14.001 ms 20 2c b4 82 60 12 00 01 0b
 TX A nf=0a cmd=12 lun=0 seq=25 data=00 74 00 65
-RX A 14.727 ms 20 2c b4 82 64 12 00 01 07
+RX A 14.624 ms 20 2c b4 82 64 12 00 01 07
 TX A nf=0a cmd=12 lun=0 seq=26 data=00 75 00 66
-RX A 13.543 ms 20 2c b4 82 68 12 00 01 03
+RX A 13.808 ms 20 2c b4 82 68 12 00 01 03
 TX A nf=0a cmd=12 lun=0 seq=27 data=00 76 00 65
-RX A 14.332 ms 20 2c b4 82 6c 12 00 01 ff
+RX A 13.967 ms 20 2c b4 82 6c 12 00 01 ff
 TX A nf=0a cmd=12 lun=0 seq=28 data=00 77 00 72
-RX A 14.185 ms 20 2c b4 82 70 12 00 01 fb
+RX A 15.103 ms 20 2c b4 82 70 12 00 01 fb
 TX A nf=0a cmd=12 lun=0 seq=29 data=00 78 00 65
-RX A 14.428 ms 20 2c b4 82 74 12 00 01 f7
+RX A 22.871 ms 20 2c b4 82 74 12 00 01 f7
 TX A nf=0a cmd=12 lun=0 seq=30 data=00 79 00 6e
-RX A 12.846 ms 20 2c b4 82 78 12 00 01 f3
+RX A 12.075 ms 20 2c b4 82 78 12 00 01 f3
 TX A nf=0a cmd=12 lun=0 seq=31 data=00 7a 00 63
-RX A 14.321 ms 20 2c b4 82 7c 12 00 01 ef
+RX A 12.876 ms 20 2c b4 82 7c 12 00 01 ef
 TX A nf=0a cmd=12 lun=0 seq=32 data=00 7b 00 65
-RX A 13.548 ms 20 2c b4 82 80 12 00 01 eb
+RX A 13.874 ms 20 2c b4 82 80 12 00 01 eb
 TX A nf=0a cmd=12 lun=0 seq=33 data=00 7c 00 ca
-RX A 14.243 ms 20 2c b4 82 84 12 00 01 e7
+RX A 13.509 ms 20 2c b4 82 84 12 00 01 e7
 TX A nf=0a cmd=12 lun=0 seq=34 data=00 7d 00 49
-RX A 13.870 ms 20 2c b4 82 88 12 00 01 e3
+RX A 13.314 ms 20 2c b4 82 88 12 00 01 e3
 TX A nf=0a cmd=12 lun=0 seq=35 data=00 7e 00 4b
-RX A 14.485 ms 20 2c b4 82 8c 12 00 01 df
+RX A 15.682 ms 20 2c b4 82 8c 12 00 01 df
 TX A nf=0a cmd=12 lun=0 seq=36 data=00 7f 00 2d
-RX A 22.536 ms 20 2c b4 82 90 12 00 01 db
+RX A 9.635 ms 20 2c b4 82 90 12 00 01 db
 TX A nf=0a cmd=12 lun=0 seq=37 data=00 80 00 49
-RX A 13.376 ms 20 2c b4 82 94 12 00 01 d7
+RX A 12.888 ms 20 2c b4 82 94 12 00 01 d7
 TX A nf=0a cmd=12 lun=0 seq=38 data=00 81 00 50
-RX A 14.506 ms 20 2c b4 82 98 12 00 01 d3
+RX A 13.919 ms 20 2c b4 82 98 12 00 01 d3
 TX A nf=0a cmd=12 lun=0 seq=39 data=00 82 00 4d
-RX A 13.703 ms 20 2c b4 82 9c 12 00 01 cf
+RX A 14.111 ms 20 2c b4 82 9c 12 00 01 cf
 TX A nf=0a cmd=12 lun=0 seq=40 data=00 83 00 43
-RX A 14.614 ms 20 2c b4 82 a0 12 00 01 cb
+RX A 13.964 ms 20 2c b4 82 a0 12 00 01 cb
 TX A nf=0a cmd=12 lun=0 seq=41 data=00 84 00 2d
-RX A 13.299 ms 20 2c b4 82 a4 12 00 01 c7
+RX A 14.034 ms 20 2c b4 82 a4 12 00 01 c7
 TX A nf=0a cmd=12 lun=0 seq=42 data=00 85 00 54
-RX A 14.000 ms 20 2c b4 82 a8 12 00 01 c3
+RX A 13.421 ms 20 2c b4 82 a8 12 00 01 c3
 TX A nf=0a cmd=12 lun=0 seq=43 data=00 86 00 31
-RX A 14.189 ms 20 2c b4 82 ac 12 00 01 bf
+RX A 13.313 ms 20 2c b4 82 ac 12 00 01 bf
 TX A nf=0a cmd=12 lun=0 seq=44 data=00 87 00 c3
-RX A 13.986 ms 20 2c b4 82 b0 12 00 01 bb
+RX A 14.079 ms 20 2c b4 82 b0 12 00 01 bb
 TX A nf=0a cmd=12 lun=0 seq=45 data=00 88 00 30
-RX A 13.770 ms 20 2c b4 82 b4 12 00 01 b7
+RX A 13.220 ms 20 2c b4 82 b4 12 00 01 b7
 TX A nf=0a cmd=12 lun=0 seq=46 data=00 89 00 2e
-RX A 13.448 ms 20 2c b4 82 b8 12 00 01 b3
+RX A 13.854 ms 20 2c b4 82 b8 12 00 01 b3
 TX A nf=0a cmd=12 lun=0 seq=47 data=00 8a 00 31
-RX A 15.414 ms 20 2c b4 82 bc 12 00 01 af
+RX A 23.542 ms 20 2c b4 82 bc 12 00 01 af
 TX A nf=0a cmd=12 lun=0 seq=48 data=00 8b 00 cc
-RX A 13.717 ms 20 2c b4 82 c0 12 00 01 ab
+RX A 13.922 ms 20 2c b4 82 c0 12 00 01 ab
 TX A nf=0a cmd=12 lun=0 seq=49 data=00 8c 00 49
-RX A 14.009 ms 20 2c b4 82 c4 12 00 01 a7
+RX A 21.235 ms 20 2c b4 82 c4 12 00 01 a7
 TX A nf=0a cmd=12 lun=0 seq=50 data=00 8d 00 4b
-RX A 13.189 ms 20 2c b4 82 c8 12 00 01 a3
+RX A 13.538 ms 20 2c b4 82 c8 12 00 01 a3
 TX A nf=0a cmd=12 lun=0 seq=51 data=00 8e 00 2d
-RX A 13.466 ms 20 2c b4 82 cc 12 00 01 9f
+RX A 14.230 ms 20 2c b4 82 cc 12 00 01 9f
 TX A nf=0a cmd=12 lun=0 seq=52 data=00 8f 00 54
-RX A 14.254 ms 20 2c b4 82 d0 12 00 01 9b
+RX A 12.923 ms 20 2c b4 82 d0 12 00 01 9b
 TX A nf=0a cmd=12 lun=0 seq=53 data=00 90 00 31
-RX A 13.099 ms 20 2c b4 82 d4 12 00 01 97
+RX A 14.128 ms 20 2c b4 82 d4 12 00 01 97
 TX A nf=0a cmd=12 lun=0 seq=54 data=00 91 00 2d
-RX A 24.965 ms 20 2c b4 82 d8 12 00 01 93
+RX A 23.199 ms 20 2c b4 82 d8 12 00 01 93
 TX A nf=0a cmd=12 lun=0 seq=55 data=00 92 00 30
-RX A 14.067 ms 20 2c b4 82 dc 12 00 01 8f
+RX A 14.036 ms 20 2c b4 82 dc 12 00 01 8f
 TX A nf=0a cmd=12 lun=0 seq=56 data=00 93 00 30
-RX A 13.476 ms 20 2c b4 82 e0 12 00 01 8b
+RX A 13.555 ms 20 2c b4 82 e0 12 00 01 8b
 TX A nf=0a cmd=12 lun=0 seq=57 data=00 94 00 30
-RX A 13.139 ms 20 2c b4 82 e4 12 00 01 87
+RX A 14.135 ms 20 2c b4 82 e4 12 00 01 87
 TX A nf=0a cmd=12 lun=0 seq=58 data=00 95 00 30
-RX A 13.979 ms 20 2c b4 82 e8 12 00 01 83
+RX A 13.308 ms 20 2c b4 82 e8 12 00 01 83
 TX A nf=0a cmd=12 lun=0 seq=59 data=00 96 00 30
-RX A 25.690 ms 20 2c b4 82 ec 12 00 01 7f
+RX A 13.393 ms 20 2c b4 82 ec 12 00 01 7f
 TX A nf=0a cmd=12 lun=0 seq=60 data=00 97 00 31
-RX A 13.261 ms 20 2c b4 82 f0 12 00 01 7b
+RX A 15.912 ms 20 2c b4 82 f0 12 00 01 7b
 TX A nf=0a cmd=12 lun=0 seq=61 data=00 98 00 c0
-RX A 14.476 ms 20 2c b4 82 f4 12 00 01 77
+RX A 19.881 ms 20 2c b4 82 f4 12 00 01 77
 TX A nf=0a cmd=12 lun=0 seq=62 data=00 99 00 c0
-RX A 13.029 ms 20 2c b4 82 f8 12 00 01 73
+RX A 14.166 ms 20 2c b4 82 f8 12 00 01 73
 TX A nf=0a cmd=12 lun=0 seq=63 data=00 9a 00 c1
-RX A 14.614 ms 20 2c b4 82 fc 12 00 01 6f
+RX A 14.413 ms 20 2c b4 82 fc 12 00 01 6f
 TX A nf=0a cmd=12 lun=0 seq=0 data=00 9b 00 00
-RX A 13.627 ms 20 2c b4 82 00 12 00 01 6b
+RX A 23.151 ms 20 2c b4 82 00 12 00 01 6b
 TX A nf=0a cmd=12 lun=0 seq=1 data=00 9c 00 00
-RX A 12.597 ms 20 2c b4 82 04 12 00 01 67
+RX A 15.188 ms 20 2c b4 82 04 12 00 01 67
 TX A nf=0a cmd=12 lun=0 seq=2 data=00 9d 00 00
-RX A 15.959 ms 20 2c b4 82 08 12 00 01 63
+RX A 22.095 ms 20 2c b4 82 08 12 00 01 63
 TX A nf=0a cmd=12 lun=0 seq=3 data=00 9e 00 00
-RX A 11.146 ms 20 2c b4 82 0c 12 00 01 5f
+RX A 13.259 ms 20 2c b4 82 0c 12 00 01 5f
 TX A nf=0a cmd=12 lun=0 seq=4 data=00 9f 00 1b
-RX A 14.554 ms 20 2c b4 82 10 12 00 01 5b
+RX A 15.667 ms 20 2c b4 82 10 12 00 01 5b
 TX A nf=0a cmd=10 lun=0 seq=5 data=00
-RX A 14.336 ms 20 2c b4 82 14 10 00 00 01 00 59
+RX A 18.890 ms 20 2c b4 82 14 10 00 00 01 00 59
 TX A nf=0a cmd=11 lun=0 seq=6 data=00 00 00 10
-RX A 14.152 ms 20 2c b4 82 18 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 ce
+RX A 17.573 ms 20 2c b4 82 18 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 ce
 TX A nf=0a cmd=11 lun=0 seq=7 data=00 10 00 10
-RX A 12.810 ms 20 2c b4 82 1c 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 e7
+RX A 25.228 ms 20 2c b4 82 1c 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 e7
 TX A nf=0a cmd=11 lun=0 seq=8 data=00 20 00 10
-RX A 14.040 ms 20 2c b4 82 20 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 80
+RX A 14.263 ms 20 2c b4 82 20 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 80
 TX A nf=0a cmd=11 lun=0 seq=9 data=00 30 00 10
-RX A 13.440 ms 20 2c b4 82 24 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 df
+RX A 24.619 ms 20 2c b4 82 24 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 df
 TX A nf=0a cmd=11 lun=0 seq=10 data=00 40 00 10
-RX A 15.067 ms 20 2c b4 82 28 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 60
+RX A 24.476 ms 20 2c b4 82 28 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 60
 TX A nf=0a cmd=11 lun=0 seq=11 data=00 50 00 10
-RX A 22.135 ms 20 2c b4 82 2c 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 82
+RX A 22.334 ms 20 2c b4 82 2c 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 82
 TX A nf=0a cmd=11 lun=0 seq=12 data=00 60 00 10
-RX A 13.851 ms 20 2c b4 82 30 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 4c
+RX A 14.113 ms 20 2c b4 82 30 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 4c
 TX A nf=0a cmd=11 lun=0 seq=13 data=00 70 00 10
-RX A 24.852 ms 20 2c b4 82 34 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 5f
+RX A 15.467 ms 20 2c b4 82 34 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 5f
 TX A nf=0a cmd=11 lun=0 seq=14 data=00 80 00 10
-RX A 13.219 ms 20 2c b4 82 38 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 17
+RX A 13.836 ms 20 2c b4 82 38 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 17
 TX A nf=0a cmd=11 lun=0 seq=15 data=00 90 00 10
-RX A 10.570 ms 20 2c b4 82 3c 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b 46
+RX A 11.775 ms 20 2c b4 82 3c 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b 46
 TX A nf=0a cmd=11 lun=0 seq=16 data=00 a0 00 10
-RX A 12.397 ms 20 2c b4 82 40 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1d
+RX A 21.801 ms 20 2c b4 82 40 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1d
 TX A nf=0a cmd=11 lun=0 seq=17 data=00 b0 00 10
-RX A 19.785 ms 20 2c b4 82 44 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 19
+RX A 11.109 ms 20 2c b4 82 44 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 19
 TX A nf=0a cmd=11 lun=0 seq=18 data=00 c0 00 10
-RX A 28.906 ms 20 2c b4 82 48 11 00 10 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0b
+RX A 9.989 ms 20 2c b4 82 48 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 15
 TX A nf=0a cmd=11 lun=0 seq=19 data=00 d0 00 10
-RX A 9.493 ms 20 2c b4 82 4c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 11
+RX A 17.633 ms 20 2c b4 82 4c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 11
 TX A nf=0a cmd=11 lun=0 seq=20 data=00 e0 00 10
-RX A 17.704 ms 20 2c b4 82 50 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0d
+RX A 24.453 ms 20 2c b4 82 50 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0d
 TX A nf=0a cmd=11 lun=0 seq=21 data=00 f0 00 10
-RX A 24.533 ms 20 2c b4 82 54 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 09
+RX A 13.238 ms 20 2c b4 82 54 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 09
 TX A nf=0a cmd=10 lun=0 seq=22 data=00
-RX A 14.026 ms 20 2c b4 82 58 10 00 00 01 00 15
+RX A 14.275 ms 20 2c b4 82 58 10 00 00 01 00 15
 TX A nf=0a cmd=10 lun=0 seq=23 data=00
-RX A 14.605 ms 20 2c b4 82 5c 10 00 00 01 00 11
+RX A 15.635 ms 20 2c b4 82 5c 10 00 00 01 00 11
 TX A nf=0a cmd=11 lun=0 seq=24 data=00 00 00 10
-RX A 14.146 ms 20 2c b4 82 60 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 86
+RX A 24.622 ms 20 2c b4 82 60 11 00 10 01 00 00 01 0b 00 00 f3 01 0a 00 20 42 f7 ca 49 86
 TX A nf=0a cmd=11 lun=0 seq=25 data=00 10 00 10
-RX A 13.951 ms 20 2c b4 82 64 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 9f
+RX A 14.544 ms 20 2c b4 82 64 11 00 10 72 6f 6e 4b 65 72 6e 65 6c cf 56 50 58 20 54 69 9f
 TX A nf=0a cmd=11 lun=0 seq=26 data=00 20 00 10
-RX A 13.578 ms 20 2c b4 82 68 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 38
+RX A 12.110 ms 20 2c b4 82 68 11 00 10 65 72 2d 31 20 49 50 4d 43 cc 49 4b 2d 54 31 2d 38
 TX A nf=0a cmd=11 lun=0 seq=27 data=00 30 00 10
-RX A 14.110 ms 20 2c b4 82 6c 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 97
+RX A 14.309 ms 20 2c b4 82 6c 11 00 10 30 30 30 30 30 31 ce 49 4b 2d 49 50 4d 43 2d 54 97
 TX A nf=0a cmd=11 lun=0 seq=28 data=00 40 00 10
-RX A 13.962 ms 20 2c b4 82 70 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 18
+RX A 13.662 ms 20 2c b4 82 70 11 00 10 31 2d 4e 55 43 cb 69 70 6d 63 2d 66 72 75 2d 76 18
 TX A nf=0a cmd=11 lun=0 seq=29 data=00 50 00 10
-RX A 14.144 ms 20 2c b4 82 74 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 3a
+RX A 14.231 ms 20 2c b4 82 74 11 00 10 31 c1 00 00 00 00 00 51 01 09 00 ca 49 72 6f 6e 3a
 TX A nf=0a cmd=11 lun=0 seq=30 data=00 60 00 10
-RX A 14.185 ms 20 2c b4 82 78 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 04
+RX A 23.812 ms 20 2c b4 82 78 11 00 10 4b 65 72 6e 65 6c d5 54 69 65 72 2d 31 20 49 50 04
 TX A nf=0a cmd=11 lun=0 seq=31 data=00 70 00 10
-RX A 14.088 ms 20 2c b4 82 7c 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 17
+RX A 13.513 ms 20 2c b4 82 7c 11 00 10 4d 43 20 52 65 66 65 72 65 6e 63 65 ca 49 4b 2d 17
 TX A nf=0a cmd=11 lun=0 seq=32 data=00 80 00 10
-RX A 14.901 ms 20 2c b4 82 80 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 cf
+RX A 14.295 ms 20 2c b4 82 80 11 00 10 49 50 4d 43 2d 54 31 c3 30 2e 31 cc 49 4b 2d 54 cf
 TX A nf=0a cmd=11 lun=0 seq=33 data=00 90 00 10
-RX A 14.698 ms 20 2c b4 82 84 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b fe
+RX A 13.402 ms 20 2c b4 82 84 11 00 10 31 2d 30 30 30 30 30 31 c0 c0 c1 00 00 00 00 1b fe
 TX A nf=0a cmd=11 lun=0 seq=34 data=00 a0 00 10
-RX A 13.530 ms 20 2c b4 82 88 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d5
+RX A 13.766 ms 20 2c b4 82 88 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d5
 TX A nf=0a cmd=11 lun=0 seq=35 data=00 b0 00 10
-RX A 12.962 ms 20 2c b4 82 8c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d1
+RX A 13.118 ms 20 2c b4 82 8c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 d1
 TX A nf=0a cmd=11 lun=0 seq=36 data=00 c0 00 10
-RX A 13.378 ms 20 2c b4 82 90 11 00 10 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c3
+RX A 13.502 ms 20 2c b4 82 90 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 cd
 TX A nf=0a cmd=11 lun=0 seq=37 data=00 d0 00 10
-RX A 21.647 ms 20 2c b4 82 94 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c9
+RX A 14.965 ms 20 2c b4 82 94 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c9
 TX A nf=0a cmd=11 lun=0 seq=38 data=00 e0 00 10
-RX A 18.544 ms 20 2c b4 82 98 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c5
+RX A 14.762 ms 20 2c b4 82 98 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c5
 TX A nf=0a cmd=11 lun=0 seq=39 data=00 f0 00 10
-RX A 14.665 ms 20 2c b4 82 9c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c1
+RX A 13.193 ms 20 2c b4 82 9c 11 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c1
 ```
 
 PASS: 97; FAIL: 0; NOT-TESTABLE: 60
