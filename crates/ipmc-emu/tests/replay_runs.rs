@@ -403,9 +403,11 @@ fn the_sampled_state_after_the_capture_is_m4_with_healthy_sensors() {
         let mut out = [0u8; 3];
         let n = ctx.read_sensor(number as u8, &ctx.link.buses, &mut out);
         assert_eq!(n, Ok(3), "sensor {number}");
-        // From Tier 2 the event messages of a sensor start enabled (status bit 7).
+        // At Tier 2 the event messages of a sensor start enabled (status bit 7). At Tier 3 the
+        // capture's Chassis Manager switches them off for every sensor number with Set Sensor
+        // Event Enable (04h/28h, flags 00h), and the IPMC now answers that command.
         let mut want = *want;
-        if !tier1() {
+        if ipmc_defs::IPMC_TIER == 2 {
             want[1] |= 0x80;
         }
         assert_eq!(out, want, "sensor {number}");

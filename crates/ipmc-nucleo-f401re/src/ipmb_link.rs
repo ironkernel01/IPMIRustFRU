@@ -17,10 +17,11 @@
 
 use cortex_m::peripheral::{DCB, DWT, NVIC};
 use ipmc_core::addr::{self, AddrInfo};
-use ipmc_core::dispatch::{Context as DispatchContext, ResetRequest};
-use ipmc_core::ext;
+use ipmc_core::dispatch::{Context as DispatchContext, PowerRequest, ResetRequest};
+use ipmc_core::ext::{self, Extension};
+use ipmc_core::fru_state::PowerOnRefused;
 use ipmc_core::ipmb::IPMB_MAX_LEN;
-use ipmc_core::link::{Link, LinkConfig};
+use ipmc_core::link::{BusSpeed, Link, LinkConfig};
 use ipmc_core::queue::Bus;
 use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
@@ -295,6 +296,16 @@ pub fn start_drivers(
     }
 }
 
+/// HandOffs -- what `IpmbLink::take_hand_offs` returns.
+pub struct HandOffs {
+    /// A payload power request of a handler.
+    pub power: Option<PowerRequest>,
+    /// A handler asked for a payload reset pulse.
+    pub payload_reset: bool,
+    /// The power-on check at that moment (`IpmbLink::power_on_check`).
+    pub power_on_check: Result<(), PowerOnRefused>,
+}
+
 /// IpmbLink -- the link layer, the dispatch context it answers requests with, and the drivers it
 /// moves frames to and from.
 pub struct IpmbLink {
@@ -320,6 +331,9 @@ pub struct IpmbLink {
     /// A save tried while a Cold Reset was pending failed: the normal delay applies again, so a
     /// failing flash does not stall every pass until the reset wait runs out.
     reset_save_failed: bool,
+    /// The speed each bus's master and I2C peripheral run at (`apply_bus_speeds`); both start at
+    /// 100 kHz (Rule 4.1.1-4.3), as the link does after any restart.
+    applied_speed: [BusSpeed; FaultTracker::COUNT],
     /// The evaluation period ended and both slaves are off: nothing resumes them.
     #[cfg(ipmc_eval)]
     ipmb_stopped: bool,
@@ -527,6 +541,7 @@ impl IpmbLink {
             ext: ipmc_ext::Active::default(),
             reset_gate: ResetGate::new(),
             reset_save_failed: false,
+            applied_speed: [BusSpeed::Standard; FaultTracker::COUNT],
             #[cfg(ipmc_eval)]
             ipmb_stopped: false,
         }
@@ -581,8 +596,11 @@ impl IpmbLink {
             master: &self.master,
             plan,
         };
-        let built = FruStore::new();
-        match persist.restore(&mut paused, built.image()) {
+        // The built image replaces the FRU content; the Tier-3 settings byte is not FRU content
+        // and stays as it is.
+        let mut built = FruStore::new();
+        built.load_nv_settings(self.dispatch.nv_settings());
+        match persist.restore(&mut paused, built.image(), built.nv_settings()) {
             Ok(_) => {}
             Err(PersistError::Flash(FlashError::NvmroAsserted)) => return Err(RestoreError::Nvmro),
             Err(error) => return Err(RestoreError::Failed(error)),
@@ -672,6 +690,23 @@ impl IpmbLink {
         );
     }
 
+    /// power_on_check -- whether payload power may come on now: the one combined check of every
+    /// power-on path (`ext::check_power_on`: the FRU state machine and the extension).
+    pub fn power_on_check(&self) -> Result<(), PowerOnRefused> {
+        ext::check_power_on(&self.dispatch, &self.ext)
+    }
+
+    /// take_hand_offs -- the requests a handler left for the owner of the payload power and of
+    /// the payload reset output (`Context::pending_power`, `Context::pending_payload_reset`),
+    /// cleared, with the power-on check the request meets (`Monitor::apply_power_request`).
+    pub fn take_hand_offs(&mut self) -> HandOffs {
+        HandOffs {
+            power: self.dispatch.pending_power.take(),
+            payload_reset: core::mem::take(&mut self.dispatch.pending_payload_reset),
+            power_on_check: self.power_on_check(),
+        }
+    }
+
     /// service -- main-loop step.
     /// 1. Samples NVMRO (one console line when it changes). The GA bits are not re-resolved: the
     ///    address is fixed after start-up.
@@ -680,8 +715,9 @@ impl IpmbLink {
     /// 4. Sends at most one queued response through the master (`transmit`).
     /// 5. Saves the FRU image to the flash log when a Write FRU Data has been quiet long enough
     ///    (a save that must erase a sector also waits for a quiet bus, `bus_quiet`).
-    /// 6. Restarts the processor when a handler left a Cold Reset in `pending_reset` and its
-    ///    response has left (`service_reset`).
+    /// 6. Restarts the processor (Cold Reset) or the link state (Warm Reset) when a handler left
+    ///    one in `pending_reset` and its response has left (`service_reset`).
+    /// 7. Applies a speed the link set to a bus (`apply_bus_speeds`), between transfers.
     ///
     /// The bus-fault bookkeeping runs around step 4: `track_slave_faults` before it (frames
     /// received in this pass reset the streak, the writes then add to it) and
@@ -707,6 +743,30 @@ impl IpmbLink {
         self.clear_faulted_buses();
         self.service_fru_log();
         self.service_reset();
+        self.apply_bus_speeds();
+    }
+
+    /// apply_bus_speeds -- gives each running bus the speed the link holds for it (Set IPMB State
+    /// speed byte, Rule 4.1.1-4.4): the master timing and the I2C peripheral change together
+    /// (`IpmbMaster::set_speed`), once the slave is idle, so a change never lands inside a
+    /// transfer. A bus that is busy or has no running slave is asked again on the next pass; a
+    /// change that lands prints one console line.
+    fn apply_bus_speeds(&mut self) {
+        for bus in Bus::BOTH {
+            let wanted = self.link.bus_state(bus).speed;
+            let index = tracker_index(bus);
+            let running = match bus {
+                Bus::A => self.rx_a.is_some(),
+                Bus::B => self.rx_b.is_some(),
+            };
+            if !running || self.applied_speed[index] == wanted {
+                continue;
+            }
+            if self.master.set_speed(bus, wanted) {
+                self.applied_speed[index] = wanted;
+                out!("IPMB-{}: running at {}\n", bus.name(), wanted.name());
+            }
+        }
     }
 
     /// stop_for_eval -- the end of the evaluation period: switches both IPMB slaves off and drops
@@ -745,29 +805,60 @@ impl IpmbLink {
     }
 
     /// service_reset -- performs `Context::pending_reset` when `ResetGate` says so (the response
-    /// left and no accepted FRU write is unsaved, or IPMC_RESET_WAIT_MS passed). One console
-    /// line goes out before the reset, and the console is flushed. The requester's next
-    /// sequence number is kept across the reset (`reset_cause::keep_sequence`).
+    /// left and no accepted FRU write is unsaved, or IPMC_RESET_WAIT_MS passed).
+    /// - Cold: one console line, the console is flushed, the requester's next sequence number is
+    ///   kept across the reset (`reset_cause::keep_sequence`) and the processor restarts.
+    /// - Warm: `warm_reset`, no processor reset.
     fn service_reset(&mut self) {
         let now_ms = systick::millis();
-        let pending = matches!(self.dispatch.pending_reset, Some(ResetRequest::Cold));
+        let request = self.dispatch.pending_reset;
         let egress_empty = self.link.egress_empty();
         let fru_clean = !self.fru_unsaved();
-        if self
-            .reset_gate
-            .poll(pending, now_ms, egress_empty, fru_clean, &mut ConsoleTrace)
-        {
-            out!(
-                "Cold Reset: restarting
-"
-            );
-            uart::flush();
-            reset_cause::keep_sequence(
-                self.link.next_request_seq(),
-                self.link.recent_request_seqs(now_ms),
-            );
-            reset_cause::system_reset();
+        if !self.reset_gate.poll(
+            request.is_some(),
+            now_ms,
+            egress_empty,
+            fru_clean,
+            &mut ConsoleTrace,
+        ) {
+            return;
         }
+        match request {
+            Some(ResetRequest::Cold) => {
+                out!("Cold Reset: restarting\n");
+                uart::flush();
+                reset_cause::keep_sequence(
+                    self.link.next_request_seq(),
+                    self.link.recent_request_seqs(now_ms),
+                );
+                reset_cause::system_reset();
+            }
+            Some(ResetRequest::Warm) => self.warm_reset(now_ms),
+            None => {}
+        }
+    }
+
+    /// warm_reset -- the Warm Reset (`ResetRequest::Warm`): a new Link in the power-up bus state
+    /// with the same configuration and address, the request sequence state carried over
+    /// (`Link::restarted`), the speeds back at 100 kHz in the drivers (`apply_bus_speeds` does
+    /// it on the next pass), `Context::warm_reset` clearing the hand-offs, then the extension.
+    /// The start-up faults of a bus stay (`set_local_status` again), so a bus that failed at
+    /// start-up stays disabled. Kept: the FRU store, the SDR repository, the self test, the FRU
+    /// state, the sensors and payload power, the settings byte, the payload mode and the event
+    /// enables.
+    fn warm_reset(&mut self, now_ms: u32) {
+        let mut link = self.link.restarted(&self.dispatch.addr, now_ms);
+        for bus in Bus::BOTH {
+            let status = self.link.bus_state(bus).status;
+            if status != LocalStatus::None {
+                link.set_local_status(bus, status);
+            }
+        }
+        self.dispatch.warm_reset(link.view());
+        self.link = link;
+        self.ext.warm_reset();
+        self.reset_gate = ResetGate::new();
+        out!("Warm Reset: link state re-initialised\n");
     }
 
     /// tracker -- the fault tracker of `bus`.

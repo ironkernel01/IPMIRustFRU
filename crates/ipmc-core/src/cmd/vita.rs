@@ -11,7 +11,8 @@ use crate::cmd::app::copy_out;
 use crate::cmd::{check_fru_device_id, require_no_data, IPMC_FRU_DEVICE_ID, MAX_FRU_DEVICE_ID};
 use crate::dispatch::{cc, Context};
 use crate::ipmb::Frame;
-use crate::link::{plan_ipmb_state, BusMode, PendingIpmbState};
+use crate::link::{plan_ipmb_speed, plan_ipmb_state, BusMode, BusSpeed, PendingIpmbState};
+use crate::tier;
 
 // ---- Get VSO Capabilities, Table 10.1.3.1-1 ----
 
@@ -21,9 +22,10 @@ const IPMC_IDENTIFIER_TIER_MASK: u32 = 0b11;
 /// (ipmc-defs guards IPMC_TIER to 1..=3, so the mask only documents the field width). The
 /// Tier is 1 unless the Tier-2/3 extension is built in and raises it.
 const IPMC_IDENTIFIER: u8 = ((ipmc_defs::IPMC_TIER - 1) & IPMC_IDENTIFIER_TIER_MASK) as u8;
-/// IPMB capabilities byte bits 5:4: 00b = 100 kHz (STANDARD-MODE) maximum operating frequency;
-/// the IPMB runs at IPMB_I2C_HZ = 100 kHz.
+/// IPMB capabilities byte bits 5:4: maximum operating frequency, 00b = 100 kHz (STANDARD-MODE;
+/// the IPMB runs at IPMB_I2C_HZ), 01b = 400 kHz (FAST-MODE, Tier-3: `tier::fast_mode`).
 const IPMB_MAX_FREQUENCY_100KHZ: u8 = 0;
+const IPMB_MAX_FREQUENCY_400KHZ: u8 = 0b01 << 4;
 /// IPMB capabilities byte bits 1:0: number of supported IPMB interfaces, 00b = 1, 01b = 2.
 const IPMB_INTERFACES_ONE: u8 = 0b00;
 const IPMB_INTERFACES_TWO: u8 = 0b01;
@@ -40,23 +42,35 @@ const fn vso_revision(year: u32) -> u8 {
     (units << 4) | tens
 }
 
-/// get_vso_capabilities -- Get VSO Capabilities (VITA 46.11 10.1.3.1). Request: no data beyond
-/// the VSO byte (C7h otherwise).
-/// Response data: IPMC identifier (Layer 1, Tier-1), IPMB capabilities (100 kHz; one interface,
-/// or two when IPMB-B is fitted: Rules 4.1.1-2 and 4.1.1-3), VSO standard (VITA 46.11), VSO
-/// revision (2022: 22h), max FRU Device ID (0), FRU Device ID of the IPMC (0).
-pub fn get_vso_capabilities(ctx: &mut Context, req: &Frame, out: &mut [u8]) -> Result<usize, u8> {
-    require_no_data(req)?;
-    let interfaces = if ctx.link.config.b_fitted {
+/// ipmb_capabilities -- the IPMB capabilities byte of a Tier-`tier` IPMC (Table 10.1.3.1-1): the
+/// maximum frequency (100 kHz, or 400 kHz at Tier-3) and the number of interfaces (one, or two
+/// when IPMB-B is fitted: Rules 4.1.1-2 and 4.1.1-3).
+const fn ipmb_capabilities(tier: u32, b_fitted: bool) -> u8 {
+    let interfaces = if b_fitted {
         IPMB_INTERFACES_TWO
     } else {
         IPMB_INTERFACES_ONE
     };
+    let frequency = if tier::fast_mode(tier) {
+        IPMB_MAX_FREQUENCY_400KHZ
+    } else {
+        IPMB_MAX_FREQUENCY_100KHZ
+    };
+    frequency | interfaces
+}
+
+/// get_vso_capabilities -- Get VSO Capabilities (VITA 46.11 10.1.3.1). Request: no data beyond
+/// the VSO byte (C7h otherwise).
+/// Response data: IPMC identifier (Layer 1, the build's Tier), IPMB capabilities
+/// (`ipmb_capabilities`), VSO standard (VITA 46.11), VSO revision (2022: 22h), max FRU Device ID
+/// (0), FRU Device ID of the IPMC (0).
+pub fn get_vso_capabilities(ctx: &mut Context, req: &Frame, out: &mut [u8]) -> Result<usize, u8> {
+    require_no_data(req)?;
     copy_out(
         out,
         &[
             IPMC_IDENTIFIER,
-            IPMB_MAX_FREQUENCY_100KHZ | interfaces,
+            ipmb_capabilities(ipmc_defs::IPMC_TIER, ctx.link.config.b_fitted),
             VSO_STANDARD_VITA_46_11,
             vso_revision(VSO_APPROVAL_YEAR),
             MAX_FRU_DEVICE_ID,
@@ -75,10 +89,13 @@ const STATE_LOCAL_CONTROL_BIT: u8 = 1 << 0;
 /// (also the value for a Bused System IPMB). This IPMC is on one bused System IPMB and supports
 /// no other link number (01h..5Fh) and none of the reserved values (60h..7Eh): Rule 4.1.1-14.
 const LINK_ID_ALL: u8 = 0;
-/// SPEED_ALL_100KHZ -- the optional IPMB Speed byte with both bus fields 00b (100 kHz) and the
-/// reserved bits 7:4 zero. The IPMB runs at 100 kHz only; 01b (400 kHz FAST-MODE) and the
-/// reserved values 10b and 11b are unsupported, and so is a non-zero reserved nibble: Rule 4.1.1-14.
-const SPEED_ALL_100KHZ: u8 = 0;
+/// SPEED_RESERVED_MASK -- the optional IPMB Speed byte bits 7:4 are reserved and must be 0; a
+/// non-zero reserved nibble is unsupported (Rule 4.1.1-14).
+const SPEED_RESERVED_MASK: u8 = 0xF0;
+/// SPEED_FIELD_MASK -- one bus field of the speed byte is 2 bits: IPMB-A bits 1:0, IPMB-B bits 3:2;
+/// 00b 100 kHz, 01b 400 kHz (Tier-3 only), 10b and 11b reserved.
+const SPEED_FIELD_MASK: u8 = 0b11;
+const SPEED_B_SHIFT: u8 = 2;
 
 /// parse_bus_state -- one state byte: None for FFh (no change), else the mode of bit 0.
 /// Err(CCh) for a link identification other than 00h.
@@ -96,29 +113,61 @@ fn parse_bus_state(byte: u8) -> Result<Option<BusMode>, u8> {
     }))
 }
 
+/// parse_speed_field -- one bus field of the speed byte at Tier `tier`: 00b Standard, 01b Fast
+/// when `tier::fast_mode(tier)`, else CCh (Rule 4.1.1-4.4; the other values are reserved).
+fn parse_speed_field(field: u8, tier: u32) -> Result<BusSpeed, u8> {
+    match field & SPEED_FIELD_MASK {
+        0b00 => Ok(BusSpeed::Standard),
+        0b01 if tier::fast_mode(tier) => Ok(BusSpeed::Fast),
+        _ => Err(cc::INVALID_DATA_FIELD),
+    }
+}
+
+/// parse_speed -- the optional speed byte of a Tier-`tier` IPMC as (IPMB-A, IPMB-B) changes: an
+/// absent byte changes nothing; a byte with a non-zero reserved nibble, or a field that
+/// `parse_speed_field` refuses, is CCh.
+fn parse_speed(byte: Option<u8>, tier: u32) -> Result<(Option<BusSpeed>, Option<BusSpeed>), u8> {
+    let Some(byte) = byte else {
+        return Ok((None, None));
+    };
+    if byte & SPEED_RESERVED_MASK != 0 {
+        return Err(cc::INVALID_DATA_FIELD);
+    }
+    Ok((
+        Some(parse_speed_field(byte, tier)?),
+        Some(parse_speed_field(byte >> SPEED_B_SHIFT, tier)?),
+    ))
+}
+
 /// set_ipmb_state -- Set IPMB State (VITA 46.11 10.1.3.7).
 /// Request: IPMB-A state, IPMB-B state, optional IPMB speed. C7h for another length.
 /// 1. A parameter this IPMC does not support (link identification other than 00h, a speed other
-///    than 100 kHz) -> CCh with no change (Rule 4.1.1-14).
-/// 2. `link::plan_ipmb_state` applies the Link's one rule to the Link's view: Local Control on a
-///    bus that is not fitted -> CCh (Rule 4.1.1-14), a change that would isolate this IPMC from
-///    both buses -> CCh (Rule 4.1.8-3); no change in either case.
+///    than 100 kHz below Tier-3, 400 kHz or a reserved value otherwise) -> CCh with no change
+///    (Rule 4.1.1-14).
+/// 2. `link::plan_ipmb_state` and `link::plan_ipmb_speed` apply the Link's rules to the Link's
+///    view: Local Control or 400 kHz on a bus that is not fitted -> CCh (Rule 4.1.1-14), a change
+///    that would isolate this IPMC from both buses -> CCh (Rule 4.1.8-3); no change in either
+///    case.
 /// 3. Otherwise the change goes to `Context::pending_ipmb`; `Link::poll` applies it right after
 ///    this handler returns, before the response is queued.
 ///
 /// Response data: none.
 pub fn set_ipmb_state(ctx: &mut Context, req: &Frame, _out: &mut [u8]) -> Result<usize, u8> {
     let (a, b, speed) = match req.data {
-        [a, b] => (*a, *b, SPEED_ALL_100KHZ),
-        [a, b, speed] => (*a, *b, *speed),
+        [a, b] => (*a, *b, None),
+        [a, b, speed] => (*a, *b, Some(*speed)),
         _ => return Err(cc::REQ_LEN_INVALID),
     };
     let (a, b) = (parse_bus_state(a)?, parse_bus_state(b)?);
-    if speed != SPEED_ALL_100KHZ {
-        return Err(cc::INVALID_DATA_FIELD);
-    }
+    let (speed_a, speed_b) = parse_speed(speed, ipmc_defs::IPMC_TIER)?;
     plan_ipmb_state(&ctx.link.buses, a, b).map_err(|_| cc::INVALID_DATA_FIELD)?;
-    ctx.pending_ipmb = Some(PendingIpmbState { a, b });
+    plan_ipmb_speed(&ctx.link.buses, speed_a, speed_b).map_err(|_| cc::INVALID_DATA_FIELD)?;
+    ctx.pending_ipmb = Some(PendingIpmbState {
+        a,
+        b,
+        speed_a,
+        speed_b,
+    });
     Ok(0)
 }
 
@@ -211,6 +260,61 @@ mod tests {
                 parse_bus_state(byte),
                 Err(cc::INVALID_DATA_FIELD),
                 "{byte:02X}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_speed_byte_parses_per_tier() {
+        // (tier, byte, result): A is bits 1:0, B bits 3:2; 01b is 400 kHz only at Tier-3.
+        use BusSpeed::{Fast, Standard};
+        let ok = |a, b| Ok((Some(a), Some(b)));
+        let bad = Err(cc::INVALID_DATA_FIELD);
+        let table: [(u32, u8, Result<_, u8>); 15] = [
+            (1, 0x00, ok(Standard, Standard)),
+            (2, 0x00, ok(Standard, Standard)),
+            (3, 0x00, ok(Standard, Standard)),
+            (1, 0x01, bad),
+            (2, 0x04, bad),
+            (1, 0x05, bad),
+            (3, 0x01, ok(Fast, Standard)),
+            (3, 0x04, ok(Standard, Fast)),
+            (3, 0x05, ok(Fast, Fast)),
+            (3, 0x02, bad),
+            (3, 0x08, bad),
+            (3, 0x03, bad),
+            (3, 0x10, bad),
+            (2, 0x10, bad),
+            (3, 0x41, bad),
+        ];
+        for (tier, byte, want) in table {
+            assert_eq!(
+                parse_speed(Some(byte), tier),
+                want,
+                "tier {tier} {byte:02X}"
+            );
+        }
+        for tier in [1, 2, 3] {
+            assert_eq!(parse_speed(None, tier), Ok((None, None)), "tier {tier}");
+        }
+    }
+
+    #[test]
+    fn the_ipmb_capabilities_byte_follows_the_tier_and_bus_b() {
+        // (tier, B fitted, byte): bits 5:4 the maximum frequency (01b = 400 kHz at Tier-3),
+        // bits 1:0 the interface count minus one.
+        for (tier, b_fitted, byte) in [
+            (1, false, 0x00),
+            (1, true, 0x01),
+            (2, false, 0x00),
+            (2, true, 0x01),
+            (3, false, 0x10),
+            (3, true, 0x11),
+        ] {
+            assert_eq!(
+                ipmb_capabilities(tier, b_fitted),
+                byte,
+                "tier {tier} {b_fitted}"
             );
         }
     }

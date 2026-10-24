@@ -26,6 +26,9 @@ pub const SENSOR_FRU_TEMPERATURE: u8 = 4;
 pub const SENSOR_PAYLOAD_TEST_RESULTS: u8 = 5;
 /// SENSOR_PAYLOAD_TEST_STATUS -- Sensor number of Payload Test Status (type F5h, reading type 03h).
 pub const SENSOR_PAYLOAD_TEST_STATUS: u8 = 6;
+/// SENSOR_PAYLOAD_MODE -- Sensor number of Payload Mode (type F7h, reading type 6Fh), Tier-3
+/// only (Table 10.2-1, Rule 6.1-17).
+pub const SENSOR_PAYLOAD_MODE: u8 = 7;
 
 /// SENSOR_TYPE_FRU_STATE -- Sensor type of FRU State.
 pub const SENSOR_TYPE_FRU_STATE: u8 = 0xF0;
@@ -41,8 +44,10 @@ pub const SENSOR_TYPE_FRU_TEMPERATURE: u8 = 0xF3;
 pub const SENSOR_TYPE_PAYLOAD_TEST_RESULTS: u8 = 0xF4;
 /// SENSOR_TYPE_PAYLOAD_TEST_STATUS -- Sensor type of Payload Test Status.
 pub const SENSOR_TYPE_PAYLOAD_TEST_STATUS: u8 = 0xF5;
+/// SENSOR_TYPE_PAYLOAD_MODE -- Sensor type of Payload Mode.
+pub const SENSOR_TYPE_PAYLOAD_MODE: u8 = 0xF7;
 
-/// EVENT_TYPE_SENSOR_SPECIFIC -- event/reading type 6Fh, sensor-specific (Table 10.2-1: sensors 0, 1, 4).
+/// EVENT_TYPE_SENSOR_SPECIFIC -- event/reading type 6Fh, sensor-specific (Table 10.2-1: sensors 0, 1, 4, 7).
 pub const EVENT_TYPE_SENSOR_SPECIFIC: u8 = 0x6F;
 /// EVENT_TYPE_PREDICTIVE_FAILURE -- event/reading type 04h, "digital" discrete (Table 10.2-1:
 /// sensors 2 and 5).
@@ -76,6 +81,9 @@ const STATUS_UNAVAILABLE: u8 = 1 << 5;
 const READING_DISCRETE: u8 = 0x00;
 /// READING_LEN -- bytes after the completion code that the encoders write: reading, status, state.
 pub const READING_LEN: usize = 3;
+/// READING_LEN_MAX -- the longest reading: the Payload Mode sensor's reading, status and the two
+/// current-mode bytes (Table 10.2.8-1).
+pub const READING_LEN_MAX: usize = 4;
 /// STATUS_INDEX -- position of the status byte within the bytes the encoders write.
 const STATUS_INDEX: usize = 1;
 
@@ -362,6 +370,8 @@ pub struct LinkBus {
     pub status: LocalStatus,
     /// The bus is connected and in use.
     pub enabled: bool,
+    /// The bus runs at 400 kHz FAST-MODE (Tier-3, after Set IPMB State).
+    pub fast: bool,
 }
 
 /// LinkSensor -- both buses as plain data; `link::Link::sensor_data` fills it.
@@ -378,12 +388,14 @@ pub struct LinkSensor {
 const LINK_B_OVERRIDE_BIT: u8 = 1 << 7;
 const LINK_B_STATUS_SHIFT: u8 = 4;
 const LINK_A_OVERRIDE_BIT: u8 = 1 << 3;
-/// Byte 4 bits 3:0: A en/B en, A dis/B en, A en/B dis, A dis/B dis. The 400 kHz bits 5:4 stay 0:
-/// the IPMB runs at IPMB_I2C_HZ = 100 kHz.
+/// Byte 4 bits 3:0: A en/B en, A dis/B en, A en/B dis, A dis/B dis; bit 4 IPMB-A and bit 5 IPMB-B
+/// run at 400 kHz (Table 10.2.2-1; set only when the bus runs FAST-MODE, Tier-3).
 const LINK_STATE_BOTH_ENABLED: u8 = 1 << 3;
 const LINK_STATE_ONLY_B: u8 = 1 << 2;
 const LINK_STATE_ONLY_A: u8 = 1 << 1;
 const LINK_STATE_NONE: u8 = 1 << 0;
+const LINK_STATE_A_FAST: u8 = 1 << 4;
+const LINK_STATE_B_FAST: u8 = 1 << 5;
 
 /// encode_link -- IPMB Link sensor reading (sensor 1, type F1h, Table 10.2.2-1): byte 2 holds
 /// the override and local status bits of both buses, byte 4 the link state. Always available.
@@ -397,7 +409,8 @@ pub fn encode_link(link: &LinkSensor, out: &mut [u8]) -> Result<usize, EncodeErr
         (false, true) => LINK_STATE_ONLY_B,
         (true, false) => LINK_STATE_ONLY_A,
         (false, false) => LINK_STATE_NONE,
-    };
+    } | (u8::from(link.a.fast) * LINK_STATE_A_FAST)
+        | (u8::from(link.b.fast) * LINK_STATE_B_FAST);
     write_reading(out, true, a | b, state)
 }
 
@@ -420,6 +433,113 @@ pub fn encode_payload_test_results(out: &mut [u8]) -> Result<usize, EncodeError>
 pub fn encode_payload_test_status(in_progress: bool, out: &mut [u8]) -> Result<usize, EncodeError> {
     let state = if in_progress { STATE_BAD } else { STATE_GOOD };
     write_reading(out, true, READING_DISCRETE, state)
+}
+
+/// PAYLOAD_MODE_MAX -- the highest operational mode, Eh (Table 10.2.8-1: modes 0h..Eh, Fh reserved).
+pub const PAYLOAD_MODE_MAX: u8 = 14;
+
+/// TransitionStatus -- the Payload Mode transition status (Table 10.2.8-1 byte 2 bits 5:4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionStatus {
+    /// 00b: a transition is in progress.
+    InProgress,
+    /// 01b: the transition completed.
+    Complete,
+    /// 10b: the transition failed.
+    Failed,
+}
+
+impl TransitionStatus {
+    /// code -- the 2-bit value of Table 10.2.8-1 (also the event data 2 field of Table 10.2.8-2).
+    pub const fn code(self) -> u8 {
+        match self {
+            TransitionStatus::InProgress => 0b00,
+            TransitionStatus::Complete => 0b01,
+            TransitionStatus::Failed => 0b10,
+        }
+    }
+}
+
+/// PayloadMode -- the state the Payload Mode sensor reports: the current operational mode, the
+/// previous one and the transition status. The Tier-3 Set Payload Mode handler writes
+/// `Context::payload_mode`; the fields are checked at construction so the encoder cannot see a
+/// mode above Eh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PayloadMode {
+    current: u8,
+    previous: u8,
+    status: TransitionStatus,
+}
+
+impl PayloadMode {
+    /// POWER_UP -- mode 0 complete, previous mode 0.
+    pub const POWER_UP: PayloadMode = PayloadMode {
+        current: 0,
+        previous: 0,
+        status: TransitionStatus::Complete,
+    };
+
+    /// new -- None when `current` or `previous` is above `PAYLOAD_MODE_MAX`.
+    pub const fn new(current: u8, previous: u8, status: TransitionStatus) -> Option<PayloadMode> {
+        if current > PAYLOAD_MODE_MAX || previous > PAYLOAD_MODE_MAX {
+            return None;
+        }
+        Some(PayloadMode {
+            current,
+            previous,
+            status,
+        })
+    }
+
+    /// current -- the current operational mode, 0..=14.
+    pub const fn current(&self) -> u8 {
+        self.current
+    }
+
+    /// previous -- the previous operational mode, 0..=14.
+    pub const fn previous(&self) -> u8 {
+        self.previous
+    }
+
+    /// status -- the transition status.
+    pub const fn status(&self) -> TransitionStatus {
+        self.status
+    }
+}
+
+/// PAYLOAD_MODE_NVMRO_BIT -- Table 10.2.8-1 byte 2 bit 6: the NVMRO state. Bit 7 (gDiscrete1) is
+/// 0: no board signal feeds it.
+const PAYLOAD_MODE_NVMRO_BIT: u8 = 1 << 6;
+/// PAYLOAD_MODE_STATUS_SHIFT -- Table 10.2.8-1 byte 2 bits 5:4: the transition status.
+const PAYLOAD_MODE_STATUS_SHIFT: u8 = 4;
+/// PAYLOAD_MODE_MS_RESERVED -- Table 10.2.8-1 byte 5 bit 7: reserved, returns 1b.
+const PAYLOAD_MODE_MS_RESERVED: u8 = 1 << 7;
+
+/// payload_mode_mask -- the current-mode mask of the sensor (Table 10.2.8-1 bytes 4 and 5): bit n
+/// of the 15-bit value is mode n.
+const fn payload_mode_mask(mode: &PayloadMode) -> u16 {
+    1 << mode.current
+}
+
+/// encode_payload_mode -- Payload Mode reading (sensor 7, Table 10.2.8-1): byte 2 holds gDiscrete1
+/// (0), the NVMRO state, the transition status (bits 5:4) and the previous mode (bits 3:0), byte
+/// 3 the status, byte 4 the current-mode mask LS byte (modes 0..=7), byte 5 its MS byte (modes
+/// 8..=14 in bits 6:0, bit 7 reserved 1b). Always available. Writes `READING_LEN_MAX` bytes.
+pub fn encode_payload_mode(
+    mode: &PayloadMode,
+    nvmro_asserted: bool,
+    out: &mut [u8],
+) -> Result<usize, EncodeError> {
+    let reading = (u8::from(nvmro_asserted) * PAYLOAD_MODE_NVMRO_BIT)
+        | (mode.status.code() << PAYLOAD_MODE_STATUS_SHIFT)
+        | mode.previous;
+    let [mask_ls, mask_ms] = payload_mode_mask(mode).to_le_bytes();
+    let Some(last) = out.get_mut(READING_LEN) else {
+        return Err(EncodeError::BufferTooShort);
+    };
+    *last = mask_ms | PAYLOAD_MODE_MS_RESERVED;
+    write_reading(out, true, reading, mask_ls)?;
+    Ok(READING_LEN_MAX)
 }
 
 /// encode_sensor_reading -- Get Sensor Reading response data for `sensor_number` (the bytes
@@ -585,6 +705,7 @@ mod tests {
             local_control,
             status,
             enabled,
+            fast: false,
         }
     }
 
@@ -654,5 +775,60 @@ mod tests {
         assert_eq!(s.valid_rails().len(), 2);
         s.rail_count = RAILS_MAX + 1;
         assert!(s.valid_rails().is_empty());
+    }
+
+    #[test]
+    fn link_sensor_state_bits_4_and_5_report_400_khz() {
+        let ok = LocalStatus::None;
+        let fast = |b: LinkBus| LinkBus { fast: true, ..b };
+        // (A fast, B fast, byte 4): A en / B en is 08h, plus bit 4 for A and bit 5 for B.
+        for (a_fast, b_fast, byte4) in [
+            (false, false, 0x08),
+            (true, false, 0x18),
+            (false, true, 0x28),
+            (true, true, 0x38),
+        ] {
+            let a = bus(true, ok, true);
+            let b = bus(true, ok, true);
+            let (a, b) = (
+                if a_fast { fast(a) } else { a },
+                if b_fast { fast(b) } else { b },
+            );
+            assert_eq!(link_bytes(a, b), [0x88, 0x40, byte4]);
+        }
+    }
+
+    #[test]
+    fn payload_mode_reading_follows_table_10_2_8_1() {
+        use TransitionStatus::{Complete, Failed, InProgress};
+        // (current, previous, status, NVMRO, bytes 2..=5): byte 2 = NVMRO << 6 | status << 4 |
+        // previous; bytes 4 and 5 the current-mode mask, bit 7 of byte 5 reads 1.
+        let cases = [
+            (0, 0, Complete, false, [0x10, 0x40, 0x01, 0x80]),
+            (3, 0, InProgress, false, [0x00, 0x40, 0x08, 0x80]),
+            (7, 14, Failed, true, [0x6E, 0x40, 0x80, 0x80]),
+            (8, 7, Complete, false, [0x17, 0x40, 0x00, 0x81]),
+            (14, 8, Complete, true, [0x58, 0x40, 0x00, 0xC0]),
+        ];
+        for (current, previous, status, nvmro, want) in cases {
+            let mode = PayloadMode::new(current, previous, status).unwrap();
+            let mut out = [0xEE; READING_LEN_MAX];
+            assert_eq!(
+                encode_payload_mode(&mode, nvmro, &mut out),
+                Ok(READING_LEN_MAX)
+            );
+            assert_eq!(out, want, "mode {current} from {previous}");
+        }
+        assert_eq!(PayloadMode::new(15, 0, Complete), None);
+        assert_eq!(PayloadMode::new(0, 15, Complete), None);
+        assert_eq!(PayloadMode::POWER_UP.current(), 0);
+        assert_eq!(PayloadMode::POWER_UP.status(), Complete);
+        let mut short = [0u8; READING_LEN_MAX - 1];
+        assert_eq!(
+            encode_payload_mode(&PayloadMode::POWER_UP, false, &mut short),
+            Err(EncodeError::BufferTooShort)
+        );
+        assert_eq!(SENSOR_PAYLOAD_MODE, 7);
+        assert_eq!(SENSOR_TYPE_PAYLOAD_MODE, 0xF7);
     }
 }

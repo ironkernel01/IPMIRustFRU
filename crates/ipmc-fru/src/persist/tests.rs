@@ -141,7 +141,7 @@ fn booted_nvmro(flash: &mut Mock, nvmro: bool) -> (Persist, Option<FruStore>, Bo
 /// save_tags -- saves one image per tag, in order.
 fn save_tags(log: &mut Persist, flash: &mut Mock, tags: impl Iterator<Item = u8>) {
     for tag in tags {
-        log.save(flash, &image(tag)).expect("save");
+        log.save(flash, &image(tag), 0).expect("save");
     }
 }
 
@@ -152,7 +152,7 @@ fn loaded_tag(flash: &mut Mock) -> Option<u8> {
 
 #[test]
 fn the_record_layout_is_as_documented() {
-    let record = encode(0x0102_0304, &image(0x5A));
+    let record = encode(0x0102_0304, &image(0x5A), 0);
     assert_eq!(RECORD_LEN, SIZE + 16);
     assert_eq!(&record[..4], b"1IFU");
     assert_eq!(record[4..8], [0x04, 0x03, 0x02, 0x01]);
@@ -176,13 +176,13 @@ fn each_check_of_a_slot_rejects_a_record_that_breaks_it() {
         (OFF_COMMIT, &[0, 0, 0, 0]),
     ];
     for (offset, bytes) in cases {
-        let mut record = encode(7, &image(1));
+        let mut record = encode(7, &image(1), 0);
         record[offset..offset + bytes.len()].copy_from_slice(bytes);
         let crc = crc32(&record[OFF_SEQ..OFF_CRC]);
         record[OFF_CRC..].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(classify(&record), Slot::Invalid, "field at {offset}");
     }
-    let mut flipped = encode(7, &image(1));
+    let mut flipped = encode(7, &image(1), 0);
     flipped[OFF_IMAGE + 3] ^= 0x01;
     assert_eq!(classify(&flipped), Slot::Invalid, "image bit flip");
     assert_eq!(classify(&[ERASED; RECORD_LEN]), Slot::Blank);
@@ -203,7 +203,7 @@ fn empty_flash_loads_the_built_image() {
 fn save_then_load_returns_the_image_and_starts_at_sequence_1() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    let saved = log.save(&mut flash, &image(0x11)).unwrap();
+    let saved = log.save(&mut flash, &image(0x11), 0).unwrap();
     assert_eq!(
         saved,
         Saved {
@@ -246,7 +246,7 @@ fn a_full_sector_switches_and_marks_the_old_one_erase_pending() {
         (s.active, s.records, s.erase_pending),
         (LogSector::A, [4, 0], false)
     );
-    let saved = log.save(&mut flash, &image(5)).unwrap();
+    let saved = log.save(&mut flash, &image(5), 0).unwrap();
     assert_eq!(
         (saved.sector, saved.offset, saved.erased),
         (LogSector::B, 0, None)
@@ -259,7 +259,7 @@ fn a_full_sector_switches_and_marks_the_old_one_erase_pending() {
     assert!(flash.erases.is_empty(), "the switch alone erases nothing");
     // B fills, then the next save erases A first and reports it.
     save_tags(&mut log, &mut flash, 6..=8);
-    let saved = log.save(&mut flash, &image(9)).unwrap();
+    let saved = log.save(&mut flash, &image(9), 0).unwrap();
     assert_eq!(
         (saved.sector, saved.erased),
         (LogSector::A, Some(LogSector::A))
@@ -272,9 +272,9 @@ fn a_power_cut_after_any_single_word_loads_the_previous_good_image() {
     for cut_after in 0..=RECORD_WORDS {
         let mut flash = Mock::new();
         let (mut log, _, _) = booted(&mut flash);
-        log.save(&mut flash, &image(1)).unwrap();
+        log.save(&mut flash, &image(1), 0).unwrap();
         flash.budget = Some(cut_after);
-        let result = log.save(&mut flash, &image(2));
+        let result = log.save(&mut flash, &image(2), 0);
         let complete = cut_after == RECORD_WORDS;
         assert_eq!(result.is_ok(), complete, "cut after word {cut_after}");
         if !complete {
@@ -291,7 +291,7 @@ fn a_power_cut_after_any_single_word_loads_the_previous_good_image() {
         );
         // The next boot saves after the damaged slot and still orders correctly.
         let (mut log, _, _) = booted(&mut flash);
-        log.save(&mut flash, &image(3)).unwrap();
+        log.save(&mut flash, &image(3), 0).unwrap();
         assert_eq!(loaded_tag(&mut flash), Some(3), "after cut at {cut_after}");
     }
 }
@@ -302,11 +302,11 @@ fn a_failed_save_skips_its_slot_in_the_running_log_too() {
     let (mut log, _, _) = booted(&mut flash);
     flash.budget = Some(2);
     assert_eq!(
-        log.save(&mut flash, &image(1)),
+        log.save(&mut flash, &image(1), 0),
         Err(PersistError::Flash(FlashError::Programming))
     );
     flash.budget = None;
-    let saved = log.save(&mut flash, &image(2)).unwrap();
+    let saved = log.save(&mut flash, &image(2), 0).unwrap();
     assert_eq!(saved.offset, RECORD_LEN, "the damaged slot is not reused");
     assert_eq!(loaded_tag(&mut flash), Some(2));
 }
@@ -468,7 +468,7 @@ fn garbage_after_the_last_record_leaves_no_room_in_that_sector() {
     save_tags(&mut log, &mut flash, 1..=1);
     flash.sectors[0][SECTOR_LEN - 1] = 0x7F; // an interrupted erase left a cell programmed
     let (mut log, _, _) = booted(&mut flash);
-    let saved = log.save(&mut flash, &image(2)).unwrap();
+    let saved = log.save(&mut flash, &image(2), 0).unwrap();
     assert_eq!(
         (saved.sector, saved.erased),
         (LogSector::B, None),
@@ -485,16 +485,19 @@ fn a_save_that_programs_nothing_leaves_a_hole_and_the_record_after_it_still_load
         let (mut log, _, _) = booted(&mut flash);
         save_tags(&mut log, &mut flash, 1..=u8::try_from(hole).unwrap());
         flash.budget = Some(0);
-        assert!(log.save(&mut flash, &image(0xEE)).is_err(), "hole {hole}");
+        assert!(
+            log.save(&mut flash, &image(0xEE), 0).is_err(),
+            "hole {hole}"
+        );
         flash.budget = None;
         assert_eq!(
-            log.save(&mut flash, &image(7)).unwrap().offset,
+            log.save(&mut flash, &image(7), 0).unwrap().offset,
             (hole + 1) * RECORD_LEN
         );
         let (mut log, store, report) = booted(&mut flash);
         assert_eq!(store.map(|s| s.image()[TAG_AT]), Some(7), "hole {hole}");
         assert_eq!(report.erased, [None, None], "hole {hole}: nothing erased");
-        let next = log.save(&mut flash, &image(8)).unwrap();
+        let next = log.save(&mut flash, &image(8), 0).unwrap();
         assert_eq!(
             next.offset,
             (hole + 2) * RECORD_LEN,
@@ -511,11 +514,11 @@ fn a_driver_error_after_the_record_landed_uses_its_sequence_number_up() {
     // The commit word is the last word of the first record; the driver reports it failed.
     flash.late_error = Some(RECORD_WORDS);
     assert_eq!(
-        log.save(&mut flash, &image(1)),
+        log.save(&mut flash, &image(1), 0),
         Err(PersistError::Flash(FlashError::Timeout))
     );
     flash.late_error = None;
-    let saved = log.save(&mut flash, &image(2)).unwrap();
+    let saved = log.save(&mut flash, &image(2), 0).unwrap();
     assert_eq!((saved.offset, saved.seq), (RECORD_LEN, 2));
     let (_, store, report) = booted(&mut flash);
     assert_eq!(report.loaded, Some((LogSector::A, 2)));
@@ -552,7 +555,7 @@ fn a_power_cut_during_the_switch_erase_keeps_the_newest_record() {
     // B is full and active; the 9th save erases A first, and the power goes in that erase.
     flash.torn_erase = true;
     assert_eq!(
-        log.save(&mut flash, &image(9)),
+        log.save(&mut flash, &image(9), 0),
         Err(PersistError::Flash(FlashError::Timeout))
     );
     let (mut log, store, report) = booted(&mut flash);
@@ -563,7 +566,7 @@ fn a_power_cut_during_the_switch_erase_keeps_the_newest_record() {
         [Some(LogSector::A), None],
         "the torn sector is erased again"
     );
-    let saved = log.save(&mut flash, &image(9)).unwrap();
+    let saved = log.save(&mut flash, &image(9), 0).unwrap();
     assert_eq!(
         (saved.sector, saved.offset, saved.seq),
         (LogSector::A, 0, 9)
@@ -574,13 +577,13 @@ fn a_power_cut_during_the_switch_erase_keeps_the_newest_record() {
 #[test]
 fn the_highest_sequence_number_loads_and_no_record_follows_it() {
     let mut flash = Mock::new();
-    let words = pack_words(&encode(SEQ_MAX, &image(5)));
+    let words = pack_words(&encode(SEQ_MAX, &image(5), 0));
     flash.program(LogSector::A, 0, &words).unwrap();
     let (mut log, store, report) = booted(&mut flash);
     assert_eq!(report.loaded, Some((LogSector::A, SEQ_MAX)));
     assert_eq!(store.unwrap().image()[TAG_AT], 5);
     assert_eq!(
-        log.save(&mut flash, &image(6)),
+        log.save(&mut flash, &image(6), 0),
         Err(PersistError::SequenceExhausted)
     );
     assert_eq!(
@@ -611,7 +614,7 @@ fn a_failed_boot_erase_keeps_the_loaded_image_and_reports_the_error() {
     );
     assert!(log.status().erase_pending, "A still waits for its erase");
     // Persistence stays usable: the next save goes to B.
-    let saved = log.save(&mut flash, &image(8)).unwrap();
+    let saved = log.save(&mut flash, &image(8), 0).unwrap();
     assert_eq!((saved.sector, saved.seq), (LogSector::B, 8));
     // With no valid record the failed erase is reported the same way.
     let mut flash = Mock::new();
@@ -631,7 +634,7 @@ fn restore_is_one_record_write_and_the_built_image_wins() {
     let (mut log, _, _) = booted(&mut flash);
     save_tags(&mut log, &mut flash, 1..=6);
     let built = *FruStore::new().image();
-    let saved = log.restore(&mut flash, &built).unwrap();
+    let saved = log.restore(&mut flash, &built, 0).unwrap();
     assert_eq!(saved.seq, 7);
     assert!(flash.erases.is_empty(), "no erase: the record is appended");
     assert_eq!(loaded_tag(&mut flash), Some(built[TAG_AT]));
@@ -650,9 +653,9 @@ fn restore_interrupted_at_every_word_loads_the_previous_newest_or_the_built_imag
             let mut flash = Mock::new();
             let (mut log, _, _) = booted(&mut flash);
             save_tags(&mut log, &mut flash, 1..saves);
-            log.save(&mut flash, &image(previous)).unwrap();
+            log.save(&mut flash, &image(previous), 0).unwrap();
             flash.budget = Some(cut_after);
-            let result = log.restore(&mut flash, &built);
+            let result = log.restore(&mut flash, &built, 0);
             flash.budget = None;
             let want = if result.is_ok() {
                 built[TAG_AT]
@@ -678,7 +681,7 @@ fn restore_with_a_failed_or_torn_erase_loads_the_previous_newest_image() {
         save_tags(&mut log, &mut flash, 1..=8);
         flash.torn_erase = torn;
         flash.erase_fails = !torn;
-        assert!(log.restore(&mut flash, &built).is_err(), "torn {torn}");
+        assert!(log.restore(&mut flash, &built, 0).is_err(), "torn {torn}");
         flash.erase_fails = false;
         assert_eq!(loaded_tag(&mut flash), Some(8), "torn {torn}");
     }
@@ -775,14 +778,58 @@ fn a_driver_that_refuses_for_nvmro_leaves_flash_and_the_image_untouched() {
     // Restore and save are refused, and nothing is written or erased.
     let built = *FruStore::new().image();
     assert_eq!(
-        log.restore(&mut flash, &built),
+        log.restore(&mut flash, &built, 0),
         Err(PersistError::Flash(FlashError::NvmroAsserted))
     );
     assert_eq!(
-        log.save(&mut flash, &image(9)),
+        log.save(&mut flash, &image(9), 0),
         Err(PersistError::Flash(FlashError::NvmroAsserted))
     );
     assert_eq!(flash.sectors, before);
     flash.nvmro = false;
     assert_eq!(loaded_tag(&mut flash), Some(7));
+}
+
+#[test]
+fn the_settings_byte_rides_in_the_version_word_and_reads_zero_in_an_older_record() {
+    // An older record: the 16-bit version field is 0001h, so byte 11 is 00h = settings 00h, and a
+    // record with settings 00h is byte-identical to it.
+    let mut older = encode(3, &image(4), 0);
+    assert_eq!(older[OFF_VERSION..OFF_IMAGE], [1, 0]);
+    let mut flash = Mock::new();
+    flash.sectors[0][..RECORD_LEN].copy_from_slice(&older);
+    let (_, store, _) = booted(&mut flash);
+    assert_eq!(store.unwrap().nv_settings(), 0, "older record");
+    // (settings written, settings read back): bits 0 and 1 are kept, the others masked off.
+    for (written, read) in [(0, 0), (1, 1), (2, 2), (3, 3), (0xFC, 0), (0xFF, 3)] {
+        let record = encode(5, &image(4), written);
+        assert_eq!(record[OFF_VERSION], 1, "version byte");
+        assert_eq!(record[OFF_SETTINGS], read, "settings {written:02X}");
+        assert_eq!(classify(&record), Slot::Valid(5));
+        let mut flash = Mock::new();
+        let (mut log, _, _) = booted(&mut flash);
+        log.save(&mut flash, &image(4), written).unwrap();
+        let store = booted(&mut flash).1.unwrap();
+        assert_eq!(store.nv_settings(), read);
+        assert!(!store.is_dirty());
+    }
+    older[OFF_SETTINGS] = 1; // the CRC no longer holds
+    assert_eq!(classify(&older), Slot::Invalid);
+}
+
+#[test]
+fn a_settings_change_marks_the_store_dirty_and_is_saved_with_the_image() {
+    let mut flash = Mock::new();
+    let (mut log, _, _) = booted(&mut flash);
+    let mut store = FruStore::new();
+    store.set_nv_settings(0);
+    assert!(!store.is_dirty(), "no change, no mark");
+    store.set_nv_settings(0b10);
+    assert!(store.is_dirty());
+    assert!(log
+        .poll(&mut flash, &mut store, 0, false, DELAY_MS, true)
+        .is_none());
+    let saved = log.poll(&mut flash, &mut store, DELAY_MS, false, DELAY_MS, true);
+    assert!(matches!(saved, Some(Ok(_))));
+    assert_eq!(booted(&mut flash).1.unwrap().nv_settings(), 0b10);
 }

@@ -33,21 +33,28 @@ const SENSOR0_TIER1: [u8; 41] = [
 ];
 
 /// sensor0 -- sensor 0's record as the build's Tier writes it: sensor initialization (byte 10),
-/// capabilities (byte 11) and the assertion event mask (bytes 14..16) differ per Tier (Table
-/// 43-2; the Tier-2/3 mask is VITA Table 10.2.1-1's 0053h).
+/// capabilities (byte 11), the assertion event mask (bytes 14..16) and the reading mask (bytes
+/// 18..20) differ per Tier (Table 43-2; the Tier-2 masks are VITA Table 10.2.1-1's 0053h, Tier-3
+/// adds M5: 0073h).
 #[allow(dead_code)]
 pub fn sensor0() -> [u8; 41] {
-    let (init, caps, assertion) = by_tier([
-        (0x01, 0x43, 0x0000u16),
-        (0x03, 0x42, 0x0053),
-        (0x03, 0x40, 0x0053),
+    let (init, caps, assertion, reading) = by_tier([
+        (0x01, 0x43, 0x0000u16, 0x0053u16),
+        (0x03, 0x42, 0x0053, 0x0053),
+        (0x03, 0x40, 0x0073, 0x0073),
     ]);
     let mut record = SENSOR0_TIER1;
     record[10] = init;
     record[11] = caps;
     record[14..16].copy_from_slice(&assertion.to_le_bytes());
+    record[18..20].copy_from_slice(&reading.to_le_bytes());
     record
 }
+
+/// SENSOR_COUNT -- the sensors the build's Tier has: sensors 0..=6, and sensor 7 (Payload Mode)
+/// at Tier-3. The locator record is the record after them, so its ID is this number.
+#[allow(dead_code)]
+pub const SENSOR_COUNT: u8 = if ipmc_defs::IPMC_TIER == 3 { 8 } else { 7 };
 
 /// The management controller device locator record at Tier-1, from Table 43-8; `locator`
 /// applies the bytes that differ per Tier.
@@ -56,12 +63,13 @@ const LOCATOR_TIER1: [u8; 20] = [
     b'I', b'P', b'M', b'C',
 ];
 
-/// locator -- the locator record as the build's Tier writes it: global initialization (byte 7)
-/// and capabilities (byte 8).
+/// locator -- the locator record as the build's Tier writes it: its ID (the sensor count), global
+/// initialization (byte 7) and capabilities (byte 8).
 #[allow(dead_code)]
 pub fn locator() -> [u8; 20] {
     let (global_init, caps) = by_tier([(0x01, 0x0B), (0x00, 0x2B), (0x00, 0x2F)]);
     let mut record = LOCATOR_TIER1;
+    record[0] = SENSOR_COUNT;
     record[7] = global_init;
     record[8] = caps;
     record

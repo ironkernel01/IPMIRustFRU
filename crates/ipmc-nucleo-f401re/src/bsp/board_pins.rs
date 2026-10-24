@@ -43,8 +43,9 @@ pub const ADC: AdcMap = AdcMap {
     ],
 };
 
-/// GPIO -- the digital signals: PWR_EN on PB5 (D4); PGOOD on PB10 (D6), FAULT_N on PA10 (D2),
-/// OVERTEMP_N on PC7 (D9) and PAYLOAD_RESET_N on PB6 (D10), in `Input::index` order.
+/// GPIO -- the digital signals: PWR_EN on PB5 (D4) and PAYLOAD_RST_OUT_N on PA9 (D8, CN5-1 and
+/// CN10-21, open drain, active low); PGOOD on PB10 (D6), FAULT_N on PA10 (D2), OVERTEMP_N on PC7
+/// (D9) and PAYLOAD_RESET_N on PB6 (D10), in `Input::index` order.
 pub const GPIO: GpioMap = GpioMap {
     power_enable: pin(PortId::B, 5),
     inputs: [
@@ -53,4 +54,5 @@ pub const GPIO: GpioMap = GpioMap {
         pin(PortId::C, 7),
         pin(PortId::B, 6),
     ],
+    payload_reset_out: pin(PortId::A, 9),
 };

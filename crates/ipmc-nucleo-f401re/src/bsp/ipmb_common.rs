@@ -65,11 +65,10 @@ pub fn now() -> u32 {
     DWT::cycle_count()
 }
 
-/// cycles_for -- ceil(ns x core_hz / 1e9) as u32 cycles, None when it does not fit.
-pub fn cycles_for(ns: u64, core_hz: u32) -> Option<u32> {
-    let cycles = (ns * u64::from(core_hz)).div_ceil(NS_PER_S);
-    u32::try_from(cycles).ok()
-}
+/// cycles_for -- ceil(ns x core_hz / 1e9) as u32 cycles, None when it does not fit: the one
+/// conversion, in ipmc-defs (`i2c_timing`, host-tested), so the bit-bang phases and these waits
+/// share it.
+pub use ipmc_defs::i2c_timing::cycles_for;
 
 /// start_cycle_counter -- DCB trace enable, then CYCCNT (Cortex-M4 TRM, DWT_CTRL.CYCCNTENA);
 /// Err when the counter does not advance.

@@ -13,9 +13,10 @@
 use core::fmt;
 
 use ipmc_core::dispatch::Context as DispatchContext;
+use ipmc_core::fru_state::PowerOnRefused;
 use ipmc_core::link::BusPair;
 use ipmc_core::sensor::{
-    SensorSnapshot, READING_LEN, SENSOR_FRU_HEALTH, SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE,
+    SensorSnapshot, READING_LEN_MAX, SENSOR_FRU_HEALTH, SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE,
     SENSOR_FRU_VOLTAGE, SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS,
     SENSOR_SYSTEM_IPMB_LINK,
 };
@@ -26,13 +27,15 @@ use ipmc_sensors::drivers::stm32f401::adc::{Adc, InitError};
 use ipmc_sensors::drivers::stm32f401::gpio::BoardIo;
 use ipmc_sensors::eval::faults;
 use ipmc_sensors::eval::power_fsm::PowerError;
-use ipmc_sensors::hal::{Channel, DigitalInputs, PowerSwitch};
+use ipmc_sensors::hal::{Channel, DigitalInputs, PowerSwitch, SourceError};
 use ipmc_sensors::monitor::Monitor;
+use ipmc_sensors::reset_pulse::PayloadResetPulse;
 use ipmc_sensors::routing::{HardwareNeeds, RoutedAnalog, RoutedIo, Source};
 use ipmc_sensors::trace::{Asserted, Level, Tenths};
 
 use crate::bsp::systick;
 use crate::console::{ConsoleTrace, Context};
+use crate::ipmb_link::HandOffs;
 
 // No bus is assigned to external sensor parts (the STM32's I2C1 and I2C3 are the IPMB buses), so
 // the I2C and SPI source values are not accepted in a firmware build.
@@ -68,6 +71,8 @@ pub struct Sensing {
     adc_fault: Option<InitError>,
     /// A sample was taken that `take_fresh` has not handed on yet.
     fresh: bool,
+    /// The timing of the payload reset pulse on PAYLOAD_RST_OUT_N (IPMC_PAYLOAD_RESET_PULSE_MS).
+    reset_pulse: PayloadResetPulse,
 }
 
 impl Sensing {
@@ -101,16 +106,66 @@ impl Sensing {
             ),
             adc_fault,
             fresh: false,
+            reset_pulse: PayloadResetPulse::new(),
         }
     }
 
-    /// start -- requests payload power when ipmi_defs.h IPMC_POWER_AT_BOOT is 1.
-    pub fn start(&mut self) {
-        if ipmc_defs::IPMC_POWER_AT_BOOT == 1 {
+    /// serve_hand_offs -- what the owner of the payload power and of the reset output does with
+    /// the requests of the command handlers (`IpmbLink::take_hand_offs`), and the release of a
+    /// running reset pulse. Called every main-loop pass.
+    /// - A power request goes through `Monitor::apply_power_request` (On asks the FRU state
+    ///   machine first, the one power-on check); a resample follows so the snapshot and the FRU
+    ///   state see it.
+    /// - A reset request asserts PAYLOAD_RST_OUT_N for IPMC_PAYLOAD_RESET_PULSE_MS
+    ///   (`PayloadResetPulse`, non-blocking); a build whose power group is simulated has no
+    ///   output and prints that.
+    /// - A pulse whose time is up is released here.
+    pub fn serve_hand_offs(&mut self, hand_offs: HandOffs) {
+        let now = systick::millis();
+        if let Some(request) = hand_offs.power {
+            let done = self.monitor.apply_power_request(
+                request,
+                hand_offs.power_on_check,
+                now,
+                &mut self.io,
+                &mut ConsoleTrace,
+            );
+            if done {
+                self.sample_now();
+            }
+        }
+        if hand_offs.payload_reset {
+            let pulse_ms = ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS;
+            let started = match self.io.hw.as_mut() {
+                Some(hw) => self.reset_pulse.pulse_payload_reset(hw, now, pulse_ms),
+                None => Err(SourceError::Unavailable),
+            };
+            match started {
+                Ok(()) => out!("Payload reset: PAYLOAD_RST_OUT_N low for {} ms\n", pulse_ms),
+                Err(error) => out!("Payload reset: no output pulse: {}\n", error.name()),
+            }
+        }
+        if let Some(hw) = self.io.hw.as_mut() {
+            if let Some(Err(error)) = self.reset_pulse.service(hw, now) {
+                out!("Payload reset: release failed: {}\n", error.name());
+            }
+        }
+    }
+
+    /// start -- requests payload power when ipmi_defs.h IPMC_POWER_AT_BOOT is 1 and
+    /// `power_on_check` (`IpmbLink::power_on_check`) allows it; a refusal prints one line.
+    pub fn start(&mut self, power_on_check: Result<(), PowerOnRefused>) {
+        if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+            return;
+        }
+        match power_on_check {
             // A fresh controller is Off with no fault, so the request cannot be refused.
-            let _ = self
-                .monitor
-                .power_on(systick::millis(), &mut self.io, &mut ConsoleTrace);
+            Ok(()) => {
+                let _ = self
+                    .monitor
+                    .power_on(systick::millis(), &mut self.io, &mut ConsoleTrace);
+            }
+            Err(refused) => out!("Power at boot refused: {}\n", refused.name()),
         }
     }
 
@@ -192,7 +247,7 @@ fn print_reading(
     number: u8,
     summary: &str,
 ) {
-    let mut bytes = [0u8; READING_LEN];
+    let mut bytes = [0u8; READING_LEN_MAX];
     match dispatch.read_sensor(number, buses, &mut bytes) {
         Ok(len) => {
             out!(
@@ -396,9 +451,9 @@ fn run_power(
 }
 
 /// cmd_power_on -- asserts PWR_EN and waits for PGOOD (timeout IPMC_PGOOD_TIMEOUT_MS). Refused
-/// while the FRU is in M6 (`FruMachine::check_power_on`).
+/// while the FRU is in M6 or activation-locked (`IpmbLink::power_on_check`).
 pub fn cmd_power_on(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
-    if let Err(refused) = ctx.ipmb.dispatch().fru_state.check_power_on() {
+    if let Err(refused) = ctx.ipmb.power_on_check() {
         out!(
             "Error: {}
 ",

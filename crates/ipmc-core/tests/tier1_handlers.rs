@@ -3,7 +3,7 @@
 // produced by the encoders under test), every completion code of every error path.
 
 mod common;
-use common::{by_tier, call, call_vso, locator, sensor0};
+use common::{by_tier, call, call_vso, locator, sensor0, SENSOR_COUNT};
 use ipmc_core::addr;
 use ipmc_core::dispatch::{Context, SensorReadError};
 use ipmc_core::fru_state::State;
@@ -94,8 +94,9 @@ const FRU_ID_COMMANDS: [FruIdCommand; 2] = [
         name: "Get Device Locator Record ID",
         call: call_vso,
         cmd: GET_DEVICE_LOCATOR_RECORD_ID,
-        // The type 12h record is the eighth, ID 0007h, LS byte first.
-        answer: &[0x07, 0x00],
+        // The type 12h record follows the sensors: ID 0007h (0008h with sensor 7 at Tier-3), LS
+        // byte first.
+        answer: &[SENSOR_COUNT, 0x00],
     },
 ];
 
@@ -380,14 +381,15 @@ fn a_corrupt_persisted_image_loaded_through_set_fru_fails_the_self_test_and_keep
 #[test]
 fn sdr_info_counts_sensors_and_records() {
     let mut c = ctx();
-    // No operation byte, or operation 0b: sensor count 7, flags 01h (LUN 0 has sensors, static).
+    // No operation byte, or operation 0b: the sensor count (7, with the Payload Mode sensor 8 at
+    // Tier-3), flags 01h (LUN 0 has sensors, static).
     for request in [&[][..], &[0x00][..]] {
         let r = se(&mut c, GET_DEVICE_SDR_INFO, request);
-        assert_eq!((r.cc, r.data), (OK, vec![7, 0x01]));
+        assert_eq!((r.cc, r.data), (OK, vec![SENSOR_COUNT, 0x01]));
     }
-    // Operation 1b: SDR count, 7 sensor records and the locator record.
+    // Operation 1b: SDR count, the sensor records and the locator record.
     let r = se(&mut c, GET_DEVICE_SDR_INFO, &[0x01]);
-    assert_eq!((r.cc, r.data), (OK, vec![8, 0x01]));
+    assert_eq!((r.cc, r.data), (OK, vec![SENSOR_COUNT + 1, 0x01]));
     expect_err(se(&mut c, GET_DEVICE_SDR_INFO, &[0x02]), BAD_FIELD);
     expect_err(se(&mut c, GET_DEVICE_SDR_INFO, &[0x80]), BAD_FIELD);
     expect_err(se(&mut c, GET_DEVICE_SDR_INFO, &[0, 0]), BAD_CMD_LEN);
@@ -468,7 +470,8 @@ fn partial_reads_need_the_current_reservation() {
 fn whole_record_read_and_the_next_id_chain_ends_at_ffff() {
     let mut c = ctx();
     // The locator record is the last one: FFh reads all 20 bytes in one response, next ID FFFFh.
-    let r = se(&mut c, GET_DEVICE_SDR, &sdr_request([0, 0], 7, 0, 0xFF));
+    let last = u16::from(SENSOR_COUNT);
+    let r = se(&mut c, GET_DEVICE_SDR, &sdr_request([0, 0], last, 0, 0xFF));
     assert_eq!(r.cc, OK);
     assert_eq!(&r.data[..2], &[0xFF, 0xFF]);
     assert_eq!(&r.data[2..], &locator());
@@ -479,7 +482,7 @@ fn whole_record_read_and_the_next_id_chain_ends_at_ffff() {
         &sdr_request([0, 0], 0xFFFF, 0, 0xFF),
     );
     assert_eq!(&r.data[2..], &locator());
-    // The chain 0000h -> 0001h -> ... -> 0007h -> FFFFh, from 5-byte header reads.
+    // The chain 0000h -> 0001h -> ... -> the locator's ID -> FFFFh, from 5-byte header reads.
     let mut id = 0u16;
     let mut ids = vec![id];
     loop {
@@ -497,7 +500,7 @@ fn whole_record_read_and_the_next_id_chain_ends_at_ffff() {
         ids.push(next);
         id = next;
     }
-    assert_eq!(ids, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(ids, (0..=last).collect::<Vec<u16>>());
 }
 
 #[test]
@@ -509,7 +512,11 @@ fn sdr_error_paths() {
     }
     // No such record.
     expect_err(
-        se(&mut c, GET_DEVICE_SDR, &sdr_request(res, 8, 0, 5)),
+        se(
+            &mut c,
+            GET_DEVICE_SDR,
+            &sdr_request(res, u16::from(SENSOR_COUNT) + 1, 0, 5),
+        ),
         NOT_PRESENT,
     );
     expect_err(
@@ -660,7 +667,7 @@ fn read_sensor_serves_the_handler_and_the_console_from_one_function() {
     assert_eq!(c.read_sensor(0, &both, &mut out), Ok(3));
     assert_eq!(out, [0x00, scanning(), 0x01]);
     assert_eq!(
-        c.read_sensor(7, &both, &mut out),
+        c.read_sensor(SENSOR_COUNT, &both, &mut out),
         Err(SensorReadError::NotPresent)
     );
     assert_eq!(
@@ -693,7 +700,8 @@ fn reading_status_bit_7_follows_the_sensors_event_enable() {
 #[test]
 fn sensor_reading_error_paths() {
     let mut c = ctx();
-    for sensor in [7u8, 8, 0x80, 0xFF] {
+    // The first numbers past the sensors of the Tier (7, or 8 with the Payload Mode sensor).
+    for sensor in [SENSOR_COUNT, SENSOR_COUNT + 1, 0x80, 0xFF] {
         expect_err(se(&mut c, GET_SENSOR_READING, &[sensor]), NOT_PRESENT);
     }
     expect_err(se(&mut c, GET_SENSOR_READING, &[]), BAD_CMD_LEN);
@@ -704,33 +712,36 @@ fn sensor_reading_error_paths() {
 
 #[test]
 fn vso_capabilities_for_one_and_two_interfaces() {
-    // Layer 1 / Tier-1 = 00h (Tier-2 01h, Tier-3 02h); 100 kHz and one interface = 00h; VITA
-    // 46.11 = 00h; 2022 = 22h; max FRU Device ID 0; IPMC FRU Device ID 0.
+    // Layer 1 / Tier-1 = 00h (Tier-2 01h, Tier-3 02h); 100 kHz (400 kHz, 01b in bits 5:4, at
+    // Tier-3) and one interface = 00h; VITA 46.11 = 00h; 2022 = 22h; max FRU Device ID 0; IPMC
+    // FRU Device ID 0.
     let tier = by_tier([0x00, 0x01, 0x02]);
+    let speed = by_tier([0x00, 0x00, 0x10]);
     let one = call_vso(&mut ctx(), GET_VSO_CAPABILITIES, &[]);
     assert_eq!(
         (one.cc, one.data),
-        (OK, vec![tier, 0x00, 0x00, 0x22, 0x00, 0x00])
+        (OK, vec![tier, speed, 0x00, 0x22, 0x00, 0x00])
     );
     // IPMB-B fitted: number of interfaces 01b (Rule 4.1.1-2).
     let two = call_vso(&mut ctx_with_b(), GET_VSO_CAPABILITIES, &[]);
     assert_eq!(
         (two.cc, two.data),
-        (OK, vec![tier, 0x01, 0x00, 0x22, 0x00, 0x00])
+        (OK, vec![tier, speed | 0x01, 0x00, 0x22, 0x00, 0x00])
     );
 }
 
 #[test]
 fn vso_capabilities_frame_is_byte_exact() {
     // rqSA 20h, netFn 2Dh<<2 = B4h, chk1 -(20+B4) = 2Ch, rsSA 82h, seq 5<<2 = 14h, cmd 00h,
-    // CC 00h, data 03 TT 00 00 22 00 00 with the IPMC identifier TT = Tier - 1 (00h, 01h, 02h),
-    // chk2 -(82+14+03+TT+22) = 45h, 44h, 43h.
+    // CC 00h, data 03 TT SS 00 22 00 00 with the IPMC identifier TT = Tier - 1 (00h, 01h, 02h)
+    // and the IPMB capabilities SS = 00h (10h, 400 kHz, at Tier-3), chk2 =
+    // -(82+14+03+TT+SS+22) = 45h, 44h, 33h.
     let r = call(&mut ctx(), 0x2C, GET_VSO_CAPABILITIES, &[0x03]);
-    let (tier, chk2) = by_tier([(0x00, 0x45), (0x01, 0x44), (0x02, 0x43)]);
+    let (tier, speed, chk2) = by_tier([(0x00, 0x00, 0x45), (0x01, 0x00, 0x44), (0x02, 0x10, 0x33)]);
     assert_eq!(
         r.frame,
         [
-            0x20, 0xB4, 0x2C, 0x82, 0x14, 0x00, 0x00, 0x03, tier, 0x00, 0x00, 0x22, 0x00, 0x00,
+            0x20, 0xB4, 0x2C, 0x82, 0x14, 0x00, 0x00, 0x03, tier, speed, 0x00, 0x22, 0x00, 0x00,
             chk2
         ]
     );
@@ -838,8 +849,9 @@ fn set_ipmb_state_refusals_change_nothing() {
     for request in [&[0x03, 0x01][..], &[0x01, 0x03][..], &[0x80, 0xFF][..]] {
         expect_err(call_vso(&mut c, SET_IPMB_STATE, request), BAD_FIELD);
     }
-    // IPMB Speed: 400 kHz for A (01b), for B (01b << 2), reserved 10b and a reserved nibble.
-    for speed in [0x01, 0x04, 0x02, 0x08, 0x10, 0x05] {
+    // IPMB Speed: the reserved values 10b and 11b of either bus and a reserved nibble (400 kHz is
+    // `speed_byte_400_khz_follows_the_tier`).
+    for speed in [0x02, 0x08, 0x03, 0x0C, 0x10, 0x11] {
         expect_err(
             call_vso(&mut c, SET_IPMB_STATE, &[0x01, 0x01, speed]),
             BAD_FIELD,
@@ -869,4 +881,39 @@ fn set_ipmb_state_refusals_change_nothing() {
         OK
     );
     assert_eq!(call_vso(&mut single, SET_IPMB_STATE, &[0xFF, 0xFF]).cc, OK);
+}
+
+#[test]
+fn speed_byte_400_khz_follows_the_tier() {
+    // 400 kHz (01b) for A, for B (01b << 2) and both: refused below Tier-3 (Rule 4.1.1-4.4),
+    // accepted at Tier-3 with the change handed to the Link.
+    let accepted = by_tier([false, false, true]);
+    for speed in [0x01u8, 0x04, 0x05] {
+        let mut c = ctx_with_b();
+        let r = call_vso(&mut c, SET_IPMB_STATE, &[0x01, 0x01, speed]);
+        if accepted {
+            assert_eq!(r.cc, OK, "speed {speed:02X}");
+            let pending = c.pending_ipmb.take().expect("a pending change");
+            let fast = |bit: u8| {
+                (speed & bit != 0)
+                    .then_some(ipmc_core::link::BusSpeed::Fast)
+                    .or(Some(ipmc_core::link::BusSpeed::Standard))
+            };
+            assert_eq!((pending.speed_a, pending.speed_b), (fast(0x01), fast(0x04)));
+        } else {
+            assert_eq!(r.cc, BAD_FIELD, "speed {speed:02X}");
+            assert!(c.pending_ipmb.is_none());
+        }
+    }
+    // Without the speed byte no speed changes at any Tier.
+    let mut c = ctx_with_b();
+    assert_eq!(call_vso(&mut c, SET_IPMB_STATE, &[0x01, 0x01]).cc, OK);
+    let pending = c.pending_ipmb.take().unwrap();
+    assert_eq!((pending.speed_a, pending.speed_b), (None, None));
+    // 400 kHz for IPMB-B when it is not fitted: CCh even at Tier-3.
+    let mut single = ctx();
+    expect_err(
+        call_vso(&mut single, SET_IPMB_STATE, &[0xFF, 0xFF, 0x04]),
+        BAD_FIELD,
+    );
 }

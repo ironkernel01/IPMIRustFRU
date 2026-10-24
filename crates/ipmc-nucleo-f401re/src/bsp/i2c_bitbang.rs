@@ -10,7 +10,9 @@
 // every wait come from the DWT cycle counter. No logging inside a transfer.
 
 use cortex_m::peripheral::{DCB, DWT};
+use ipmc_core::link::BusSpeed;
 use ipmc_core::queue::Bus;
+use ipmc_defs::i2c_timing::BitPhases;
 use ipmc_sensors::drivers::stm32f401::ports::{Pins, Pull, Speed};
 
 use super::i2c_hw;
@@ -20,9 +22,9 @@ use super::ipmb_common::{
 use super::ipmb_master::{IpmbMaster, MasterError, MasterState, Recovery};
 use super::ipmb_pins::{BusPins, IpmbPins};
 
-/// T_HIGH_MIN_NS -- SCL high time, standard mode: at least 4.0 us (I2C-bus specification Table 5,
-/// tHIGH). The high phase ends at least this long after SCL was seen high.
-const T_HIGH_MIN_NS: u32 = 4_000;
+// The SCL high time minimum (4.0 us standard mode, 0.6 us fast mode, I2C-bus specification Table
+// 5, tHIGH) is in ipmc-defs `i2c_timing`: the high phase ends at least that long after SCL was
+// seen high.
 /// T_SU_DAT_NS -- data setup time, standard mode: SDA stable at least 250 ns before SCL rises
 /// (I2C-bus specification Table 10, tSU;DAT). Timed from the SDA write itself, so an interrupt
 /// between the low-phase start and the SDA write cannot shorten it.
@@ -35,12 +37,10 @@ const BITS_PER_BYTE: u32 = 9;
 /// Cycles -- the times of the master in core clock cycles.
 #[derive(Clone, Copy)]
 pub(super) struct Cycles {
-    /// Half a bit: IPMB_BITBANG_HALF_NS.
-    half: u32,
-    /// Slack of the high phase: half a bit less T_HIGH_MIN_NS. A rise (plus the poll that sees
-    /// it) up to this long is absorbed inside the half bit; a longer wait (a stretched clock)
-    /// extends the phase so SCL stays high for T_HIGH_MIN_NS after it was seen high.
-    rise_allow: u32,
+    /// The SCL phases at 100 kHz (a half bit: IPMB_BITBANG_HALF_NS) and at 400 kHz (IPMB_BITBANG_
+    /// FAST_LOW_NS and _HIGH_NS); `phases` picks one.
+    standard: BitPhases,
+    fast: BitPhases,
     /// T_SU_DAT_NS in cycles.
     su_dat: u32,
     /// The waits both masters share (stretch, bus free, ...).
@@ -53,17 +53,20 @@ impl Cycles {
         self.t
     }
 
-    /// new -- the times at `core_hz`; None when the clock is zero, a time overflows 32 bits, or
-    /// a half bit rounds to zero cycles.
-    pub(super) fn new(core_hz: u32) -> Option<Cycles> {
-        let half = cycles_for(u64::from(ipmc_defs::IPMB_BITBANG_HALF_NS), core_hz)?;
-        let high_min = cycles_for(u64::from(T_HIGH_MIN_NS), core_hz)?;
-        if half == 0 {
-            return None;
+    /// phases -- the SCL phases of `speed`.
+    const fn phases(&self, speed: BusSpeed) -> BitPhases {
+        match speed {
+            BusSpeed::Standard => self.standard,
+            BusSpeed::Fast => self.fast,
         }
+    }
+
+    /// new -- the times at `core_hz`; None when the clock is zero, a time overflows 32 bits, or
+    /// a phase rounds to zero cycles.
+    pub(super) fn new(core_hz: u32) -> Option<Cycles> {
         Some(Cycles {
-            half,
-            rise_allow: half.saturating_sub(high_min),
+            standard: BitPhases::standard(core_hz)?,
+            fast: BitPhases::fast(core_hz)?,
             su_dat: cycles_for(u64::from(T_SU_DAT_NS), core_hz)?,
             t: BusTimes::new(core_hz)?,
         })
@@ -75,7 +78,9 @@ struct Wire<'a> {
     scl: &'a Pins,
     sda: &'a Pins,
     cy: Cycles,
-    /// Cycle count at which the current phase ends; moved by `wait_half`.
+    /// The SCL phases of the speed this transfer runs at.
+    phases: BitPhases,
+    /// Cycle count at which the current phase ends; moved by `wait_phase`.
     next: u32,
     /// Cycle count at the start of the transfer; every clock release must end within
     /// `cy.t.frame` of it (VITA 46.11 Table 4.1.1-1 T1, the bound the hardware master uses too).
@@ -89,11 +94,12 @@ struct Wire<'a> {
 }
 
 impl<'a> Wire<'a> {
-    fn new(pins: &'a BusPins, cy: Cycles, deadline: Deadline) -> Self {
+    fn new(pins: &'a BusPins, cy: Cycles, speed: BusSpeed, deadline: Deadline) -> Self {
         Wire {
             scl: &pins.scl,
             sda: &pins.sda,
             cy,
+            phases: cy.phases(speed),
             next: now(),
             started: now(),
             deadline,
@@ -131,24 +137,36 @@ impl<'a> Wire<'a> {
         self.next = now();
     }
 
-    /// wait_half -- ends the current phase one half bit after the previous phase ended, so the
-    /// time spent in pin operations does not add to the bit time. A phase that ran more than a
-    /// half bit late (an interrupt came in) resyncs to now. The wait is at most two half bits:
-    /// the phase end is never more than one half bit ahead of the cycle counter.
-    fn wait_half(&mut self) {
-        let half = self.cy.half;
-        self.next = self.next.wrapping_add(half);
+    /// wait_low -- ends a low phase: `wait_phase` of the SCL low time of the speed (a half bit at
+    /// 100 kHz). Also the bus free time after a STOP (tBUF, at least 4.7 us at 100 kHz and 1.3 us
+    /// at 400 kHz, both within it).
+    fn wait_low(&mut self) {
+        self.wait_phase(self.phases.low);
+    }
+
+    /// wait_high -- ends a high phase: `wait_phase` of the SCL high time of the speed (a half bit
+    /// at 100 kHz). Also the START setup and hold and the STOP setup times.
+    fn wait_high(&mut self) {
+        self.wait_phase(self.phases.high);
+    }
+
+    /// wait_phase -- ends the current phase `len` cycles after the previous phase ended, so the
+    /// time spent in pin operations does not add to the bit time. A phase that ran more than
+    /// `len` late (an interrupt came in) resyncs to now. The wait is at most two phases: the
+    /// phase end is never more than one phase ahead of the cycle counter.
+    fn wait_phase(&mut self, len: u32) {
+        self.next = self.next.wrapping_add(len);
         let entered = now();
         loop {
             let t = now();
             let late = t.wrapping_sub(self.next) as i32;
             if late >= 0 {
-                if late.unsigned_abs() > half {
+                if late.unsigned_abs() > len {
                     self.next = t;
                 }
                 return;
             }
-            if t.wrapping_sub(entered) > half.saturating_mul(2) {
+            if t.wrapping_sub(entered) > len.saturating_mul(2) {
                 self.next = t; // the counter is not where it should be: leave the wait
                 return;
             }
@@ -168,9 +186,9 @@ impl<'a> Wire<'a> {
     /// release_scl_wait -- releases SCL and waits for it to read high, bounded by
     /// IPMB_STRETCH_TIMEOUT_US (a slave may stretch it), by T1 for the whole transfer and by the
     /// write's shared deadline. The
-    /// high phase then ends one half bit after the release, or T_HIGH_MIN_NS after SCL was seen
-    /// high when that is later (a slow rise or a stretch), so the SCL period stays at two half
-    /// bits plus the time the pin operations take.
+    /// high phase then ends one high time after the release, or the high-time minimum after SCL
+    /// was seen high when that is later (a slow rise or a stretch), so the SCL period stays at
+    /// the two phases plus the time the pin operations take.
     fn release_scl_wait(&mut self) -> Result<(), MasterError> {
         let released_at = now();
         self.release_scl();
@@ -186,29 +204,30 @@ impl<'a> Wire<'a> {
             return Err(MasterError::StretchTimeout);
         }
         let seen_after = now().wrapping_sub(released_at);
-        self.next = released_at.wrapping_add(seen_after.saturating_sub(self.cy.rise_allow));
+        self.next = released_at.wrapping_add(seen_after.saturating_sub(self.phases.rise_allow));
         Ok(())
     }
 
     /// start -- START condition from released lines: SDA falls while SCL is high, then SCL falls.
-    /// Setup (tSU;STA) and hold (tHD;STA) are one half bit each, at least 4.7 us and 4.0 us.
-    /// The hold is timed from the cycle count read right after SDA is driven low (`rebase`), so an
-    /// interrupt before that point cannot shorten it below one half bit (UM10204 Table 10,
-    /// tHD;STA >= 4.0 us). Setup needs no such rule: it only gets longer when delayed.
+    /// Setup (tSU;STA) and hold (tHD;STA) are one high phase each: a half bit at 100 kHz, at least
+    /// 4.7 us and 4.0 us; 1.0 us at 400 kHz, at least 0.6 us each. The hold is timed from the
+    /// cycle count read right after SDA is driven low (`rebase`), so an interrupt before that
+    /// point cannot shorten it below one phase (UM10204 Table 10, tHD;STA). Setup needs no such
+    /// rule: it only gets longer when delayed.
     fn start(&mut self) {
         self.rebase();
-        self.wait_half();
+        self.wait_high();
         self.drive_sda_low();
         self.rebase();
-        self.wait_half();
+        self.wait_high();
         self.drive_scl_low();
         self.rebase();
     }
 
     /// bit -- one clock with `level` on SDA; returns the SDA level sampled at the end of the SCL
     /// high phase. SCL is low on entry and on exit.
-    /// 1. SDA to `level` (released for 1) while SCL is low; low period one half bit, and at
-    ///    least tSU;DAT from the SDA write itself.
+    /// 1. SDA to `level` (released for 1) while SCL is low; low period `phases.low` (a half bit at
+    ///    100 kHz), and at least tSU;DAT from the SDA write itself.
     /// 2. SCL released, wait for it to read high (stretch).
     /// 3. Sample SDA as soon as SCL is high (the data has been stable for the whole low phase,
     ///    longer than the slave's ACK delay of 3.45 us), then finish the high period.
@@ -220,11 +239,11 @@ impl<'a> Wire<'a> {
             self.drive_sda_low();
         }
         let sda_set = now();
-        self.wait_half();
+        self.wait_low();
         self.hold_since(sda_set, self.cy.su_dat);
         self.release_scl_wait()?;
         let sampled = self.sda_high();
-        self.wait_half();
+        self.wait_high();
         self.drive_scl_low();
         self.rebase();
         Ok(sampled)
@@ -246,17 +265,18 @@ impl<'a> Wire<'a> {
     }
 
     /// stop -- STOP condition from SCL low: SDA low, SCL released, SDA released, then the bus
-    /// free time (a half bit, at least 4.7 us, tBUF). tSU;STO is timed from the SCL release by
+    /// free time (the low time: a half bit at 100 kHz, at least 4.7 us; 1.4 us at 400 kHz, at
+    /// least 1.3 us; tBUF). tSU;STO is timed from the SCL release by
     /// `release_scl_wait`; tBUF from the cycle count read right after SDA is released (`rebase`),
     /// so an interrupt before the release cannot shorten it.
     fn stop(&mut self) -> Result<(), MasterError> {
         self.drive_sda_low();
-        self.wait_half();
+        self.wait_low();
         let scl = self.release_scl_wait();
-        self.wait_half();
+        self.wait_high();
         self.release_sda();
         self.rebase();
-        self.wait_half();
+        self.wait_low();
         scl
     }
 
@@ -270,21 +290,21 @@ impl<'a> Wire<'a> {
                 break;
             }
             self.drive_scl_low();
-            self.wait_half();
+            self.wait_low();
             if self.release_scl_wait().is_err() {
                 break;
             }
-            self.wait_half();
+            self.wait_high();
         }
         self.drive_scl_low();
-        self.wait_half();
+        self.wait_low();
         self.drive_sda_low();
-        self.wait_half();
+        self.wait_low();
         let _ = self.release_scl_wait();
-        self.wait_half();
+        self.wait_high();
         self.release_sda();
         self.rebase(); // tBUF from the actual release, as in `stop`
-        self.wait_half();
+        self.wait_low();
         self.sda_high()
     }
 
@@ -355,13 +375,19 @@ impl<'a> Wire<'a> {
     }
 }
 
-/// recover_if_stuck -- before the I2C slave is enabled (the pins are parked inputs): if SDA
+/// recover_if_stuck -- before the I2C slave is enabled (the pins are parked inputs; the bus is
+/// at 100 kHz, Rule 4.1.1-4.3): if SDA
 /// reads low, clocks SCL up to 9 times as open-drain GPIO and sends a STOP, then parks the
 /// pins as inputs again (i2c-bitbang.md sections 3 and 5). Both masters use it at start-up.
 /// Ok(NotNeeded): both lines high. Ok(Recovered): SDA was low and is free. Err(SclStuckLow):
 /// SCL reads low, no clock can be sent. Err(SdaStuckLow): SDA still low after the clocks.
 pub(super) fn recover_if_stuck(pins: &BusPins, cy: Cycles) -> Result<Recovery, MasterError> {
-    let mut wire = Wire::new(pins, cy, Deadline::from_now(cy.t.write_budget));
+    let mut wire = Wire::new(
+        pins,
+        cy,
+        BusSpeed::Standard,
+        Deadline::from_now(cy.t.write_budget),
+    );
     if !wire.scl_high() {
         return Err(MasterError::SclStuckLow);
     }
@@ -417,7 +443,7 @@ impl IpmbMaster for BitbangMaster {
     ) -> Result<(), MasterError> {
         let state = &mut self.state;
         let pins = state.pins.bus(bus);
-        let mut wire = Wire::new(pins, state.cy, deadline);
+        let mut wire = Wire::new(pins, state.cy, *state.speeds.get(bus), deadline);
         wait_bus_free(bus, pins, &state.cy.t, deadline, i2c_hw::suspend)?;
         // While PE = 0 the slave cannot hear its bus: a frame another master sends from here to
         // `resume` is lost and is recovered by the requester's retry (PLAN 3.4).

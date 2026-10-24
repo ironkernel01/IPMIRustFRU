@@ -11,6 +11,7 @@ use core::fmt;
 use ipmc_core::addr;
 use ipmc_core::dispatch::{Context, ResetRequest};
 use ipmc_core::ext::{self, Extension};
+use ipmc_core::fru_state::PowerOnRefused;
 use ipmc_core::link::{BusMode, FrameDrop, Link, LinkConfig, LinkError, TxPolicy};
 use ipmc_core::queue::Bus;
 use ipmc_core::reset_gate::ResetGate;
@@ -127,6 +128,33 @@ impl PowerSwitch for NoHardware {
 /// FRU_PERSIST -- Write FRU Data is saved to the flash log (ipmi_defs.h IPMC_FRU_PERSIST).
 const FRU_PERSIST: bool = ipmc_defs::IPMC_FRU_PERSIST == 1;
 
+/// FlashCopy -- what the FRU flash log holds: the FRU image and the Tier-3 settings byte saved
+/// with it (`FruStore::nv_settings`). A reset restores the FRU store from it, and a power cycle
+/// of the emulator (`Emulator::flash`, `Emulator::new_with_flash`) carries it to the new board:
+/// flash keeps its content without power.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlashCopy {
+    fru: [u8; FRU_SIZE],
+    nv_settings: u8,
+}
+
+impl FlashCopy {
+    /// erased -- the log of a board that never saved: the built FRU image and settings 00h.
+    pub fn erased() -> FlashCopy {
+        FlashCopy {
+            fru: *FruStore::new().image(),
+            nv_settings: 0,
+        }
+    }
+
+    /// stored_fru -- the FRU store a reset or start-up restores from this copy.
+    fn stored_fru(&self) -> FruStore {
+        let mut stored = FruStore::from_image(self.fru);
+        stored.load_nv_settings(self.nv_settings);
+        stored
+    }
+}
+
 /// Board -- the sensor and power side of the board, rebuilt by a processor reset as at a boot.
 struct Board {
     monitor: Monitor,
@@ -136,9 +164,15 @@ struct Board {
 
 impl Board {
     /// boot -- the Monitor over the simulators at their ipmi_defs.h start values, payload power
-    /// requested at `now_ms` when `power_on_at_start` (the firmware start-up).
+    /// requested at `now_ms` when `power_on_at_start` (the firmware start-up) and
+    /// `power_on_check` (`ipmc_core::ext::check_power_on` for the context and extension of this
+    /// boot: an activation lock keeps the payload off) allows it.
     /// Err(PowerOnRefused) when the power controller refuses the request.
-    fn boot(config: &EmuConfig, now_ms: u32) -> Result<Board, EmuError> {
+    fn boot(
+        config: &EmuConfig,
+        now_ms: u32,
+        power_on_check: Result<(), PowerOnRefused>,
+    ) -> Result<Board, EmuError> {
         let mut monitor = Monitor::new(
             ipmc_defs::IPMC_SENSOR_PERIOD_MS,
             ipmc_defs::IPMC_PGOOD_TIMEOUT_MS,
@@ -152,7 +186,7 @@ impl Board {
             Source::Sim,
             Source::Sim,
         );
-        if config.power_on_at_start {
+        if config.power_on_at_start && power_on_check.is_ok() {
             monitor
                 .power_on(now_ms, &mut io, &mut ipmc_core::trace::NoTrace)
                 .map_err(|_| EmuError::PowerOnRefused)?;
@@ -186,9 +220,9 @@ pub struct Emulator {
     make_ext: ExtensionFactory,
     /// The one decision when a pending cold reset runs (`ResetGate`, as in the firmware).
     reset_gate: ResetGate,
-    /// The FRU image in the flash log: what a reset restores. Updated where the firmware saves
+    /// The flash log: what a reset restores. Updated where the firmware saves
     /// (`service_fru_save`).
-    flash_fru: [u8; FRU_SIZE],
+    flash: FlashCopy,
     /// Time an accepted Write FRU Data was last seen unsaved, None while the store is saved.
     fru_unsaved_since: Option<u32>,
 }
@@ -200,50 +234,82 @@ impl Emulator {
     /// Err(BusNotFitted) when IPMB-B is asked to start enabled but is not fitted;
     /// Err(PowerOnRefused) when the power controller refuses the request.
     pub fn new(config: EmuConfig) -> Result<Emulator, EmuError> {
-        let (link, ctx) = Self::start_state(&config, 0, 0, 0)?;
-        let board = Board::boot(&config, 0)?;
-        Ok(Emulator {
-            config,
-            link,
-            ctx,
-            board,
-            tx_policy: config.tx_policy,
-            ext: build_active(),
-            make_ext: build_active,
-            reset_gate: ResetGate::new(),
-            flash_fru: *FruStore::new().image(),
-            fru_unsaved_since: None,
-        })
+        Emulator::new_with_flash(config, FlashCopy::erased())
     }
 
-    /// start_state -- the Link and Context of a board at start-up for `config` (also what a cold
-    /// reset rebuilds): IPMB-B enabled when `b_enabled_at_start`; the first request sequence
-    /// number is `first_seq` and the values in `recent` count as sent at `start_ms` (power-up: 0,
-    /// 0, 0; after a reset: the old link's counter, its sequence numbers sent inside T9 and the
-    /// reset time).
-    fn start_state(
-        config: &EmuConfig,
-        first_seq: u8,
-        recent: u64,
-        start_ms: u32,
-    ) -> Result<(Link, Context), EmuError> {
+    /// new_with_flash -- `new` for a board whose flash log holds `flash`: the FRU store and the
+    /// non-volatile settings are restored from it before the payload power is decided, as at a
+    /// boot of the firmware (the power-on hook sees the stored default-activation lock).
+    pub fn new_with_flash(config: EmuConfig, flash: FlashCopy) -> Result<Emulator, EmuError> {
         let resolved = addr::resolve(config.strap);
-        let mut link = Link::with_first_request_seq(
+        let mut link = Link::new(
             LinkConfig {
                 b_fitted: config.b_fitted,
                 tx_policy: config.tx_policy,
                 requests_allowed: LinkConfig::from_defs().requests_allowed,
             },
             &resolved,
-            first_seq,
-            recent,
-            start_ms,
         );
+        Self::enable_b_if_configured(&config, &mut link)?;
+        let mut ctx = Context::new(resolved);
+        ctx.set_fru(flash.stored_fru());
+        let ext = build_active();
+        let board = Board::boot(&config, 0, ext::check_power_on(&ctx, ext.as_ref()))?;
+        Ok(Emulator {
+            config,
+            link,
+            ctx,
+            board,
+            tx_policy: config.tx_policy,
+            ext,
+            make_ext: build_active,
+            reset_gate: ResetGate::new(),
+            flash,
+            fru_unsaved_since: None,
+        })
+    }
+
+    /// flash -- the flash log as a power cycle leaves it. A save that is pending (an accepted
+    /// Write FRU Data or settings change inside IPMC_FRU_PERSIST_DELAY_MS) is completed first:
+    /// the emulator's power cycle is a clean one, taken when the board is quiet.
+    pub fn flash(&mut self) -> FlashCopy {
+        if FRU_PERSIST
+            && (self.ctx.fru.take_dirty() || self.fru_unsaved_since.is_some())
+            && !self.ctx.addr.nvmro_asserted
+        {
+            self.save_to_flash();
+        }
+        self.flash
+    }
+
+    /// save_to_flash -- the flash log takes the FRU image and the settings byte; nothing is
+    /// unsaved afterwards.
+    fn save_to_flash(&mut self) {
+        self.flash = FlashCopy {
+            fru: *self.ctx.fru.image(),
+            nv_settings: self.ctx.fru.nv_settings(),
+        };
+        self.fru_unsaved_since = None;
+    }
+
+    /// enable_b_if_configured -- IPMB-B enabled when `b_enabled_at_start` (what the Chassis
+    /// Manager's Set IPMB State does): the bus state a new or restarted link starts in.
+    fn enable_b_if_configured(config: &EmuConfig, link: &mut Link) -> Result<(), EmuError> {
         if config.b_enabled_at_start {
             link.set_ipmb_state(None, Some(BusMode::LocalControl))
                 .map_err(|_| EmuError::BusNotFitted)?;
         }
-        Ok((link, Context::new(resolved)))
+        Ok(())
+    }
+
+    /// restart_link -- the Link after a Cold or Warm Reset at `now_ms`: `Link::restarted` (the
+    /// same configuration and address, power-up bus state, the request sequence state of the
+    /// old link carried over so no rqSeq is reused inside T9), IPMB-B enabled when configured.
+    /// The one rebuild both resets use.
+    fn restart_link(&self, now_ms: u32) -> Result<Link, EmuError> {
+        let mut link = self.link.restarted(&self.ctx.addr, now_ms);
+        Self::enable_b_if_configured(&self.config, &mut link)?;
+        Ok(link)
     }
 
     /// with_extension -- runs the extension `make` builds instead of the build's own, now and
@@ -270,25 +336,81 @@ impl Emulator {
         self.link.on_frame(bus, bytes, now_ms)
     }
 
-    /// poll -- one main-loop step at `now_ms`: a sensor sample when one is due (fed to the
-    /// command handlers and the FRU state machine, a state change traces one line), then the
-    /// link layer answers the queued requests, and a pending cold reset is applied
-    /// (`service_reset`). Returns the number of requests answered.
+    /// follow_payload_supply -- the emulator's payload supply: with `IPMC_SIM_PGOOD_HIGH` 1 the
+    /// PGOOD input reads high while PWR_EN is asserted and low once it is released, so a
+    /// deactivation ends in the complete shutdown that takes the FRU from M6 to M1
+    /// (`SensorSnapshot::payload_shut_down`, Rule 4.1.5.4.5-1). With 0 PGOOD stays at its
+    /// simulated level (low) whatever PWR_EN does, so the PGOOD timeout and the power failure
+    /// stay reachable (`pgood_follows_pwr_en`).
+    fn follow_payload_supply(&mut self) {
+        let on = self.board.io.is_enabled();
+        if let Some(level) = pgood_follows_pwr_en(ipmc_defs::IPMC_SIM_PGOOD_HIGH, on) {
+            self.board.io.sim_inputs.set_level(Input::Pgood, level);
+        }
+    }
+
+    /// poll -- one main-loop step at `now_ms`: the payload supply follows PWR_EN
+    /// (`follow_payload_supply`), a sensor sample when one is due (fed to the command handlers
+    /// and the FRU state machine, a state change traces one line), then the link layer answers
+    /// the queued requests, and a pending cold reset is applied (`service_reset`). Returns the
+    /// number of requests answered.
     pub fn poll(&mut self, now_ms: u32, trace: &mut dyn Trace) -> usize {
+        self.follow_payload_supply();
         if self
             .board
             .monitor
             .service(now_ms, &mut self.board.analog, &mut self.board.io, trace)
         {
-            let snapshot = *self.board.monitor.snapshot();
-            ext::feed_sensors(&mut self.ctx, self.ext.as_mut(), now_ms, &snapshot, trace);
+            self.feed_snapshot(now_ms, trace);
         }
         let taken = self
             .link
             .poll(&mut self.ctx, self.ext.as_mut(), now_ms, trace);
+        self.service_hand_offs(now_ms, trace);
         self.service_fru_save(now_ms);
         self.service_reset(now_ms, trace);
         taken
+    }
+
+    /// feed_snapshot -- hands the monitor's latest snapshot to the command handlers and the FRU
+    /// state machine (`ext::feed_sensors`); one call per sample.
+    fn feed_snapshot(&mut self, now_ms: u32, trace: &mut dyn Trace) {
+        let snapshot = *self.board.monitor.snapshot();
+        ext::feed_sensors(&mut self.ctx, self.ext.as_mut(), now_ms, &snapshot, trace);
+    }
+
+    /// service_hand_offs -- what the firmware main loop does with the requests a handler left in
+    /// the context: a payload power request goes through `Monitor::apply_power_request` (the one
+    /// power-on check, a refusal is traced; an applied request is followed by a sample fed at once), and a payload reset request is the pulse on
+    /// PAYLOAD_RST_OUT_N, modelled by one trace line `payload reset pulse <ms> ms`.
+    fn service_hand_offs(&mut self, now_ms: u32, trace: &mut dyn Trace) {
+        if let Some(request) = self.ctx.pending_power.take() {
+            let power_on_check = ext::check_power_on(&self.ctx, self.ext.as_ref());
+            let done = self.board.monitor.apply_power_request(
+                request,
+                power_on_check,
+                now_ms,
+                &mut self.board.io,
+                trace,
+            );
+            if done {
+                // As the firmware (`Sensing::serve_hand_offs`): sample at once, so the snapshot
+                // and the FRU state machine see the new power state before the next command.
+                self.board.monitor.sample(
+                    now_ms,
+                    &mut self.board.analog,
+                    &mut self.board.io,
+                    trace,
+                );
+                self.feed_snapshot(now_ms, trace);
+            }
+        }
+        if core::mem::take(&mut self.ctx.pending_payload_reset) {
+            trace.line(format_args!(
+                "payload reset pulse {} ms",
+                ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS
+            ));
+        }
     }
 
     /// service_fru_save -- the firmware save step (`IpmbLink::service_fru_log`) on the flash
@@ -308,8 +430,7 @@ impl Emulator {
         let urgent = self.ctx.pending_reset.is_some();
         let due = now_ms.wrapping_sub(since) >= ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
         if (urgent || due) && !self.ctx.addr.nvmro_asserted {
-            self.flash_fru = *self.ctx.fru.image();
-            self.fru_unsaved_since = None;
+            self.save_to_flash();
         }
     }
 
@@ -319,38 +440,55 @@ impl Emulator {
         FRU_PERSIST && (self.fru_unsaved_since.is_some() || self.ctx.fru.is_dirty())
     }
 
-    /// service_reset -- the emulator processor reset: when `ResetGate` (the one decision the
-    /// firmware uses too) says so, the board restarts as after a processor reset. The link, the
-    /// context and the extension are rebuilt as at start-up; the request sequence counter
-    /// continues from the old link; the FRU store is restored from the flash copy (an accepted
-    /// write not saved by then is lost, as on the board); the Monitor and the power switch are
-    /// rebuilt as at a boot (the reset releases PWR_EN, `IPMC_POWER_AT_BOOT` requests power
-    /// again). Traces `IPMC cold reset` and runs on.
+    /// service_reset -- the emulator's restart: when `ResetGate` (the one decision the firmware
+    /// uses too) says so, a pending Cold or Warm Reset is applied.
+    /// - Cold: the board restarts as after a processor reset. The link (`restart_link`), the
+    ///   context and the extension are rebuilt as at start-up; the FRU store is restored from the
+    ///   flash copy (an accepted write not saved by then is lost, as on the board); the Monitor
+    ///   and the power switch are rebuilt as at a boot (the reset releases PWR_EN,
+    ///   `IPMC_POWER_AT_BOOT` requests power again). Traces `IPMC cold reset`.
+    /// - Warm: the link is rebuilt the same way (`restart_link`), `Context::warm_reset` clears
+    ///   the hand-offs and the extension's `warm_reset` runs; everything else, payload power
+    ///   included, stays. Traces `IPMC warm reset`.
+    ///
+    /// Both run on afterwards.
     fn service_reset(&mut self, now_ms: u32, trace: &mut dyn Trace) {
-        let pending = matches!(self.ctx.pending_reset, Some(ResetRequest::Cold));
+        let request = self.ctx.pending_reset;
         let (egress_empty, fru_clean) = (self.link.egress_empty(), !self.fru_unsaved());
         if !self
             .reset_gate
-            .poll(pending, now_ms, egress_empty, fru_clean, trace)
+            .poll(request.is_some(), now_ms, egress_empty, fru_clean, trace)
         {
             return;
         }
-        let first_seq = self.link.next_request_seq();
-        let recent = self.link.recent_request_seqs(now_ms);
-        let Ok((link, mut ctx)) = Self::start_state(&self.config, first_seq, recent, now_ms) else {
+        let Ok(link) = self.restart_link(now_ms) else {
             return; // `new` built the same state from the same config
         };
-        let Ok(board) = Board::boot(&self.config, now_ms) else {
-            return;
-        };
-        ctx.set_fru(FruStore::from_image(self.flash_fru));
-        self.link = link;
-        self.ctx = ctx;
-        self.board = board;
-        self.ext = (self.make_ext)();
         self.reset_gate = ResetGate::new();
-        self.fru_unsaved_since = None;
-        trace.line(format_args!("IPMC cold reset"));
+        match request {
+            Some(ResetRequest::Warm) => {
+                self.ctx.warm_reset(link.view());
+                self.link = link;
+                self.ext.warm_reset();
+                trace.line(format_args!("IPMC warm reset"));
+            }
+            Some(ResetRequest::Cold) => {
+                let mut ctx = Context::new(addr::resolve(self.config.strap));
+                ctx.set_fru(self.flash.stored_fru());
+                let ext = (self.make_ext)();
+                let power_on_check = ext::check_power_on(&ctx, ext.as_ref());
+                let Ok(board) = Board::boot(&self.config, now_ms, power_on_check) else {
+                    return;
+                };
+                self.link = link;
+                self.ctx = ctx;
+                self.board = board;
+                self.ext = ext;
+                self.fru_unsaved_since = None;
+                trace.line(format_args!("IPMC cold reset"));
+            }
+            None => {}
+        }
     }
 
     /// next_tx -- the next frame for the master driver to transmit and the bus to use, or None.
@@ -386,5 +524,37 @@ impl Emulator {
     /// context -- the dispatch context, for the FRU state and the latest sensor snapshot.
     pub fn context(&self) -> &Context {
         &self.ctx
+    }
+}
+
+/// pgood_follows_pwr_en -- the level the emulated PGOOD input takes while PWR_EN is `pwr_en`:
+/// `Some(pwr_en)` when `IPMC_SIM_PGOOD_HIGH` (`level_define`) is 1, None (the input keeps its
+/// simulated level, low for 0) otherwise.
+const fn pgood_follows_pwr_en(level_define: u32, pwr_en: bool) -> Option<bool> {
+    if level_define == 1 {
+        Some(pwr_en)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod pgood_tests {
+    use super::pgood_follows_pwr_en;
+
+    #[test]
+    fn pgood_follows_pwr_en_only_when_the_simulated_level_is_high() {
+        for (define, pwr_en, want) in [
+            (1, true, Some(true)),
+            (1, false, Some(false)),
+            (0, true, None),
+            (0, false, None),
+        ] {
+            assert_eq!(
+                pgood_follows_pwr_en(define, pwr_en),
+                want,
+                "{define} {pwr_en}"
+            );
+        }
     }
 }

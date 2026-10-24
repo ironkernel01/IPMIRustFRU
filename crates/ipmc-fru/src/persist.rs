@@ -14,10 +14,17 @@
 //!   0      4    commit word 55464931h ("1IFU" in memory order), programmed LAST
 //!   4      4    sequence number: starts at 1, +1 per record, never 0 or FFFFFFFFh
 //!   8      2    image length (= SIZE)
-//!  10      2    record format version (1)
+//!  10      1    record format version (1)
+//!  11      1    Tier-3 non-volatile settings (bit 0 Default-Activation-Locked, bit 1
+//!               Commanded-Deactivation-Ignored, other bits 0)
 //!  12     SIZE  the FRU image
 //!  12+SIZE 4    CRC-32 (IEEE 802.3, ipmc_wire::crc32) over bytes 4 .. 12+SIZE
 //! ```
+//!
+//! The settings byte takes the high byte of what an earlier build wrote as a 16-bit version field
+//! of value 1: a record written before the byte existed reads as settings 00h, and a record with
+//! settings 00h is byte-identical to one of that build (Tier-1 and Tier-2 images never write a
+//! non-zero value). A build from before the byte rejects a record whose settings are not 00h.
 //!
 //! A slot is valid when the commit word, the length, the version, the sequence and the CRC all
 //! check. Erased flash reads FFh. The scan reads every slot of a sector: the next record goes
@@ -42,8 +49,11 @@ use ipmc_wire::crc32;
 pub const WORD: usize = 4;
 /// COMMIT_WORD -- offset 0 of a valid record (the ASCII "1IFU" read as one little-endian word).
 pub const COMMIT_WORD: u32 = 0x5546_4931;
-/// RECORD_VERSION -- the record format described in the file header.
-pub const RECORD_VERSION: u16 = 1;
+/// RECORD_VERSION -- the record format described in the file header (byte 10).
+pub const RECORD_VERSION: u8 = 1;
+/// NV_SETTINGS_MASK -- the settings bits defined (the file header); a stored byte is masked with
+/// it when loaded and a saved byte is masked with it before it is written.
+pub const NV_SETTINGS_MASK: u8 = 0b11;
 /// SEQ_MAX -- the highest sequence number a record carries; FFFFFFFFh reads as erased flash.
 const SEQ_MAX: u32 = u32::MAX - 1;
 /// ERASED -- the value of an erased flash byte.
@@ -54,6 +64,7 @@ const OFF_COMMIT: usize = 0;
 const OFF_SEQ: usize = 4;
 const OFF_LEN: usize = 8;
 const OFF_VERSION: usize = 10;
+const OFF_SETTINGS: usize = 11;
 const OFF_IMAGE: usize = 12;
 const OFF_CRC: usize = OFF_IMAGE + SIZE;
 /// RECORD_LEN -- bytes of one record: the fields above, which are word-aligned because SIZE is a
@@ -70,7 +81,8 @@ const _: () = assert!(
     "the image length field is 16 bits"
 );
 const _: () = assert!(OFF_COMMIT == 0 && OFF_SEQ == WORD && OFF_LEN == 2 * WORD);
-const _: () = assert!(OFF_VERSION == OFF_LEN + 2 && OFF_IMAGE == OFF_VERSION + 2);
+const _: () = assert!(OFF_VERSION == OFF_LEN + 2 && OFF_SETTINGS == OFF_VERSION + 1);
+const _: () = assert!(OFF_IMAGE == OFF_SETTINGS + 1);
 
 /// BLANK_CHUNK -- bytes read at a time when a range is checked for erased flash (ipmi_defs.h
 /// IPMC_FRU_SCAN_CHUNK, guarded in ipmc-defs: a multiple of 4, 16..=272).
@@ -229,7 +241,7 @@ fn classify(record: &[u8; RECORD_LEN]) -> Slot {
     let crc_covered = record.get(OFF_SEQ..OFF_CRC).unwrap_or(&[]);
     let valid = u32::from_le_bytes(field(record, OFF_COMMIT)) == COMMIT_WORD
         && usize::from(u16::from_le_bytes(field(record, OFF_LEN))) == SIZE
-        && u16::from_le_bytes(field(record, OFF_VERSION)) == RECORD_VERSION
+        && u8::from_le_bytes(field(record, OFF_VERSION)) == RECORD_VERSION
         && seq != 0
         && seq != u32::MAX
         && u32::from_le_bytes(field(record, OFF_CRC)) == crc32(crc_covered);
@@ -240,14 +252,16 @@ fn classify(record: &[u8; RECORD_LEN]) -> Slot {
     }
 }
 
-/// encode -- the record of `image` with sequence number `seq`, in memory order.
-fn encode(seq: u32, image: &[u8; SIZE]) -> [u8; RECORD_LEN] {
+/// encode -- the record of `image` and the Tier-3 `settings` byte (masked with
+/// `NV_SETTINGS_MASK`) with sequence number `seq`, in memory order.
+fn encode(seq: u32, image: &[u8; SIZE], settings: u8) -> [u8; RECORD_LEN] {
     let mut record = [0u8; RECORD_LEN];
     record[OFF_COMMIT..OFF_COMMIT + WORD].copy_from_slice(&COMMIT_WORD.to_le_bytes());
     record[OFF_SEQ..OFF_SEQ + WORD].copy_from_slice(&seq.to_le_bytes());
     // SIZE fits 16 bits (assertion above).
     record[OFF_LEN..OFF_LEN + 2].copy_from_slice(&(SIZE as u16).to_le_bytes());
-    record[OFF_VERSION..OFF_VERSION + 2].copy_from_slice(&RECORD_VERSION.to_le_bytes());
+    record[OFF_VERSION] = RECORD_VERSION;
+    record[OFF_SETTINGS] = settings & NV_SETTINGS_MASK;
     record[OFF_IMAGE..OFF_CRC].copy_from_slice(image);
     let crc = crc32(&record[OFF_SEQ..OFF_CRC]);
     record[OFF_CRC..OFF_CRC + WORD].copy_from_slice(&crc.to_le_bytes());
@@ -509,7 +523,7 @@ impl Persist {
         self.active = sector;
         self.next_seq = seq.checked_add(1).ok_or(PersistError::SequenceExhausted)?;
         report.loaded = Some((sector, seq));
-        let image = self.read_newest(flash, sector, seq)?;
+        let (image, settings) = self.read_newest(flash, sector, seq)?;
         let more_than_half_full = self
             .info_of(sector)
             .next_free
@@ -521,17 +535,19 @@ impl Persist {
                 Err(error) => report.housekeeping = Some(error),
             }
         }
-        Ok((Some(FruStore::from_image(image)), report))
+        let mut store = FruStore::from_image(image);
+        store.load_nv_settings(settings);
+        Ok((Some(store), report))
     }
 
-    /// read_newest -- the image of the valid record `seq` in `sector`: found again by a scan of
-    /// the sector (the scan keeps no offsets, to stay small).
+    /// read_newest -- the image and the settings byte (masked) of the valid record `seq` in
+    /// `sector`: found again by a scan of the sector (the scan keeps no offsets, to stay small).
     fn read_newest<F: FlashLog>(
         &self,
         flash: &F,
         sector: LogSector,
         seq: u32,
-    ) -> Result<[u8; SIZE], PersistError> {
+    ) -> Result<([u8; SIZE], u8), PersistError> {
         for slot in 0..self.sector_len / RECORD_LEN {
             let record = read_slot(flash, sector, slot * RECORD_LEN)?;
             if classify(&record) == Slot::Valid(seq) {
@@ -539,7 +555,8 @@ impl Persist {
                 if let Some(bytes) = record.get(OFF_IMAGE..OFF_CRC) {
                     image.copy_from_slice(bytes);
                 }
-                return Ok(image);
+                let settings = u8::from_le_bytes(field(&record, OFF_SETTINGS)) & NV_SETTINGS_MASK;
+                return Ok((image, settings));
             }
         }
         // The record was valid in the scan a moment ago: flash that now disagrees is a read fault.
@@ -560,7 +577,7 @@ impl Persist {
         Ok(())
     }
 
-    /// save -- appends the record of `image` to the log.
+    /// save -- appends the record of `image` and the settings byte to the log.
     /// 1. The active sector has a free slot: the record goes there.
     /// 2. Else the log switches to the other sector; when that one is not blank it is erased
     ///    first (`flash.erase`; the full active sector keeps the newest record meanwhile).
@@ -575,6 +592,7 @@ impl Persist {
         &mut self,
         flash: &mut F,
         image: &[u8; SIZE],
+        settings: u8,
     ) -> Result<Saved, PersistError> {
         let seq = self.next_seq;
         if seq > SEQ_MAX {
@@ -592,7 +610,7 @@ impl Persist {
                 (other, 0)
             }
         };
-        let record = encode(seq, image);
+        let record = encode(seq, image, settings);
         let words = pack_words(&record);
         if let Err(error) = Self::program_record(flash, sector, offset, &words, &record) {
             self.skip_slot(sector, offset);
@@ -655,8 +673,9 @@ impl Persist {
         &mut self,
         flash: &mut F,
         image: &[u8; SIZE],
+        settings: u8,
     ) -> Result<Saved, PersistError> {
-        let saved = self.save(flash, image)?;
+        let saved = self.save(flash, image, settings)?;
         self.pending = false;
         Ok(saved)
     }
@@ -701,7 +720,7 @@ impl Persist {
         if self.save_needs_erase() && !erase_ok {
             return None;
         }
-        let result = self.save(flash, store.image());
+        let result = self.save(flash, store.image(), store.nv_settings());
         match result {
             Ok(_) => {
                 self.pending = false;

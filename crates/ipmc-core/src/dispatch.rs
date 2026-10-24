@@ -20,10 +20,11 @@ use crate::queue::{Bus, EgressQueue, QueueError};
 use crate::sdr::SdrRepository;
 use crate::selftest::{self, SelfTest};
 use crate::sensor::{
-    self, EncodeError, PowerState, SensorSnapshot, SENSOR_FRU_HEALTH, SENSOR_FRU_STATE,
-    SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE, SENSOR_PAYLOAD_TEST_RESULTS,
-    SENSOR_PAYLOAD_TEST_STATUS, SENSOR_SYSTEM_IPMB_LINK,
+    self, EncodeError, PayloadMode, PowerState, SensorSnapshot, SENSOR_FRU_HEALTH,
+    SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE, SENSOR_PAYLOAD_MODE,
+    SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS, SENSOR_SYSTEM_IPMB_LINK,
 };
+use crate::tier;
 use crate::trace::Trace;
 use ipmc_fru::FruStore;
 
@@ -75,11 +76,31 @@ pub mod cc {
     pub const UNSPECIFIED: u8 = 0xFF;
 }
 
-/// ResetRequest -- a processor restart a handler asks for through `Context::pending_reset`.
+/// ResetRequest -- a restart a handler asks for through `Context::pending_reset`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResetRequest {
     /// Cold reset: the processor restarts as after power-up (IPMI v2.0 Cold Reset).
     Cold,
+    /// Warm reset: the IPMC re-initialises its volatile link state without a processor reset
+    /// (IPMI v2.0 Warm Reset): a new Link in the power-up bus state with the same configuration
+    /// and address, the request sequence state carried over as for a Cold Reset, the `pending_*`
+    /// hand-offs cleared and `Extension::warm_reset` called. Kept: the FRU store, the SDR
+    /// repository, the self test result, the FRU state, the sensors, the payload power and
+    /// PWR_EN, the non-volatile settings, `payload_mode` and `event_enables` (the event enables
+    /// survive, IPMI v2.0 20.3). The IPMB state does not: IPMB-B returns to isolated and both buses
+    /// to 100 kHz (VITA 46.11 Rules 4.1.9-2 and 4.1.1-4.3). `Context::warm_reset` is the one function that clears
+    /// the Context part.
+    Warm,
+}
+
+/// PowerRequest -- a payload power change a handler asks for through `Context::pending_power`
+/// (the Tier-3 Set FRU Activation handler, Rule 4.1.2-10.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerRequest {
+    /// Switch payload power on (the owner asks `FruMachine::check_power_on` first).
+    On,
+    /// Switch payload power off.
+    Off,
 }
 
 /// Context -- state handed to every handler. The egress queue and the trace sink are arguments of
@@ -110,10 +131,31 @@ pub enum ResetRequest {
 ///   `link::PendingIpmbState`): the handler validates the change against `link` with
 ///   `link::plan_ipmb_state`, leaves it here, and `Link::poll` applies and clears it right after
 ///   the handler returns, before the response is queued.
+/// - `pending_power`: a handler's request to switch payload power on or off (`PowerRequest`). The
+///   owner of the payload power (the firmware main loop, the emulator) takes it after the handler
+///   returns and applies it through `Monitor::power_on` / `power_off`; for On it asks
+///   `FruMachine::check_power_on` first (owner decision 9: one check for every power-on path)
+///   and traces a refusal. No Tier-1 or Tier-2 handler sets it.
+/// - `deactivation_requested`: a Tier-3 handler's standing request that the FRU deactivates
+///   (Rules 4.1.5.4.3-2, -6); `update_sensors` feeds it to the FRU state machine (M4 to M5) at
+///   Tier-3 only (`tier::activation_control`). The handler writes it; nothing else does.
+/// - `pending_payload_reset`: a handler's request for a pulse on the payload reset output
+///   (`PAYLOAD_RST_OUT_N`, Rule 4.1.2-9); the owner of the pin (the firmware main loop, the
+///   emulator) takes it and pulses the output for IPMC_PAYLOAD_RESET_PULSE_MS.
+/// - `payload_mode`: the state of the Payload Mode sensor (sensor 7, Tier-3); the Set Payload Mode
+///   handler is its only writer, `read_sensor` reads it; power-up mode 0, transition complete.
+/// - the non-volatile settings byte (bit 0 Default-Activation-Locked, bit 1
+///   Commanded-Deactivation-Ignored, Rule 4.1.2-10.2) lives in `fru` (`FruStore::nv_settings`)
+///   so the flash log saves it with the image on the same dirty mark; `nv_settings` and
+///   `set_nv_settings` below are its accessors, the Tier-3 Set FRU State Policy Bits handler the
+///   only writer and the firmware boot (`set_fru`) the loader. No Tier-1 or Tier-2 handler
+///   writes it.
 /// - `pending_reset`: a handler's request that the processor restarts (the Tier-2/3 Cold Reset
-///   handler): the handler validates the request and sets it. The owner of the processor (the
-///   firmware main loop, the emulator) applies it after the response has left the egress queue,
-///   or `IPMC_RESET_WAIT_MS` after it took the request. No Tier-1 handler sets it.
+///   handler) or that the IPMC re-initialises its link state (Warm Reset, `ResetRequest::Warm`):
+///   the handler validates the request and sets it. The owner of the processor (the firmware
+///   main loop, the emulator) applies it after the response has left the egress queue, or
+///   `IPMC_RESET_WAIT_MS` after it took the request (`ResetGate`, the same for both). A Warm
+///   Reset rebuilds the Link and calls `Context::warm_reset`. No Tier-1 handler sets it.
 pub struct Context {
     /// Resolved geographic address and NVMRO state.
     pub addr: AddrInfo,
@@ -135,6 +177,14 @@ pub struct Context {
     pub pending_ipmb: Option<PendingIpmbState>,
     /// Processor restart for the owner of the processor to apply after the response left.
     pub pending_reset: Option<ResetRequest>,
+    /// Payload power change for the owner of the payload power to apply after the handler returns.
+    pub pending_power: Option<PowerRequest>,
+    /// A deactivation is requested (Tier-3); fed to the FRU state machine by `update_sensors`.
+    pub deactivation_requested: bool,
+    /// A payload reset pulse for the owner of the reset output to start.
+    pub pending_payload_reset: bool,
+    /// State of the Payload Mode sensor.
+    pub payload_mode: PayloadMode,
 }
 
 impl Context {
@@ -157,7 +207,34 @@ impl Context {
             link: LinkView::power_up(LinkConfig::from_defs(), addr.usable()),
             pending_ipmb: None,
             pending_reset: None,
+            pending_power: None,
+            deactivation_requested: false,
+            pending_payload_reset: false,
+            payload_mode: PayloadMode::POWER_UP,
         }
+    }
+
+    /// warm_reset -- the Context part of a Warm Reset (`ResetRequest::Warm`): `link` is the view
+    /// of the new Link the owner built (`Link::restarted`); every `pending_*` hand-off is cleared,
+    /// the Warm Reset request itself included. Everything else is kept (see `ResetRequest::Warm`).
+    pub fn warm_reset(&mut self, link: LinkView) {
+        self.link = link;
+        self.pending_ipmb = None;
+        self.pending_power = None;
+        self.pending_payload_reset = false;
+        self.pending_reset = None;
+    }
+
+    /// nv_settings -- the Tier-3 non-volatile settings byte (bit 0 Default-Activation-Locked, bit
+    /// 1 Commanded-Deactivation-Ignored); 00h without a stored record.
+    pub const fn nv_settings(&self) -> u8 {
+        self.fru.nv_settings()
+    }
+
+    /// set_nv_settings -- changes the settings byte; a change marks the FRU store dirty, so the
+    /// flash log saves it as it saves a Write FRU Data. The caller checks NVMRO first.
+    pub fn set_nv_settings(&mut self, settings: u8) {
+        self.fru.set_nv_settings(settings);
     }
 
     /// set_fru -- replaces the FRU store (the image loaded from flash at boot, or the built image
@@ -201,6 +278,8 @@ impl Context {
             checks: self.initial_checks(),
             payload_power_valid: snapshot.power == PowerState::On,
             payload_shut_down: snapshot.payload_shut_down,
+            deactivation_requested: self.deactivation_requested
+                && tier::activation_control(ipmc_defs::IPMC_TIER),
         };
         let change = self.fru_state.step(now_ms, &inputs)?;
         trace.line(format_args!(
@@ -219,19 +298,36 @@ impl Context {
     /// - 1 IPMB Link from `buses` (Table 10.2.2-1);
     /// - 2 FRU Health, 3 FRU Voltage, 4 FRU Temperature from the latest sensor snapshot;
     /// - 5 Payload Test Results: unavailable, no payload test has run (Table 10.2.6-1);
-    /// - 6 Payload Test Status: not in progress (Table 10.2.7-1).
+    /// - 6 Payload Test Status: not in progress (Table 10.2.7-1);
+    /// - 7 Payload Mode (Tier-3 only, Table 10.2.8-1) from `payload_mode`; four bytes.
     ///
     /// Status byte bit 7 (event messages enabled) is the sensor's `event_enables` flag.
     ///
-    /// Returns the byte count, Err(NotPresent) for a number outside 0..=6 and Err(OutputTooSmall)
-    /// when `out` cannot hold a reading.
+    /// Returns the byte count, Err(NotPresent) for a number the build's Tier does not have and
+    /// Err(OutputTooSmall) when `out` cannot hold a reading (`sensor::READING_LEN_MAX` holds
+    /// every one).
     pub fn read_sensor(
         &self,
         number: u8,
         buses: &BusPair,
         out: &mut [u8],
     ) -> Result<usize, SensorReadError> {
+        self.read_sensor_at(ipmc_defs::IPMC_TIER, number, buses, out)
+    }
+
+    /// read_sensor_at -- `read_sensor` as a Tier-`tier` IPMC (`read_sensor` passes the build's
+    /// Tier): sensor 7 exists only where `tier::payload_mode_sensor`.
+    pub fn read_sensor_at(
+        &self,
+        tier: u32,
+        number: u8,
+        buses: &BusPair,
+        out: &mut [u8],
+    ) -> Result<usize, SensorReadError> {
         let encoded = match number {
+            SENSOR_PAYLOAD_MODE if tier::payload_mode_sensor(tier) => {
+                sensor::encode_payload_mode(&self.payload_mode, self.addr.nvmro_asserted, out)
+            }
             SENSOR_FRU_STATE => sensor::encode_fru_state(self.fru_state.state().mask(), out),
             SENSOR_SYSTEM_IPMB_LINK => sensor::encode_link(&buses.sensor_data(), out),
             SENSOR_FRU_HEALTH | SENSOR_FRU_VOLTAGE | SENSOR_FRU_TEMPERATURE => {
@@ -254,7 +350,7 @@ impl Context {
 /// SensorReadError -- why `Context::read_sensor` produced no reading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SensorReadError {
-    /// The sensor number is not one of the seven mandatory sensors.
+    /// The sensor number is not one of the mandatory sensors of the Tier.
     NotPresent,
     /// The output buffer is shorter than a reading.
     OutputTooSmall,
@@ -1188,5 +1284,115 @@ mod tests {
             (built.completion_code, built.outcome),
             (cc::INVALID_CMD, Outcome::NoHandler)
         );
+    }
+
+    #[test]
+    fn warm_reset_clears_the_hand_offs_and_keeps_the_rest() {
+        let mut c = context();
+        c.pending_ipmb = Some(PendingIpmbState {
+            a: None,
+            b: None,
+            speed_a: None,
+            speed_b: None,
+        });
+        c.pending_power = Some(PowerRequest::On);
+        c.pending_payload_reset = true;
+        c.pending_reset = Some(ResetRequest::Warm);
+        c.deactivation_requested = true;
+        c.payload_mode = PayloadMode::new(5, 2, sensor::TransitionStatus::Failed).unwrap();
+        c.set_nv_settings(0b11);
+        c.event_enables.get_mut(2).unwrap().enabled = !c.event_enables.get(2).unwrap().enabled;
+        let (fru, sdr_count, self_test, state, enables) = (
+            c.fru.bytes().to_vec(),
+            c.sdr.record_count(),
+            c.self_test,
+            c.fru_state,
+            c.event_enables,
+        );
+        let mut view = c.link;
+        view.buses.b.mode = crate::link::BusMode::Isolated;
+        c.warm_reset(view);
+        assert_eq!(c.link, view);
+        assert!(c.pending_ipmb.is_none() && c.pending_power.is_none());
+        assert!(!c.pending_payload_reset && c.pending_reset.is_none());
+        // Kept: FRU store and settings byte, SDR, self test, FRU state, event enables, payload
+        // mode, the standing deactivation request.
+        assert_eq!(c.fru.bytes(), fru.as_slice());
+        assert_eq!(c.nv_settings(), 0b11);
+        assert_eq!(c.sdr.record_count(), sdr_count);
+        assert_eq!(c.self_test, self_test);
+        assert_eq!(c.fru_state, state);
+        assert_eq!(c.event_enables, enables);
+        assert_eq!(c.payload_mode.current(), 5);
+        assert!(c.deactivation_requested);
+    }
+
+    #[test]
+    fn the_settings_byte_is_the_store_byte_and_a_change_marks_it_dirty() {
+        let mut c = context();
+        assert_eq!(c.nv_settings(), 0, "power-up: no stored record");
+        assert!(!c.fru.is_dirty());
+        c.set_nv_settings(0b10);
+        assert_eq!(c.nv_settings(), 0b10);
+        assert!(c.fru.is_dirty(), "the flash log saves it like a FRU write");
+        assert_eq!(c.fru.nv_settings(), 0b10);
+    }
+
+    #[test]
+    fn sensor_7_reads_only_at_tier_3_and_follows_payload_mode() {
+        let mut c = context();
+        c.payload_mode = PayloadMode::new(8, 3, sensor::TransitionStatus::InProgress).unwrap();
+        let buses = c.link.buses;
+        // (tier, result): sensor 7 is NotPresent below Tier-3; at Tier-3 four bytes: NVMRO
+        // clear, in progress (00b), previous mode 3, mode 8 in the MS byte with bit 7 set.
+        for tier in [1u32, 2, 3] {
+            let mut out = [0xEE; sensor::READING_LEN_MAX];
+            let got = c.read_sensor_at(tier, 7, &buses, &mut out);
+            if tier == 3 {
+                assert_eq!(got, Ok(4));
+                // Scanning (status bit 6); bit 7 follows the enables of the build's Tier.
+                assert_eq!(
+                    [out[0], out[1] & 0x7F, out[2], out[3]],
+                    [0x03, 0x40, 0x00, 0x81]
+                );
+            } else {
+                assert_eq!(got, Err(SensorReadError::NotPresent), "tier {tier}");
+            }
+            let mut other = [0u8; sensor::READING_LEN_MAX];
+            assert_eq!(
+                c.read_sensor_at(tier, 8, &buses, &mut other),
+                Err(SensorReadError::NotPresent)
+            );
+        }
+        let mut short = [0u8; sensor::READING_LEN];
+        assert_eq!(
+            c.read_sensor_at(3, 7, &buses, &mut short),
+            Err(SensorReadError::OutputTooSmall)
+        );
+        c.addr.nvmro_asserted = true;
+        let mut out = [0u8; sensor::READING_LEN_MAX];
+        c.read_sensor_at(3, 7, &buses, &mut out).unwrap();
+        assert_eq!(out[0], 0x43, "the NVMRO state is bit 6");
+    }
+
+    #[test]
+    fn a_deactivation_request_reaches_m5_only_where_activation_control_exists() {
+        // Drive the machine to M4 with the sensor feed, then raise the request.
+        let mut c = context();
+        let mut on = SensorSnapshot::EMPTY;
+        on.power = PowerState::On;
+        on.payload_shut_down = false;
+        for now_ms in [1u32, 2, 3] {
+            c.update_sensors(now_ms, &on, &mut NoTrace);
+        }
+        assert_eq!(c.fru_state.state(), crate::fru_state::State::M4);
+        c.deactivation_requested = true;
+        c.update_sensors(4, &on, &mut NoTrace);
+        let expected = if tier::activation_control(ipmc_defs::IPMC_TIER) {
+            crate::fru_state::State::M5
+        } else {
+            crate::fru_state::State::M4
+        };
+        assert_eq!(c.fru_state.state(), expected);
     }
 }

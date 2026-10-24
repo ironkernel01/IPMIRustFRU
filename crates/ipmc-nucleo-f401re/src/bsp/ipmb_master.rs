@@ -7,6 +7,7 @@
 // IPMB_MASTER_MODE chooses.
 
 use cortex_m::peripheral::{DCB, DWT};
+use ipmc_core::link::{BusSpeed, PerBus};
 use ipmc_core::queue::Bus;
 
 use super::i2c_bitbang::{self, Cycles};
@@ -172,6 +173,9 @@ pub struct MasterState {
     pub(super) pins: IpmbPins,
     pub(super) cy: Cycles,
     pub(super) stats: MasterStats,
+    /// The speed each bus is applied at (`IpmbMaster::set_speed`); both buses start at 100 kHz
+    /// (VITA 46.11 Rule 4.1.1-4.3).
+    pub(super) speeds: PerBus<BusSpeed>,
 }
 
 impl MasterState {
@@ -189,6 +193,10 @@ impl MasterState {
             pins,
             cy,
             stats: MasterStats::new(core_hz),
+            speeds: PerBus {
+                a: BusSpeed::Standard,
+                b: BusSpeed::Standard,
+            },
         })
     }
 }
@@ -224,6 +232,28 @@ pub trait IpmbMaster {
             ipmb_common::write_retrying(bus, frame, budget, |b, f, d| self.write_once(b, f, d));
         self.state_mut().stats.record(bus, result, retries);
         result
+    }
+
+    /// speed -- the speed `bus` is applied at now.
+    fn speed(&self, bus: Bus) -> BusSpeed {
+        *self.state().speeds.get(bus)
+    }
+
+    /// set_speed -- applies `speed` to `bus` between transfers (the main loop calls it from
+    /// `service`, never inside a write): the I2C peripheral takes the timing of the speed
+    /// (`i2c_hw::set_speed`, only while its slave is idle) and the master write uses it from the
+    /// next frame on. False when the slave was busy or is not running: nothing changed, the
+    /// caller asks again on a later pass. True when `speed` is applied (also when it already
+    /// was).
+    fn set_speed(&mut self, bus: Bus, speed: BusSpeed) -> bool {
+        if self.speed(bus) == speed {
+            return true;
+        }
+        if !i2c_hw::set_speed(bus, self.pins(bus), speed) {
+            return false;
+        }
+        *self.state_mut().speeds.get_mut(bus) = speed;
+        true
     }
 
     /// pins -- the pin handles of `bus` (levels are read through them; the alternate function is

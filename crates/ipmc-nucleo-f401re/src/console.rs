@@ -336,12 +336,17 @@ impl Console {
 
     /// start_sensors -- applies the power-at-boot setting (ipmi_defs.h IPMC_POWER_AT_BOOT).
     pub fn start_sensors(&mut self) {
-        self.ctx.sensing.start();
+        let power_on_check = self.ctx.ipmb.power_on_check();
+        self.ctx.sensing.start(power_on_check);
     }
 
-    /// service_sensors -- takes a sensor sample when the period has elapsed, and hands every new
-    /// sample (also one a console command took) to the IPMI handlers and the FRU state machine.
+    /// service_sensors -- serves the payload power and payload reset requests of the command
+    /// handlers (`Sensing::serve_hand_offs`), takes a sensor sample when the period has elapsed,
+    /// and hands every new sample (also one a console command took) to the IPMI handlers and the
+    /// FRU state machine.
     pub fn service_sensors(&mut self) {
+        let hand_offs = self.ctx.ipmb.take_hand_offs();
+        self.ctx.sensing.serve_hand_offs(hand_offs);
         self.ctx.sensing.service();
         if let Some(snapshot) = self.ctx.sensing.take_fresh() {
             self.ctx.ipmb.feed_sensors(&snapshot);

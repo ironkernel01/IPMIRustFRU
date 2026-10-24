@@ -1,6 +1,6 @@
 //! reset_gate.rs - when a pending processor reset may run.
 //!
-//! A handler asks for a Cold Reset through `Context::pending_reset`; the owner of the processor
+//! A handler asks for a Cold or Warm Reset through `Context::pending_reset`; the owner of the processor
 //! (the firmware main loop, the emulator) only performs it. This gate is the one decision: the
 //! reset runs when nothing would be lost, that is the egress queue is empty (the response left
 //! or was dropped) and the FRU store holds no unsaved change (an accepted Write FRU Data is in
@@ -51,7 +51,7 @@ impl ResetGate {
         }
         if now_ms.wrapping_sub(seen) >= RESET_WAIT_MS {
             trace.line(format_args!(
-                "Cold Reset: after {} ms (response queued: {}, FRU unsaved: {})",
+                "Reset: after {} ms (response queued: {}, FRU unsaved: {})",
                 RESET_WAIT_MS, !egress_empty, !fru_clean
             ));
             return true;

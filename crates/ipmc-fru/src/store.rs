@@ -6,6 +6,7 @@
 //! firmware implements, so the scratchpad stays in this crate and no other crate holds FRU bytes.
 //! `write` marks the store dirty; `persist::Persist::poll` is the one reader of that mark.
 
+use crate::persist::NV_SETTINGS_MASK;
 use crate::records::{IMAGE, SIZE};
 
 /// FruError -- why a FRU access or decode was refused.
@@ -53,6 +54,10 @@ pub struct FruStore {
     /// An accepted write changed `bytes` since `take_dirty` last ran (written by `write`, read
     /// and cleared by `persist::Persist::poll`, both in the main loop).
     dirty: bool,
+    /// The Tier-3 non-volatile settings byte (bit 0 Default-Activation-Locked, bit 1
+    /// Commanded-Deactivation-Ignored), saved in the flash log record with the image: the same
+    /// dirty mark and the same save rules cover it. 00h at power-up and for Tier-1 and Tier-2.
+    nv_settings: u8,
 }
 
 impl FruStore {
@@ -61,6 +66,7 @@ impl FruStore {
         FruStore {
             bytes: IMAGE.bytes,
             dirty: false,
+            nv_settings: 0,
         }
     }
 
@@ -69,6 +75,28 @@ impl FruStore {
         FruStore {
             bytes: image,
             dirty: false,
+            nv_settings: 0,
+        }
+    }
+
+    /// nv_settings -- the Tier-3 non-volatile settings byte.
+    pub const fn nv_settings(&self) -> u8 {
+        self.nv_settings
+    }
+
+    /// load_nv_settings -- sets the settings byte read from the flash log; not dirty.
+    pub fn load_nv_settings(&mut self, settings: u8) {
+        self.nv_settings = settings & NV_SETTINGS_MASK;
+    }
+
+    /// set_nv_settings -- changes the settings byte (masked with `NV_SETTINGS_MASK`); a change
+    /// marks the store dirty so the flash log saves it, as an accepted Write FRU Data does. The
+    /// caller checks NVMRO first.
+    pub fn set_nv_settings(&mut self, settings: u8) {
+        let settings = settings & NV_SETTINGS_MASK;
+        if settings != self.nv_settings {
+            self.nv_settings = settings;
+            self.dirty = true;
         }
     }
 

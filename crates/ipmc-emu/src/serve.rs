@@ -5,7 +5,7 @@
 //! `Board` for it (a power cycle), read lines, step the board every POLL_PERIOD and write the
 //! frames the IPMC transmits. The line protocol is documented in the crate documentation.
 
-use crate::emulator::{EmuConfig, EmuError, Emulator};
+use crate::emulator::{EmuConfig, EmuError, Emulator, FlashCopy};
 use crate::replay::is_request_frame;
 use crate::trace::Hex;
 use crate::vectors::{self, VectorErrorKind, LINE_MAX_CHARS};
@@ -136,10 +136,15 @@ pub struct Board {
 }
 
 impl Board {
-    /// new -- a board in its start-up state for `config`, both buses up.
+    /// new -- a board in its start-up state for `config`, both buses up, its flash erased.
     pub fn new(config: &ServeConfig) -> Result<Board, EmuError> {
+        Board::new_with_flash(config, FlashCopy::erased())
+    }
+
+    /// new_with_flash -- `new` for a board whose flash log holds `flash`.
+    pub fn new_with_flash(config: &ServeConfig, flash: FlashCopy) -> Result<Board, EmuError> {
         Ok(Board {
-            emu: Emulator::new(config.emu)?,
+            emu: Emulator::new_with_flash(config.emu, flash)?,
             down: [false; 2],
             inflight: None,
             trace: LineTrace {
@@ -152,6 +157,11 @@ impl Board {
     /// own_address -- the IPMB address (8-bit form) the board answers at.
     pub fn own_address(&self) -> u8 {
         self.emu.own_address()
+    }
+
+    /// flash -- the flash log a power cycle keeps (`Emulator::flash`).
+    pub fn flash(&mut self) -> FlashCopy {
+        self.emu.flash()
     }
 
     fn is_down(&self, bus: Bus) -> bool {
@@ -347,8 +357,9 @@ struct Clock<'a> {
     now_ms: &'a mut u32,
 }
 
-/// handle_line -- one client line: errors answer `#error`, `#reset` rebuilds the board and
-/// restarts the clock at zero. Returns false for `#quit`.
+/// handle_line -- one client line: errors answer `#error`, `#reset` rebuilds the board (its flash
+/// log carried over, as a power cycle keeps it) and restarts the clock at zero. Returns false
+/// for `#quit`.
 fn handle_line(
     board: &mut Board,
     config: &ServeConfig,
@@ -359,7 +370,7 @@ fn handle_line(
     match parse_client_line(text) {
         Ok(None) => true,
         Ok(Some(ClientMsg::Reset)) => {
-            match Board::new(config) {
+            match Board::new_with_flash(config, board.flash()) {
                 Ok(fresh) => {
                     *board = fresh;
                     *clock.start = Instant::now();

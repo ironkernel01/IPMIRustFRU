@@ -23,12 +23,35 @@ pub const fn per_state_event_enables(tier: u32) -> bool {
     tier == 3
 }
 
+/// activation_control -- a Tier-3 IPMC controls payload power and implements FRU activation and
+/// deactivation (Rule 4.1.2-10.1), so its FRU State machine uses M5 (Rule 4.1.5.4.3-2).
+pub const fn activation_control(tier: u32) -> bool {
+    tier == 3
+}
+
+/// payload_mode_sensor -- a Tier-3 IPMC has the Payload Mode sensor, sensor 7 (Rule 6.1-17,
+/// Table 10.2-1).
+pub const fn payload_mode_sensor(tier: u32) -> bool {
+    tier == 3
+}
+
+/// fast_mode -- a Tier-3 IPMC supports FAST-MODE, 400 kHz, on its IPMB (Rule 4.1.1-4.4).
+pub const fn fast_mode(tier: u32) -> bool {
+    tier == 3
+}
+
 /// EVENT_GENERATOR -- `event_generator` at the build's Tier.
 pub const EVENT_GENERATOR: bool = event_generator(ipmc_defs::IPMC_TIER);
 /// SEL_DEVICE -- `sel_device` at the build's Tier.
 pub const SEL_DEVICE: bool = sel_device(ipmc_defs::IPMC_TIER);
 /// PER_STATE_EVENT_ENABLES -- `per_state_event_enables` at the build's Tier.
 pub const PER_STATE_EVENT_ENABLES: bool = per_state_event_enables(ipmc_defs::IPMC_TIER);
+/// ACTIVATION_CONTROL -- `activation_control` at the build's Tier.
+pub const ACTIVATION_CONTROL: bool = activation_control(ipmc_defs::IPMC_TIER);
+/// PAYLOAD_MODE_SENSOR -- `payload_mode_sensor` at the build's Tier.
+pub const PAYLOAD_MODE_SENSOR: bool = payload_mode_sensor(ipmc_defs::IPMC_TIER);
+/// FAST_MODE -- `fast_mode` at the build's Tier.
+pub const FAST_MODE: bool = fast_mode(ipmc_defs::IPMC_TIER);
 
 #[cfg(test)]
 mod tests {
@@ -36,17 +59,27 @@ mod tests {
 
     #[test]
     fn the_rules_follow_the_tier() {
-        // (tier, event generator, SEL device, per-state event enables)
+        // (tier, event generator, SEL device, per-state event enables, activation control,
+        // payload mode sensor, FAST-MODE)
         let table = [
-            (1, false, false, false),
-            (2, true, false, false),
-            (3, true, true, true),
+            (1, false, false, false, false, false, false),
+            (2, true, false, false, false, false, false),
+            (3, true, true, true, true, true, true),
         ];
-        for (tier, generator, sel, per_state) in table {
+        for (tier, generator, sel, per_state, activation, mode_sensor, fast) in table {
+            assert_eq!(activation_control(tier), activation, "tier {tier}");
+            assert_eq!(payload_mode_sensor(tier), mode_sensor, "tier {tier}");
+            assert_eq!(fast_mode(tier), fast, "tier {tier}");
             assert_eq!(event_generator(tier), generator, "tier {tier}");
             assert_eq!(sel_device(tier), sel, "tier {tier}");
             assert_eq!(per_state_event_enables(tier), per_state, "tier {tier}");
         }
+        assert_eq!(ACTIVATION_CONTROL, activation_control(ipmc_defs::IPMC_TIER));
+        assert_eq!(
+            PAYLOAD_MODE_SENSOR,
+            payload_mode_sensor(ipmc_defs::IPMC_TIER)
+        );
+        assert_eq!(FAST_MODE, fast_mode(ipmc_defs::IPMC_TIER));
         assert_eq!(EVENT_GENERATOR, event_generator(ipmc_defs::IPMC_TIER));
         assert_eq!(SEL_DEVICE, sel_device(ipmc_defs::IPMC_TIER));
         assert_eq!(

@@ -1,22 +1,38 @@
-// cold_reset.rs - the emulator's processor reset: `Context::pending_reset` is applied by the
+// cold_reset.rs - the emulator's Cold and Warm Reset: `Context::pending_reset` is applied by the
 // shared `ResetGate` when the response has left and no accepted FRU write is unsaved, or
-// IPMC_RESET_WAIT_MS after the request when it cannot. The reset restores the FRU image from the
-// flash copy, continues the request sequence numbers and restarts the payload power controller.
+// IPMC_RESET_WAIT_MS after the request when it cannot. A Cold Reset restores the FRU image from
+// the flash copy, continues the request sequence numbers and restarts the payload power
+// controller; a Warm Reset rebuilds the link, continues the sequence numbers and keeps the rest.
+// The hand-offs of a handler (payload power request, payload reset pulse) are served here too.
 
+use ipmc_core::dispatch::PowerRequest;
 use ipmc_core::dispatch::{Context, ResetRequest};
 use ipmc_core::ext::Extension;
 use ipmc_core::ipmb::{self, Frame, Header, NETFN_APP, NETFN_SE, NETFN_STORAGE};
 use ipmc_core::queue::Bus;
 use ipmc_core::requester::{Request, Requester};
-use ipmc_core::sensor::PowerState;
+use ipmc_core::sensor::{PayloadMode, PowerState, TransitionStatus};
 use ipmc_core::trace::Trace;
 use ipmc_emu::emulator::{EmuConfig, Emulator};
+use std::cell::Cell;
 
 const OWN: u8 = 0x82;
 const CM: u8 = 0x20;
 const GET_DEVICE_ID: u8 = 0x01;
 /// A command no Tier-1 row owns: the test extension answers it with a Cold Reset request.
 const FAKE_RESET_CMD: u8 = 0x7E;
+
+/// Commands no Tier-1 row owns: Warm Reset; set the kept state (payload mode 3, settings 01h,
+/// events of sensor 2 off); payload power on; payload power off; payload reset.
+const FAKE_WARM_CMD: u8 = 0x7C;
+const FAKE_KEEP_CMD: u8 = 0x7B;
+const FAKE_POWER_ON_CMD: u8 = 0x7A;
+const FAKE_POWER_OFF_CMD: u8 = 0x79;
+const FAKE_PAYLOAD_RESET_CMD: u8 = 0x78;
+thread_local! {
+    /// `Extension::warm_reset` calls of the test extension, per test thread.
+    static WARM_CALLS: Cell<u32> = const { Cell::new(0) };
+}
 
 /// A command no Tier-1 row owns: the test extension sends one Platform Event request after it.
 const FAKE_SEND_CMD: u8 = 0x7D;
@@ -26,10 +42,12 @@ const PLATFORM_EVENT: u8 = 0x02;
 
 /// FakeReset -- answers FAKE_RESET_CMD by setting `pending_reset`, as the Tier-2/3 Cold Reset
 /// handler does after validating its request, and FAKE_SEND_CMD by sending one Platform Event
-/// request through the requester.
+/// request through the requester. With `locked` it refuses payload power, as a Tier-3 extension
+/// does while the FRU is activation-locked (`Extension::power_on_allowed`).
 #[derive(Default)]
 struct FakeReset {
     send: bool,
+    locked: bool,
 }
 
 impl Extension for FakeReset {
@@ -51,8 +69,40 @@ impl Extension for FakeReset {
                 self.send = true;
                 Some(("Fake Send", Ok(0)))
             }
+            FAKE_WARM_CMD => {
+                ctx.pending_reset = Some(ResetRequest::Warm);
+                Some(("Fake Warm Reset", Ok(0)))
+            }
+            FAKE_KEEP_CMD => {
+                ctx.payload_mode = PayloadMode::new(3, 0, TransitionStatus::Complete).unwrap();
+                ctx.set_nv_settings(0b01);
+                if let Some(events) = ctx.event_enables.get_mut(2) {
+                    events.enabled = false;
+                }
+                Some(("Fake Keep", Ok(0)))
+            }
+            FAKE_POWER_ON_CMD => {
+                ctx.pending_power = Some(PowerRequest::On);
+                Some(("Fake Power On", Ok(0)))
+            }
+            FAKE_POWER_OFF_CMD => {
+                ctx.pending_power = Some(PowerRequest::Off);
+                Some(("Fake Power Off", Ok(0)))
+            }
+            FAKE_PAYLOAD_RESET_CMD => {
+                ctx.pending_payload_reset = true;
+                Some(("Fake Payload Reset", Ok(0)))
+            }
             _ => None,
         }
+    }
+
+    fn warm_reset(&mut self) {
+        WARM_CALLS.with(|calls| calls.set(calls.get() + 1));
+    }
+
+    fn power_on_allowed(&self, _ctx: &Context) -> bool {
+        !self.locked
     }
 
     fn poll(
@@ -80,6 +130,13 @@ fn make() -> Box<dyn Extension> {
     Box::new(FakeReset::default())
 }
 
+fn make_locked() -> Box<dyn Extension> {
+    Box::new(FakeReset {
+        locked: true,
+        ..FakeReset::default()
+    })
+}
+
 /// Lines -- collects the trace lines.
 #[derive(Default)]
 struct Lines(Vec<String>);
@@ -92,7 +149,11 @@ impl Trace for Lines {
 
 impl Lines {
     fn resets(&self) -> usize {
-        self.0.iter().filter(|l| *l == "IPMC cold reset").count()
+        self.count("IPMC cold reset")
+    }
+
+    fn count(&self, line: &str) -> usize {
+        self.0.iter().filter(|l| *l == line).count()
     }
 }
 
@@ -270,25 +331,6 @@ fn event_round(emu: &mut Emulator, cm_seq: u8, now_ms: u32, lines: &mut Lines) -
 }
 
 #[test]
-fn the_request_sequence_continues_across_a_cold_reset() {
-    if !ipmc_core::link::LinkConfig::from_defs().requests_allowed {
-        return; // a Tier-1 build sends no request
-    }
-    let mut emu = board();
-    let mut lines = Lines::default();
-    assert_eq!(event_round(&mut emu, 1, 0, &mut lines), 0);
-    assert_eq!(event_round(&mut emu, 2, 100, &mut lines), 1);
-    exchange(&mut emu, &request(FAKE_RESET_CMD, 3), 200, &mut lines);
-    emu.poll(202, &mut lines);
-    assert_eq!(lines.resets(), 1);
-    assert_eq!(
-        event_round(&mut emu, 1, 300, &mut lines),
-        2,
-        "the counter goes on, inside T9 no value repeats"
-    );
-}
-
-#[test]
 fn no_sequence_number_sent_inside_t9_is_used_again_after_a_cold_reset() {
     if !ipmc_core::link::LinkConfig::from_defs().requests_allowed {
         return; // a Tier-1 build sends no request
@@ -357,4 +399,193 @@ fn a_cold_reset_restarts_the_payload_power_as_a_boot_does() {
         emu.poll(now_ms, &mut lines);
     }
     assert_eq!(emu.payload_power(), PowerState::On);
+}
+
+/// run_to_power_on -- polls the board until the payload power is On (power requested at boot).
+fn run_to_power_on(emu: &mut Emulator, lines: &mut Lines) {
+    for now_ms in (0..=3000).step_by(500) {
+        emu.poll(now_ms, lines);
+    }
+}
+
+#[test]
+fn a_warm_reset_rebuilds_the_link_and_keeps_everything_else() {
+    if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+        return;
+    }
+    let mut emu = board();
+    let mut lines = Lines::default();
+    run_to_power_on(&mut emu, &mut lines);
+    assert_eq!(emu.payload_power(), PowerState::On);
+    exchange(&mut emu, &request(FAKE_KEEP_CMD, 1), 3000, &mut lines);
+    let kept = emu.context().fru_state.state();
+    let (fru, events, sdr_count) = (
+        emu.context().fru.bytes().to_vec(),
+        emu.context().event_enables,
+        emu.context().sdr.record_count(),
+    );
+    assert!(
+        !events.get(2).unwrap().enabled,
+        "the test changed the enables"
+    );
+    assert_eq!(emu.link().counters(Bus::A).rx_ok, 1);
+    // The Warm Reset request is taken; it is applied once the response has left, as a Cold Reset.
+    emu.rx(Bus::A, &request(FAKE_WARM_CMD, 2), 3010).unwrap();
+    assert_eq!(emu.poll(3010, &mut lines), 1);
+    emu.poll(3011, &mut lines);
+    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Warm));
+    assert_eq!(
+        lines.count("IPMC warm reset"),
+        0,
+        "not before the response left"
+    );
+    let (bus, _) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
+    emu.tx_done(bus, true, 3012, &mut lines).unwrap();
+    emu.poll(3013, &mut lines);
+    assert_eq!(lines.count("IPMC warm reset"), 1);
+    assert_eq!(lines.resets(), 0, "a Warm Reset is not a Cold Reset");
+    assert_eq!(emu.context().pending_reset, None);
+    assert_eq!(WARM_CALLS.with(Cell::get), 1, "the extension is told once");
+    // The link restarted; the rest is kept: payload power (no new power-on), FRU state, FRU
+    // store, SDR, event enables, payload mode, the settings byte.
+    assert_eq!(emu.link().counters(Bus::A).rx_ok, 0);
+    assert_eq!(emu.payload_power(), PowerState::On);
+    assert_eq!(emu.context().fru_state.state(), kept);
+    assert_eq!(emu.context().fru.bytes(), fru.as_slice());
+    assert_eq!(emu.context().event_enables, events);
+    assert_eq!(emu.context().sdr.record_count(), sdr_count);
+    assert_eq!(emu.context().nv_settings(), 0b01);
+    assert_eq!(emu.context().payload_mode.current(), 3);
+    // The board answers again on the restarted link.
+    exchange(&mut emu, &request(GET_DEVICE_ID, 1), 3100, &mut lines);
+    assert_eq!(emu.link().counters(Bus::A).rx_ok, 1);
+}
+
+#[test]
+fn the_request_sequence_continues_across_a_cold_and_a_warm_reset() {
+    if !ipmc_core::link::LinkConfig::from_defs().requests_allowed {
+        return; // a Tier-1 build sends no request
+    }
+    // (command that asks for the reset, the trace line of its application)
+    for (command, applied) in [
+        (FAKE_RESET_CMD, "IPMC cold reset"),
+        (FAKE_WARM_CMD, "IPMC warm reset"),
+    ] {
+        let mut emu = board();
+        let mut lines = Lines::default();
+        assert_eq!(event_round(&mut emu, 1, 0, &mut lines), 0);
+        assert_eq!(event_round(&mut emu, 2, 100, &mut lines), 1);
+        exchange(&mut emu, &request(command, 3), 200, &mut lines);
+        emu.poll(202, &mut lines);
+        assert_eq!(lines.count(applied), 1, "{applied}");
+        assert_eq!(
+            event_round(&mut emu, 1, 300, &mut lines),
+            2,
+            "the counter goes on, inside T9 no value repeats: {applied}"
+        );
+    }
+}
+
+#[test]
+fn the_payload_power_and_reset_hand_offs_are_served_by_the_owner() {
+    let mut emu = board();
+    let mut lines = Lines::default();
+    run_to_power_on(&mut emu, &mut lines);
+    exchange(&mut emu, &request(FAKE_POWER_OFF_CMD, 1), 3000, &mut lines);
+    assert_eq!(emu.payload_power(), PowerState::Off);
+    assert_eq!(emu.context().pending_power, None, "the request is consumed");
+    // The Off request is sampled at once (M4 to M6); a power-on is allowed again once the
+    // shutdown has completed (M1), which the next periodic sample (IPMC_SENSOR_PERIOD_MS after the one the
+    // request took) sees.
+    emu.poll(4000, &mut lines);
+    exchange(&mut emu, &request(FAKE_POWER_ON_CMD, 2), 4100, &mut lines);
+    assert_eq!(emu.payload_power(), PowerState::PowerOnRequested);
+    exchange(
+        &mut emu,
+        &request(FAKE_PAYLOAD_RESET_CMD, 3),
+        4200,
+        &mut lines,
+    );
+    let pulse = format!(
+        "payload reset pulse {} ms",
+        ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS
+    );
+    assert_eq!(lines.count(&pulse), 1);
+    assert!(!emu.context().pending_payload_reset);
+}
+
+#[test]
+fn a_locked_extension_keeps_the_power_on_request_from_the_payload() {
+    let mut emu = Emulator::new(EmuConfig {
+        b_enabled_at_start: false,
+        ..EmuConfig::from_defs()
+    })
+    .expect("emulator")
+    .with_extension(make_locked);
+    let mut lines = Lines::default();
+    run_to_power_on(&mut emu, &mut lines);
+    exchange(&mut emu, &request(FAKE_POWER_OFF_CMD, 1), 3000, &mut lines);
+    assert_eq!(emu.payload_power(), PowerState::Off);
+    // The request is consumed, refused with one trace line, and the payload stays off (the
+    // shutdown the Off request began is complete by then: M1).
+    emu.poll(4000, &mut lines);
+    exchange(&mut emu, &request(FAKE_POWER_ON_CMD, 2), 4100, &mut lines);
+    assert_eq!(emu.context().pending_power, None);
+    assert_eq!(emu.payload_power(), PowerState::Off);
+    assert_eq!(
+        lines
+            .0
+            .iter()
+            .filter(|l| l.starts_with("power on request refused: FRU is activation-locked"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn the_payload_supply_follows_pwr_en_so_a_shutdown_can_finish() {
+    if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+        return;
+    }
+    let mut emu = board();
+    let mut lines = Lines::default();
+    run_to_power_on(&mut emu, &mut lines);
+    assert!(!emu.context().sensors.payload_shut_down, "PGOOD is high");
+    exchange(&mut emu, &request(FAKE_POWER_OFF_CMD, 1), 3000, &mut lines);
+    for now_ms in (3500..=6000).step_by(500) {
+        emu.poll(now_ms, &mut lines);
+    }
+    // PWR_EN released and PGOOD low: the shutdown is complete (Rule 4.1.5.4.5-1).
+    assert!(emu.context().sensors.payload_shut_down);
+}
+
+#[test]
+fn a_power_cycle_keeps_the_flash_log_and_a_default_lock_holds_the_payload_off() {
+    let config = EmuConfig {
+        b_enabled_at_start: false,
+        ..EmuConfig::from_defs()
+    };
+    let mut lines = Lines::default();
+    let mut emu = board();
+    exchange(&mut emu, &request(FAKE_KEEP_CMD, 1), 0, &mut lines);
+    assert_eq!(emu.context().nv_settings(), 0b01);
+    // The settings change is still inside the persist delay; the emulator's power cycle takes the
+    // save with it, and the new board starts with the stored settings.
+    let flash = emu.flash();
+    let fresh = Emulator::new_with_flash(config, flash).expect("emulator");
+    assert_eq!(fresh.context().nv_settings(), 0b01);
+    assert_eq!(
+        flash,
+        Emulator::new_with_flash(config, flash).unwrap().flash()
+    );
+    // At Tier-3 the stored default-activation lock keeps the boot power-on request away from the
+    // payload (the power-on hook of the extension); below it the payload is requested as ever.
+    let on = fresh.payload_power() != PowerState::Off;
+    assert_eq!(
+        on,
+        ipmc_defs::IPMC_TIER < 3 && ipmc_defs::IPMC_POWER_AT_BOOT == 1
+    );
+    // A board that never saved starts from the built image and settings 00h.
+    let erased = Emulator::new(config).expect("emulator");
+    assert_eq!(erased.context().nv_settings(), 0);
 }

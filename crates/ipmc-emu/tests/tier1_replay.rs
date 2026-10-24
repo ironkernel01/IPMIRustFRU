@@ -37,8 +37,9 @@ const GET_DEVICE_SDR: u8 = 0x21;
 const RESERVE_DEVICE_SDR: u8 = 0x22;
 
 /// Our SDR record lengths, from the ID strings of ipmi_defs.h: a compact record is 32 bytes plus
-/// the string, the locator record 16 bytes plus its string (IPMI v2.0 Tables 43-2 and 43-8).
-const RECORD_LENGTHS: [usize; 8] = [
+/// the string, the locator record 16 bytes plus its string (IPMI v2.0 Tables 43-2 and 43-8). At
+/// Tier-3 the Payload Mode sensor (sensor 7) has a record before the locator.
+const RECORD_LENGTHS: [usize; 9] = [
     32 + 9,  // FRU State
     32 + 9,  // IPMB Link
     32 + 10, // FRU Health
@@ -46,8 +47,20 @@ const RECORD_LENGTHS: [usize; 8] = [
     32 + 15, // FRU Temperature
     32 + 15, // Payload Results
     32 + 14, // Payload Status
+    32 + 12, // Payload Mode (Tier-3 only)
     16 + 4,  // IPMC
 ];
+
+/// record_lengths -- `RECORD_LENGTHS` of the build's Tier: the Payload Mode record only at Tier-3.
+fn record_lengths() -> Vec<usize> {
+    let (sensors, locator) = RECORD_LENGTHS.split_at(RECORD_LENGTHS.len() - 1);
+    let sensors = if ipmc_defs::IPMC_TIER == 3 {
+        sensors
+    } else {
+        &sensors[..sensors.len() - 1]
+    };
+    [sensors, locator].concat()
+}
 
 /// Commands the capture sends that this IPMC answers C1h, with the reason (PLAN.md section 4).
 const UNSUPPORTED: [(u8, u8, &str); 6] = [
@@ -186,7 +199,7 @@ fn check_payload(netfn: u8, cmd: u8, request: &[u8], ours: &[u8], captured: &[u8
         // Table 35-2: the operation byte selects the count (bit 0: 1b all SDRs, 0b the sensors of
         // the LUN); flags bit 0 = LUN 0 has sensors, bit 7 = 0 static sensor population.
         (NETFN_SE, 0x20) => {
-            let records = RECORD_LENGTHS.len();
+            let records = record_lengths().len();
             let count = if request == [1] { records } else { records - 1 };
             assert_eq!(ours, [u8::try_from(count).unwrap(), 0x01], "{what}");
         }
@@ -215,16 +228,29 @@ fn check_payload(netfn: u8, cmd: u8, request: &[u8], ours: &[u8], captured: &[u8
         }
         // VITA 46.11 Table 10.1.3.1-1: VSO byte; Layer 1 / tier 00h (Tier 1), 01h (Tier 2), 02h
         // (Tier 3: the build's IPMC_TIER less one); interfaces 01b (two,
-        // Rule 4.1.1-2) at 100 kHz; VITA 46.11 00h; revision 22h (2022); max FRU Device ID 0;
-        // IPMC FRU Device ID 0.
+        // Rule 4.1.1-2) at 100 kHz (400 kHz, 01b in bits 5:4, at Tier-3); VITA 46.11 00h;
+        // revision 22h (2022); max FRU Device ID 0; IPMC FRU Device ID 0.
         (NETFN_GROUP_EXT, 0x00) => {
             let tier = u8::try_from(ipmc_defs::IPMC_TIER - 1).expect("tier 1..=3");
-            assert_eq!(ours, [VSO, tier, 0x01, 0x00, 0x22, 0x00, 0x00], "{what}");
+            let interfaces = if ipmc_defs::IPMC_TIER >= 3 {
+                0x11
+            } else {
+                0x01
+            };
+            assert_eq!(
+                ours,
+                [VSO, tier, interfaces, 0x00, 0x22, 0x00, 0x00],
+                "{what}"
+            );
         }
         // Set IPMB State (Table 10.1.3.9-1): the response carries only the VSO byte.
         (NETFN_GROUP_EXT, 0x09) => assert_eq!(ours, [VSO], "{what}"),
-        // Table 10.1.3.11-1: the type 12h locator record is the eighth, ID 0007h LS first.
-        (NETFN_GROUP_EXT, 0x0D) => assert_eq!(ours, [VSO, 0x07, 0x00], "{what}"),
+        // Table 10.1.3.11-1: the type 12h locator record is the last, ID 0007h LS first (0008h
+        // at Tier-3, after the Payload Mode record).
+        (NETFN_GROUP_EXT, 0x0D) => {
+            let id = u8::try_from(record_lengths().len() - 1).unwrap();
+            assert_eq!(ours, [VSO, id, 0x00], "{what}");
+        }
         _ => return false,
     }
     true
@@ -245,10 +271,11 @@ fn expected_get_device_sdr(data: &[u8], reservation: u16) -> (u8, &'static str) 
         );
     }
     let id = usize::from(u16::from_le_bytes([*i_lo, *i_hi]));
-    let Some(length) = RECORD_LENGTHS.get(id) else {
+    let lengths = record_lengths();
+    let Some(length) = lengths.get(id) else {
         return (
             CC_NOT_PRESENT,
-            "record ID beyond this IPMC's 8 records (the capture lists 40)",
+            "record ID beyond this IPMC's records (the capture lists 40)",
         );
     };
     if offset > *length || (count != 0xFF && offset + count > *length) {
@@ -368,7 +395,8 @@ fn every_captured_request_gets_the_documented_answer() {
     // The expected differences of the Get Device SDR requests, counted: this IPMC's reservation
     // IDs run 1, 2, 3 ... exactly as the captured controller's did, so no request meets a stale
     // reservation; 10 chunks fall outside this IPMC's record lengths and 124 name record IDs it
-    // does not have.
+    // does not have. With the Payload Mode record at Tier-3 the capture's reads of record ID 8
+    // find a record: 19 answered, 11 out of range, 120 absent.
     let count_of = |prefix: &str| -> u32 {
         outcomes
             .iter()
@@ -376,10 +404,15 @@ fn every_captured_request_gets_the_documented_answer() {
             .map(|(_, n)| *n)
             .sum()
     };
-    assert_eq!(count_of("04h/21h -> 00h"), 16);
+    let (answered_sdr, out_of_range, absent) = if ipmc_defs::IPMC_TIER == 3 {
+        (19, 11, 120)
+    } else {
+        (16, 10, 124)
+    };
+    assert_eq!(count_of("04h/21h -> 00h"), answered_sdr);
     assert_eq!(count_of("04h/21h -> C5h"), 0);
-    assert_eq!(count_of("04h/21h -> C9h"), 10);
-    assert_eq!(count_of("04h/21h -> CBh"), 124);
+    assert_eq!(count_of("04h/21h -> C9h"), out_of_range);
+    assert_eq!(count_of("04h/21h -> CBh"), absent);
     // The commands answered C1h: 4 + 78 NA requests and 1 + 3 + 1 + 2 optional ones.
     assert_eq!(count_of("04h/00h -> C1h") + count_of("04h/28h -> C1h"), 82);
     assert_eq!(

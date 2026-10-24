@@ -20,6 +20,8 @@ use crate::eval::faults;
 use crate::eval::power_fsm::{PowerController, PowerError, Transition};
 use crate::hal::{AnalogSource, DigitalInputs, Input, PowerSwitch, SourceError};
 use crate::trace::{self, Level};
+use ipmc_core::dispatch::PowerRequest;
+use ipmc_core::fru_state::PowerOnRefused;
 use ipmc_core::sensor::SensorSnapshot;
 use ipmc_core::trace::Trace;
 
@@ -147,6 +149,41 @@ impl Monitor {
             Some(transition) => self.apply(&transition, io, trace),
             None => Ok(()),
         }
+    }
+
+    /// apply_power_request -- performs the `PowerRequest` a handler left in
+    /// `Context::pending_power`, for the firmware main loop and the emulator, the one path (owner
+    /// decision 9: one power-on check for every power-on path): `power_on_check` is the result
+    /// of `ipmc_core::ext::check_power_on` for the moment of the request (the FRU state machine
+    /// and the extension: M6, or an activation lock). On asks it first, and a refusal powers
+    /// nothing and prints one line; then `power_on` or `power_off`. A failed request prints one
+    /// line with the reason. Returns true when the request was carried out.
+    pub fn apply_power_request<I, T>(
+        &mut self,
+        request: PowerRequest,
+        power_on_check: Result<(), PowerOnRefused>,
+        now_ms: u32,
+        io: &mut I,
+        trace: &mut T,
+    ) -> bool
+    where
+        I: PowerSwitch + ?Sized,
+        T: Trace + ?Sized,
+    {
+        let result = match request {
+            PowerRequest::On => match power_on_check {
+                Ok(()) => self.power_on(now_ms, io, trace),
+                Err(refused) => {
+                    trace.line(format_args!("power on request refused: {}", refused.name()));
+                    return false;
+                }
+            },
+            PowerRequest::Off => self.power_off(io, trace),
+        };
+        if let Err(error) = result {
+            trace.line(format_args!("power request failed: {error}"));
+        }
+        result.is_ok()
     }
 
     /// power_clear -- clears a latched fault; `Err(NotFaulted)` when none is latched.
@@ -520,5 +557,58 @@ mod tests {
         assert_eq!(m.power().state(), PowerState::Fault);
         assert_eq!(m.power_clear(&mut io, &mut t), Ok(()));
         assert_eq!(m.power().state(), PowerState::Off);
+    }
+
+    #[test]
+    fn a_power_request_runs_the_one_power_on_check() {
+        use ipmc_core::fru_state::{FruMachine, InitialChecks, Inputs};
+        // A machine in M6: M4 needs M1 -> M4 first, so walk it there with the inputs.
+        let checks = InitialChecks {
+            management_power_valid: true,
+            address_parity_valid: true,
+            sdr_repository_ready: true,
+            self_test_passed: true,
+        };
+        let inputs = |valid: bool| Inputs {
+            checks,
+            payload_power_valid: valid,
+            payload_shut_down: !valid,
+            deactivation_requested: false,
+        };
+        let mut fru = FruMachine::new();
+        for (t, valid) in [(1, false), (2, true), (3, false)] {
+            fru.step(t, &inputs(valid));
+        }
+        assert!(fru.check_power_on().is_err(), "the machine is in M6");
+        let (mut m, _a, mut io, mut t) = rig();
+        assert!(!m.apply_power_request(PowerRequest::On, fru.check_power_on(), 0, &mut io, &mut t));
+        assert!(!io.power.is_enabled());
+        assert_eq!(
+            t.0,
+            ["power on request refused: FRU deactivation in progress (M6), power on after the FRU reaches M1"]
+        );
+        // Off is never refused; On is carried out outside M6.
+        assert!(m.apply_power_request(PowerRequest::Off, fru.check_power_on(), 0, &mut io, &mut t));
+        let m1 = FruMachine::new();
+        t.0.clear();
+        let ok = m1.check_power_on();
+        assert!(m.apply_power_request(PowerRequest::On, ok, 1, &mut io, &mut t));
+        assert!(io.power.is_enabled());
+        assert!(m.apply_power_request(PowerRequest::Off, ok, 2, &mut io, &mut t));
+        assert!(!io.power.is_enabled());
+        // An activation lock refuses On the same way and powers nothing.
+        t.0.clear();
+        let locked = Err(PowerOnRefused::ActivationLocked);
+        assert!(!m.apply_power_request(PowerRequest::On, locked, 2, &mut io, &mut t));
+        assert!(!io.power.is_enabled());
+        assert_eq!(
+            t.0,
+            ["power on request refused: FRU is activation-locked (AL), activate the FRU or clear the lock first"]
+        );
+        // A failed PWR_EN write is reported once, with the reason.
+        io.fail_writes = true;
+        t.0.clear();
+        assert!(!m.apply_power_request(PowerRequest::On, ok, 3, &mut io, &mut t));
+        assert!(t.0.last().unwrap().starts_with("power request failed: "));
     }
 }

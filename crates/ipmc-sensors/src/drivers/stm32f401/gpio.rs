@@ -1,5 +1,5 @@
-//! gpio.rs - the board's digital pins: the power-enable output and the four inputs.
-//! Implements `DigitalInputs` and `PowerSwitch`.
+//! gpio.rs - the board's digital pins: the power-enable output, the payload reset output and the
+//! four inputs. Implements `DigitalInputs`, `PowerSwitch` and `ResetOutput`.
 //!
 //! The pins are the board's choice: the board support hands them in as a `GpioMap` (ipmc-nucleo-f401re
 //! bsp/board_pins.rs, listed in Documentation/nucleo_f401re_pinout.md); this module holds no
@@ -11,7 +11,7 @@
 //! group that is not claimed is never configured or driven (a simulated power group leaves
 //! PWR_EN alone).
 
-use crate::hal::{DigitalInputs, Input, PowerSwitch, SourceError};
+use crate::hal::{DigitalInputs, Input, PowerSwitch, ResetOutput, SourceError};
 
 use super::ports::{self, PinId, Pins, PortError, Pull, Speed};
 
@@ -24,11 +24,14 @@ pub struct GpioMap {
     pub power_enable: PinId,
     /// Pin of each input, indexed by `Input::index`; pulled-up inputs.
     pub inputs: [PinId; Input::COUNT],
+    /// PAYLOAD_RST_OUT_N, open-drain output, active low, released (high impedance) at start-up.
+    pub payload_reset_out: PinId,
 }
 
 /// BoardIo -- the claimed pins; a slot is None when its group is not hardware.
 pub struct BoardIo {
     pwr_en: Option<Pins>,
+    payload_reset_out: Option<Pins>,
     inputs: [Option<Pins>; Input::COUNT],
 }
 
@@ -37,6 +40,9 @@ pub struct BoardIo {
 /// 1. `power`: the enable pin: claim, drive low and select push-pull before the pin
 ///    becomes an output, so the supplies never see a glitch high (`Pins::output` orders the
 ///    writes).
+///    The payload reset output belongs to the same group (the controls of the payload): claimed
+///    as an open-drain output released (high) before the pin becomes an output, so the payload
+///    sees no reset pulse at start-up.
 /// 2. `inputs`: claim the four input pins as pulled-up inputs.
 ///
 /// A group with its flag false is not touched. Fails with the first `PortError` (a pin already
@@ -44,12 +50,16 @@ pub struct BoardIo {
 pub fn init(map: &GpioMap, inputs: bool, power: bool) -> Result<BoardIo, PortError> {
     let mut io = BoardIo {
         pwr_en: None,
+        payload_reset_out: None,
         inputs: core::array::from_fn(|_| None),
     };
     if power {
         let pwr_en = ports::claim_pin(OWNER, map.power_enable)?;
         pwr_en.output(false, false, Speed::Low);
         io.pwr_en = Some(pwr_en);
+        let reset_out = ports::claim_pin(OWNER, map.payload_reset_out)?;
+        reset_out.output(true, true, Speed::Low);
+        io.payload_reset_out = Some(reset_out);
     }
     if inputs {
         for (slot, pin) in io.inputs.iter_mut().zip(map.inputs.iter()) {
@@ -72,12 +82,25 @@ impl DigitalInputs for BoardIo {
     }
 }
 
+/// drive -- writes `high` to the output `pin`; `Err(Unavailable)` when the power group is not
+/// hardware and the pin was never claimed. The one output write of PWR_EN and the reset output.
+fn drive(pin: Option<&Pins>, high: bool) -> Result<(), SourceError> {
+    pin.ok_or(SourceError::Unavailable)?.set_all(high);
+    Ok(())
+}
+
+impl ResetOutput for BoardIo {
+    /// set_reset -- drives PAYLOAD_RST_OUT_N low (asserted) or releases it (open drain, high
+    /// impedance); `Err(Unavailable)` when the power group is not hardware.
+    fn set_reset(&mut self, asserted: bool) -> Result<(), SourceError> {
+        drive(self.payload_reset_out.as_ref(), !asserted)
+    }
+}
+
 impl PowerSwitch for BoardIo {
     /// set_enable -- drives the output; `Err(Unavailable)` when the power group is not hardware.
     fn set_enable(&mut self, on: bool) -> Result<(), SourceError> {
-        let pin = self.pwr_en.as_ref().ok_or(SourceError::Unavailable)?;
-        pin.set_all(on);
-        Ok(())
+        drive(self.pwr_en.as_ref(), on)
     }
 
     fn is_enabled(&self) -> bool {

@@ -16,7 +16,7 @@
 //! image. The result gates only the FRU initial checks (Rule 4.1.5.4.1-9): it decides M0 to M1.
 //! A failure after the FRU left M0 does not take it out of M1 or M4.
 
-use crate::sdr::{SdrRepository, HEADER_LEN, NO_NEXT_RECORD, RECORD_COUNT};
+use crate::sdr::{SdrRepository, HEADER_LEN, NO_NEXT_RECORD, RECORD_COUNT_MAX};
 
 /// RESULT_PASSED -- byte 2 = 55h: no error, all self tests passed (IPMI v2.0 Table 20-5).
 const RESULT_PASSED: u8 = 0x55;
@@ -38,7 +38,7 @@ const DETAIL_SDR_EMPTY: u8 = 1 << 3;
 const LENGTH_INDEX: usize = HEADER_LEN - 1;
 /// WALK_STEPS_MAX -- most records one chain walk visits: one more than the repository holds, so a
 /// chain that does not end by itself is seen as broken.
-const WALK_STEPS_MAX: usize = RECORD_COUNT + 1;
+const WALK_STEPS_MAX: usize = RECORD_COUNT_MAX + 1;
 
 /// SelfTest -- bytes 2 and 3 of the Get Self Test Results response (IPMI v2.0 Table 20-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

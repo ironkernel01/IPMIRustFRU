@@ -12,7 +12,7 @@ pub mod power;
 
 pub use analog::{AnalogSource, Channel, Divider};
 pub use digital::{DigitalInputs, Input};
-pub use power::PowerSwitch;
+pub use power::{PowerSwitch, ResetOutput};
 
 /// SourceError -- why a source could not deliver a value. Variants name the fault.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

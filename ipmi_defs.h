@@ -25,6 +25,7 @@
 #define IPMB_BUS_A_ENABLE 1                       /* 1 = IPMB-A built in; must be 1 (VITA Rule 4.1.1-1: IPMB-A is mandatory) */
 #define IPMB_BUS_B_ENABLE 0                       /* 0 = IPMB-B not fitted (Tier-1 bench: one Aardvark on IPMB-A); 1 = IPMB-B built in (VITA Rule 4.1.1-1: "should") */
 #define IPMB_I2C_HZ 100000                        /* IPMB clock, 100 kHz */
+#define IPMB_I2C_FAST_HZ 400000                   /* IPMB FAST-MODE clock, 400 kHz (VITA 46.11 Rule 4.1.1-4.4; Tier-3, entered with the Set IPMB State speed byte); the hardware master derives its CCR from it, RM0368 18.6.8 */
 #define IPMB_MSG_MAX 32                           /* whole IPMB frame incl. rsSA and both checksums */
 #define IPMB_TX_ALTERNATE 0                       /* alternate transmissions between IPMB-A and IPMB-B when both are enabled (VITA 46.11 Rule 4.1.1-6) */
 #define IPMB_TX_ARRIVAL 1                         /* send responses on the bus the request arrived on */
@@ -37,8 +38,12 @@
 #define IPMB_REQ_RETRIES 10                       /* retries of a request after its first transmission (3..=10); VITA 46.11 Rule 4.1.1-10 retries up to C1max = 10: 11 transmissions x 250 ms = 2.75 s, inside the T9 sequence expiry of 5 s */
 #define IPMB_REQ_GAP_MS 5                         /* least time from one new request to the next (>= 5); VITA 46.11 Table 4.1.1-1 T4 */
 #define IPMC_RESET_WAIT_MS 3000                   /* longest wait before a pending Cold Reset is applied anyway (1..=5000): normally the processor resets once the response has left the egress queue and no accepted FRU write is unsaved; a flash sector erase takes up to 2 s (DS10086 Table 45), so the wait covers the response, one erase and the write */
+#define IPMC_PAYLOAD_RESET_PULSE_MS 100           /* time the payload reset output PAYLOAD_RST_OUT_N (PA9, open drain, active low) is held low by a Cold Reset of the payload (1..=1000); VITA 46.11 Rule 4.1.2-9 */
+#define IPMC_PAYLOAD_MODES 3                      /* payload operational modes this payload supports, bit n = mode n (modes 0..=14; bit 0, the normal mode, must be set; bit 15 is reserved): 3 = modes 0 and 1. The Payload Mode sensor SDR record (sensor 7, Tier-3) carries it as its reading and assertion masks and Get Payload Mode Capabilities answers it; VITA 46.11 Table 10.2.8-1 */
 #define IPMB_INGRESS_DEPTH 8                      /* received requests the link layer holds between the bus driver and the main loop (1..=32); a full FIFO drops and counts */
 #define IPMB_BITBANG_HALF_NS 5000                 /* bit-bang half bit time, 100 kHz */
+#define IPMB_BITBANG_FAST_LOW_NS 1400             /* bit-bang SCL low time in FAST-MODE, nanoseconds (>= 1300, I2C fast-mode tLOW; VITA 46.11 Table 9.2.2-1 M0_P1b) */
+#define IPMB_BITBANG_FAST_HIGH_NS 1000            /* bit-bang SCL high time in FAST-MODE, nanoseconds (>= 600, I2C fast-mode tHIGH) */
 #define IPMB_STRETCH_TIMEOUT_US 3000              /* longest wait for a stretched SCL, microseconds; VITA 46.11 Table 4.1.1-1 T8 (I2C clock low hold) max 3 ms (1..=3000) */
 #define IPMB_BUS_FREE_TIMEOUT_MS 60               /* longest wait for a free bus before a master write reports busy (the link then resends on the other bus), milliseconds; VITA 46.11 Table 4.1.1-1 T2 min 60 ms (60..=227, the T5 response limit) */
 #define IPMB_RX_QUEUE_DEPTH 4                     /* received frames each bus's interrupt can post before the main loop drains them (2..=16) */
@@ -116,6 +121,7 @@
 #define IPMC_SDR_FRU_TEMP_NAME "FRU Temperature"      /* sensor 4: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
 #define IPMC_SDR_PAYLOAD_RESULTS_NAME "Payload Results" /* sensor 5: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
 #define IPMC_SDR_PAYLOAD_STATUS_NAME "Payload Status" /* sensor 6: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
+#define IPMC_SDR_PAYLOAD_MODE_NAME "Payload Mode"     /* sensor 7 (Tier-3 only): ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at least 2 characters; Table 43-2 allows 16) */
 #define IPMC_SDR_IPMC_NAME "IPMC"                     /* management controller device locator record (SDR type 12h) ID string, 2..=16 bytes; at most 6 so the whole record fits one Get Device SDR response (IPMI v2.0 Table 43-8: 16 + N bytes) */
 
 #define IPMC_SRC_HW 0                             /* source switch value: real hardware */
@@ -163,7 +169,7 @@
 #define IPMC_TEMP_UC_C 85                         /* [i32] upper critical threshold, degrees C */
 #define IPMC_TEMP_UNR_C 100                       /* [i32] upper non-recoverable threshold, degrees C */
 #define IPMC_SIM_TEMP_C 25                        /* [i32] simulated die temperature at start-up, degrees C */
-#define IPMC_SIM_PGOOD_HIGH 1                     /* simulated PGOOD pin level at start-up: 1 = high (power good), 0 = low */
+#define IPMC_SIM_PGOOD_HIGH 1                     /* simulated PGOOD pin level at start-up: 1 = high (power good), 0 = low; the emulator also makes PGOOD follow PWR_EN when 1 */
 #define IPMC_SIM_FAULT_N_HIGH 1                   /* simulated FAULT_N pin level at start-up: 1 = high (no fault), 0 = low (asserted) */
 #define IPMC_SIM_OVERTEMP_N_HIGH 1                /* simulated OVERTEMP_N pin level at start-up: 1 = high (no fault), 0 = low (asserted) */
 #define IPMC_SIM_RESET_N_HIGH 1                   /* simulated PAYLOAD_RESET_N pin level at start-up: 1 = high (not in reset), 0 = low (asserted) */

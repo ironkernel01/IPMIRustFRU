@@ -5,7 +5,7 @@
 // from the wire and compared with the repository's own bytes.
 
 mod common;
-use common::Rig;
+use common::{Rig, SENSOR_COUNT};
 use ipmc_core::ipmb::NETFN_SE;
 use ipmc_core::queue::Bus;
 
@@ -27,8 +27,8 @@ const SENSOR_NUMBER_INDEX: usize = 7;
 const CHUNK: usize = 16;
 /// NO_NEXT_RECORD -- next record ID FFFFh after the last record (Table 35-3).
 const NO_NEXT_RECORD: u16 = 0xFFFF;
-/// The most records the walk follows: more than the 8 this IPMC has, so a chain that never
-/// reaches FFFFh fails the test instead of hanging it.
+/// The most records the walk follows: more than the 9 this IPMC has at the most, so a chain that
+/// never reaches FFFFh fails the test instead of hanging it.
 const WALK_LIMIT: usize = 16;
 
 /// One Get Device SDR round trip: the next record ID and the bytes returned.
@@ -86,7 +86,13 @@ fn a_chassis_manager_walk_reads_every_record_back() {
         id = next;
     }
 
-    assert_eq!(walked.len(), 8, "7 sensor records and the locator");
+    // 7 sensor records and the locator; 8 sensor records with the Payload Mode sensor at Tier-3.
+    let sensors = usize::from(SENSOR_COUNT);
+    assert_eq!(
+        walked.len(),
+        sensors + 1,
+        "the sensor records and the locator"
+    );
     for (index, (id, record)) in walked.iter().enumerate() {
         let index = u16::try_from(index).unwrap();
         // The record ID in the header, LS byte first, is the ID the record was reached by.
@@ -97,12 +103,12 @@ fn a_chassis_manager_walk_reads_every_record_back() {
             usize::from(record[HEADER_LENGTH]) + HEADER_LEN,
             record.len()
         );
-        if index < 7 {
+        if usize::from(index) < sensors {
             assert_eq!(record[HEADER_TYPE], TYPE_COMPACT, "record {index}");
             assert_eq!(
                 u16::from(record[SENSOR_NUMBER_INDEX]),
                 index,
-                "sensors 0..=6 in order"
+                "sensors 0.. in order"
             );
         } else {
             assert_eq!(record[HEADER_TYPE], TYPE_MC_LOCATOR, "the locator is last");

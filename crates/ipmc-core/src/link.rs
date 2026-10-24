@@ -132,6 +132,25 @@ impl BusMode {
     }
 }
 
+/// BusSpeed -- the IPMB speed of one bus (Set IPMB State speed byte, 2 bits per bus).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BusSpeed {
+    /// 00b: STANDARD-MODE, 100 kHz (Rule 4.1.1-4.3: the power-up speed of every bus).
+    Standard,
+    /// 01b: FAST-MODE, 400 kHz (Tier-3, Rule 4.1.1-4.4).
+    Fast,
+}
+
+impl BusSpeed {
+    /// name -- text for console lines.
+    pub const fn name(self) -> &'static str {
+        match self {
+            BusSpeed::Standard => "100 kHz",
+            BusSpeed::Fast => "400 kHz",
+        }
+    }
+}
+
 /// BusState -- state of one bus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BusState {
@@ -139,6 +158,9 @@ pub struct BusState {
     pub fitted: bool,
     /// Set IPMB State value.
     pub mode: BusMode,
+    /// The speed the bus is set to (Set IPMB State speed byte); the owner of the master driver
+    /// applies it between transfers.
+    pub speed: BusSpeed,
     /// Persistent local fault, `LocalStatus::None` when healthy.
     pub status: LocalStatus,
 }
@@ -149,6 +171,7 @@ impl BusState {
         BusState {
             fitted,
             mode,
+            speed: BusSpeed::Standard,
             status: LocalStatus::None,
         }
     }
@@ -212,6 +235,7 @@ impl PerBus<BusState> {
             local_control: state.mode == BusMode::LocalControl,
             status: state.status,
             enabled: state.enabled(),
+            fast: state.speed == BusSpeed::Fast,
         };
         LinkSensor {
             a: bus(&self.a),
@@ -231,16 +255,53 @@ pub fn plan_ipmb_state(
     a: Option<BusMode>,
     b: Option<BusMode>,
 ) -> Result<BusPair, LinkError> {
-    let mut next = *current;
-    for (state, request) in [&mut next.a, &mut next.b].into_iter().zip([a, b]) {
-        let Some(mode) = request else { continue };
+    let next = plan_per_bus(current, a, b, |state, mode| {
         if mode == BusMode::LocalControl && !state.fitted {
             return Err(LinkError::BusNotFitted);
         }
         state.mode = mode;
-    }
+        Ok(())
+    })?;
     if !next.a.enabled() && !next.b.enabled() {
         return Err(LinkError::IsolatesBothBuses);
+    }
+    Ok(next)
+}
+
+/// plan_ipmb_speed -- the bus states that would result from setting the speeds `a` and `b`
+/// (`Some(speed)` sets that bus, `None` leaves it) in `current`. All or nothing:
+/// Err(BusNotFitted) when FAST-MODE is asked for a bus that is not built in (Rule 4.1.1-14:
+/// unsupported). Standard on any bus is always accepted. The Set IPMB State handler calls this
+/// on the Link's view to choose its completion code; `Link::set_ipmb_speed` applies the result.
+pub fn plan_ipmb_speed(
+    current: &BusPair,
+    a: Option<BusSpeed>,
+    b: Option<BusSpeed>,
+) -> Result<BusPair, LinkError> {
+    plan_per_bus(current, a, b, |state, speed| {
+        if speed == BusSpeed::Fast && !state.fitted {
+            return Err(LinkError::BusNotFitted);
+        }
+        state.speed = speed;
+        Ok(())
+    })
+}
+
+/// plan_per_bus -- applies the requests `a` and `b` (`Some(value)` sets that bus, `None` leaves
+/// it) to a copy of `current` with `change`, bus A first: the copy, or the first error. The one
+/// loop of the Set IPMB State rules (`plan_ipmb_state`, `plan_ipmb_speed`).
+fn plan_per_bus<T>(
+    current: &BusPair,
+    a: Option<T>,
+    b: Option<T>,
+    change: impl Fn(&mut BusState, T) -> Result<(), LinkError>,
+) -> Result<BusPair, LinkError> {
+    let mut next = *current;
+    if let Some(value) = a {
+        change(&mut next.a, value)?;
+    }
+    if let Some(value) = b {
+        change(&mut next.b, value)?;
     }
     Ok(next)
 }
@@ -257,6 +318,10 @@ pub struct PendingIpmbState {
     pub a: Option<BusMode>,
     /// New mode of IPMB-B, None = no change.
     pub b: Option<BusMode>,
+    /// New speed of IPMB-A, None = no change (speed byte absent, or Tier-1/2).
+    pub speed_a: Option<BusSpeed>,
+    /// New speed of IPMB-B, None = no change.
+    pub speed_b: Option<BusSpeed>,
 }
 
 /// LinkView -- what a handler may read of the Link during one dispatch: the build configuration
@@ -517,6 +582,21 @@ impl Link {
         }
     }
 
+    /// restarted -- the Link of a restart of the IPMC's link state at `now_ms`: the same
+    /// configuration and `addr`, the power-up bus state (Rule 4.1.1-4), empty queues and caches,
+    /// and the request sequence state of this link carried over (`next_request_seq`,
+    /// `recent_request_seqs`), so no rqSeq is reused inside T9. The one rebuild both the Warm
+    /// Reset owners and the emulator's Cold Reset use.
+    pub fn restarted(&self, addr: &AddrInfo, now_ms: u32) -> Link {
+        Link::with_first_request_seq(
+            self.config,
+            addr,
+            self.next_request_seq(),
+            self.recent_request_seqs(now_ms),
+            now_ms,
+        )
+    }
+
     /// next_request_seq -- the rqSeq the next request gets, for the owner of the processor to
     /// keep across a Cold Reset.
     pub const fn next_request_seq(&self) -> u8 {
@@ -758,6 +838,7 @@ impl Link {
         // would leave the state as it was.
         if let Some(change) = ctx.pending_ipmb.take() {
             let _ = self.set_ipmb_state(change.a, change.b);
+            let _ = self.set_ipmb_speed(change.speed_a, change.speed_b);
         }
         match (dispatched, staged.pop()) {
             (Ok(()), Some(response)) => {
@@ -999,6 +1080,19 @@ impl Link {
         b: Option<BusMode>,
     ) -> Result<(), LinkError> {
         self.buses = plan_ipmb_state(&self.buses, a, b)?;
+        Ok(())
+    }
+
+    /// set_ipmb_speed -- applies the speed part of a Set IPMB State request through
+    /// `plan_ipmb_speed`; Err(BusNotFitted) leaves the state unchanged. `poll` calls it for the
+    /// change the handler left in `Context::pending_ipmb`; the owner of the master driver reads
+    /// `bus_state(bus).speed` and applies it between transfers.
+    pub fn set_ipmb_speed(
+        &mut self,
+        a: Option<BusSpeed>,
+        b: Option<BusSpeed>,
+    ) -> Result<(), LinkError> {
+        self.buses = plan_ipmb_speed(&self.buses, a, b)?;
         Ok(())
     }
 
@@ -2235,5 +2329,78 @@ mod tests {
         let mut probe = PollProbe::default();
         link.poll(&mut context, &mut probe, 0, &mut NoTrace);
         assert_eq!((probe.polls, probe.b_enabled_seen), (1, Some(true)));
+    }
+
+    #[test]
+    fn the_speed_rule_refuses_400_khz_on_a_bus_that_is_not_fitted() {
+        let single = BusPair::power_up(false, true);
+        let both = BusPair::power_up(true, true);
+        // (pair, A, B, result): Standard is always accepted, Fast needs a fitted bus.
+        let fast = Some(BusSpeed::Fast);
+        let std = Some(BusSpeed::Standard);
+        assert!(plan_ipmb_speed(&single, fast, None).is_ok());
+        assert_eq!(
+            plan_ipmb_speed(&single, None, fast),
+            Err(LinkError::BusNotFitted)
+        );
+        assert!(plan_ipmb_speed(&single, std, std).is_ok());
+        let next = plan_ipmb_speed(&both, fast, std).unwrap();
+        assert_eq!(
+            (next.a.speed, next.b.speed),
+            (BusSpeed::Fast, BusSpeed::Standard)
+        );
+        assert_eq!(plan_ipmb_speed(&both, None, None), Ok(both));
+        // All or nothing: the refused request leaves the view alone.
+        assert!(plan_ipmb_speed(&single, fast, fast).is_err());
+    }
+
+    #[test]
+    fn a_bus_powers_up_at_100_khz_and_the_speed_follows_set_ipmb_speed() {
+        let mut link = link_with(true, TxPolicy::Alternate);
+        assert_eq!(link.bus_state(Bus::A).speed, BusSpeed::Standard);
+        assert_eq!(link.bus_state(Bus::B).speed, BusSpeed::Standard);
+        assert_eq!(link.set_ipmb_speed(Some(BusSpeed::Fast), None), Ok(()));
+        assert_eq!(link.bus_state(Bus::A).speed, BusSpeed::Fast);
+        assert!(link.sensor_data().a.fast && !link.sensor_data().b.fast);
+        assert_eq!(link.view().buses.a.speed, BusSpeed::Fast);
+        // The state of a bus is independent of its speed.
+        assert!(link.bus_state(Bus::A).enabled());
+        assert_eq!(
+            link.set_ipmb_speed(None, Some(BusSpeed::Fast)),
+            Ok(()),
+            "B is fitted here"
+        );
+        let mut single = link_with(false, TxPolicy::Alternate);
+        assert_eq!(
+            single.set_ipmb_speed(None, Some(BusSpeed::Fast)),
+            Err(LinkError::BusNotFitted)
+        );
+    }
+
+    #[test]
+    fn a_restarted_link_has_the_power_up_state_and_keeps_the_request_sequence() {
+        let mut link = link_with(true, TxPolicy::Alternate);
+        link.set_ipmb_state(None, Some(BusMode::LocalControl))
+            .unwrap();
+        link.set_ipmb_speed(Some(BusSpeed::Fast), None).unwrap();
+        let addr = crate::addr::resolve(0x7F);
+        let fresh = link.restarted(&addr, 500);
+        assert_eq!(fresh.config(), link.config());
+        assert_eq!(fresh.own_address(), link.own_address());
+        assert_eq!(
+            fresh.bus_state(Bus::A).speed,
+            BusSpeed::Standard,
+            "Rule 4.1.1-4.3"
+        );
+        assert!(
+            !fresh.bus_state(Bus::B).enabled(),
+            "B isolated again (Rule 4.1.1-4)"
+        );
+        assert_eq!(fresh.counters(Bus::A), &BusCounters::default());
+        assert_eq!(fresh.next_request_seq(), link.next_request_seq());
+        assert_eq!(
+            fresh.recent_request_seqs(500),
+            link.recent_request_seqs(500)
+        );
     }
 }

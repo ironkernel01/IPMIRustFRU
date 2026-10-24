@@ -1,9 +1,11 @@
 //! sdr.rs - the Device SDR repository of this IPMC and its reservation state.
 //!
-//! Eight records, built once from the IPMC_SDR_*_NAME defines and the IPMB address:
-//! one type 02h compact sensor record for each mandatory sensor 0..6 (VITA 46.11 Table 10.2-1)
-//! and one type 12h management controller device locator record (VITA 46.11 Rule 6.2-7). Record
-//! IDs run 0..=7 in that order, so the locator record is the last one and its ID is 7.
+//! Eight records (nine at Tier-3), built once from the IPMC_SDR_*_NAME defines and the IPMB
+//! address: one type 02h compact sensor record for each mandatory sensor 0..6 (VITA 46.11 Table
+//! 10.2-1; plus sensor 7, Payload Mode, at Tier-3, `tier::payload_mode_sensor`) and one type 12h
+//! management controller device locator record (VITA 46.11 Rule 6.2-7). Record IDs run 0..=7 in
+//! that order (0..=8 at Tier-3), so the locator record is the last one and its ID is the sensor
+//! count.
 //!
 //! Layouts are from IPMI v2.0 rev 1.1 (E7 markup): Table 43-2 (type 02h), Table 43-8 (type 12h),
 //! section 43.15 (type/length byte); byte numbers below are 0-based from the first byte of the
@@ -36,20 +38,36 @@ use crate::identity::{additional_support, DEVICE_IDENTITY};
 use crate::sensor::{
     EVENT_TYPE_LIMIT, EVENT_TYPE_PREDICTIVE_FAILURE, EVENT_TYPE_SENSOR_SPECIFIC, EVENT_TYPE_STATE,
     SENSOR_FRU_HEALTH, SENSOR_FRU_STATE, SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE,
-    SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS, SENSOR_SYSTEM_IPMB_LINK,
-    SENSOR_TYPE_FRU_HEALTH, SENSOR_TYPE_FRU_STATE, SENSOR_TYPE_FRU_TEMPERATURE,
-    SENSOR_TYPE_FRU_VOLTAGE, SENSOR_TYPE_PAYLOAD_TEST_RESULTS, SENSOR_TYPE_PAYLOAD_TEST_STATUS,
+    SENSOR_PAYLOAD_MODE, SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS,
+    SENSOR_SYSTEM_IPMB_LINK, SENSOR_TYPE_FRU_HEALTH, SENSOR_TYPE_FRU_STATE,
+    SENSOR_TYPE_FRU_TEMPERATURE, SENSOR_TYPE_FRU_VOLTAGE, SENSOR_TYPE_PAYLOAD_MODE,
+    SENSOR_TYPE_PAYLOAD_TEST_RESULTS, SENSOR_TYPE_PAYLOAD_TEST_STATUS,
     SENSOR_TYPE_SYSTEM_IPMB_LINK, TEMP_FLAG_LC, TEMP_FLAG_LNC, TEMP_FLAG_UC, TEMP_FLAG_UNC,
     TEMP_FLAG_UNR,
 };
 use crate::tier;
 use ipmc_wire::Builder;
 
-/// SENSOR_COUNT -- the mandatory sensors on FRU 0, sensor numbers 0..=6 (Table 10.2-1; sensor 7,
-/// Payload Mode, is Tier-3 only).
-pub const SENSOR_COUNT: usize = 7;
-/// RECORD_COUNT -- one compact record per sensor and the locator record.
-pub const RECORD_COUNT: usize = SENSOR_COUNT + 1;
+/// SENSOR_COUNT_MAX -- the most sensors on FRU 0: sensor numbers 0..=7 (Table 10.2-1; sensor 7,
+/// Payload Mode, is Tier-3 only, `sensor_count`).
+pub const SENSOR_COUNT_MAX: usize = 8;
+/// RECORD_COUNT_MAX -- one compact record per sensor and the locator record, at the most.
+pub const RECORD_COUNT_MAX: usize = SENSOR_COUNT_MAX + 1;
+
+/// sensor_count -- the sensors a Tier-`tier` IPMC has: 7 mandatory ones, 8 with the Payload Mode
+/// sensor at Tier-3.
+pub const fn sensor_count(tier: u32) -> usize {
+    if tier::payload_mode_sensor(tier) {
+        SENSOR_COUNT_MAX
+    } else {
+        SENSOR_COUNT_MAX - 1
+    }
+}
+
+/// record_count -- the SDR records at `tier`: one per sensor and the locator.
+pub const fn record_count(tier: u32) -> usize {
+    sensor_count(tier) + 1
+}
 /// NO_NEXT_RECORD -- the "no next record" value of Get Device SDR (IPMI v2.0 section 33.12).
 pub const NO_NEXT_RECORD: u16 = 0xFFFF;
 
@@ -107,7 +125,7 @@ const DEVICE_SUPPORT_SDR_BIT: u8 = 1 << 1;
 const REVISION_SDRS_SHIFT: u32 = 7;
 
 /// SensorDef -- the fixed facts of one mandatory sensor (VITA Table 10.2-1 and the sections
-/// 10.2.1..10.2.7 reading layouts).
+/// 10.2.1..10.2.8 reading layouts).
 struct SensorDef {
     number: u8,
     sensor_type: u8,
@@ -118,6 +136,10 @@ struct SensorDef {
     assertion_mask: u16,
     /// Deassertion event mask: bit n set when the IPMC sends an event for leaving state n.
     deassertion_mask: u16,
+    /// (reading, assertion, deassertion) bits added to the masks at Tier-3 only: M5 of the FRU
+    /// State sensor (`tier::activation_control`), the 400 kHz states of the IPMB Link sensor
+    /// (`tier::fast_mode`).
+    tier3_extra: (u16, u16, u16),
     name: &'static str,
 }
 
@@ -125,32 +147,44 @@ struct SensorDef {
 /// reading mask), written to the record LS byte first.
 ///
 /// - FRU State (Table 10.2.1-1): the Current State Mask bits of the reachable states M0, M1, M4
-///   and M6, built from `fru_state::State` (0053h); M5 and M7 are never reported.
-/// - IPMB Link (Table 10.2.2-1 byte 4): the link-state values in bits 3:0 (000Fh); the 400 kHz
-///   states of bits 5:4 are not supported, the IPMB runs at 100 kHz.
+///   and M6 (0053h), plus M5 at Tier-3 (0073h), built from `fru_state::State`; M7 is never
+///   reported.
+/// - IPMB Link (Table 10.2.2-1 byte 4): the link-state values in bits 3:0 (000Fh), plus the
+///   400 kHz states of bits 5:4 at Tier-3 (003Fh).
 /// - Temperature (Table 10.2.5-1 byte 4): bits 5:0 except bit 2, lower non-recoverable, which this
 ///   sensor never sets (`sensor::TEMP_FLAG_LNR`; 003Bh).
 /// - Health, Voltage, Payload Test Results and Status (Tables 10.2.3-1, 10.2.4-1, 10.2.6-1,
 ///   10.2.7-1): bits 1:0, states 01b and 10b (0003h).
-const MASK_FRU_STATE: u16 = State::all_mask() as u16;
+const MASK_FRU_STATE: u16 = State::all_mask_at(1) as u16;
+const MASK_FRU_STATE_M5: u16 = State::M5.mask() as u16;
 const MASK_IPMB_LINK: u16 = 0x000F;
+const MASK_IPMB_LINK_FAST: u16 = 0x0030;
+/// - Payload Mode (Table 10.2.8-1 byte 4, 5): bit n = operational mode n, modes 0..=14: the modes
+///   this payload supports, `IPMC_PAYLOAD_MODES` (ipmi_defs.h; the same value Get Payload Mode
+///   Capabilities answers).
+const MASK_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES as u16;
 const MASK_TEMPERATURE: u16 =
     (TEMP_FLAG_LNC | TEMP_FLAG_LC | TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 const MASK_TWO_STATES: u16 = 0x0003;
 
 /// Event masks, the offsets the IPMC sends events for at Tier-2/3 (written 0000h at Tier-1):
-/// - FRU State: every reachable state entry (Rule 4.1.5.2-1), `MASK_FRU_STATE`.
-/// - IPMB Link: offsets 0..=3 (Rule 9.3-7); offsets 4 and 5 are FAST-MODE (Tier-3, later).
+/// - FRU State: every reachable state entry (Rule 4.1.5.2-1), the reading mask.
+/// - IPMB Link: offsets 0..=3 (Rule 9.3-7); offsets 4 and 5 (400 kHz, Table 10.2.2-2, asserted
+///   and deasserted) at Tier-3.
+/// - Payload Mode: one event per mode entered, offsets 0..=14 (Table 10.2.8-2), the supported
+///   modes (`IPMC_PAYLOAD_MODES`).
 /// - Health, Voltage: the new state offset is asserted (Tables 10.2.3-2, 10.2.4-2).
 /// - Temperature: offsets 3, 4, 5 asserted on crossing and deasserted when it clears (Rules
 ///   4.1.7-4, -6, -8).
 /// - Payload Test Results and Status: the state never changes on this module.
 const EVENTS_NONE: u16 = 0;
 const EVENTS_IPMB_LINK: u16 = 0x000F;
+const EVENTS_IPMB_LINK_FAST: u16 = 0x0030;
+const EVENTS_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES as u16;
 const EVENTS_TEMPERATURE: u16 = (TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 
 /// SENSORS -- sensors 0..=6 in number order; the record ID of a sensor equals its number.
-const SENSORS: [SensorDef; SENSOR_COUNT] = [
+const SENSORS: [SensorDef; SENSOR_COUNT_MAX] = [
     SensorDef {
         number: SENSOR_FRU_STATE,
         sensor_type: SENSOR_TYPE_FRU_STATE,
@@ -158,6 +192,7 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_FRU_STATE,
         assertion_mask: MASK_FRU_STATE,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (MASK_FRU_STATE_M5, MASK_FRU_STATE_M5, 0),
         name: ipmc_defs::IPMC_SDR_FRU_STATE_NAME,
     },
     SensorDef {
@@ -167,6 +202,11 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_IPMB_LINK,
         assertion_mask: EVENTS_IPMB_LINK,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (
+            MASK_IPMB_LINK_FAST,
+            EVENTS_IPMB_LINK_FAST,
+            EVENTS_IPMB_LINK_FAST,
+        ),
         name: ipmc_defs::IPMC_SDR_IPMB_LINK_NAME,
     },
     SensorDef {
@@ -176,6 +216,7 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_TWO_STATES,
         assertion_mask: MASK_TWO_STATES,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (0, 0, 0),
         name: ipmc_defs::IPMC_SDR_FRU_HEALTH_NAME,
     },
     SensorDef {
@@ -185,6 +226,7 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_TWO_STATES,
         assertion_mask: MASK_TWO_STATES,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (0, 0, 0),
         name: ipmc_defs::IPMC_SDR_FRU_VOLTAGE_NAME,
     },
     SensorDef {
@@ -194,6 +236,7 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_TEMPERATURE,
         assertion_mask: EVENTS_TEMPERATURE,
         deassertion_mask: EVENTS_TEMPERATURE,
+        tier3_extra: (0, 0, 0),
         name: ipmc_defs::IPMC_SDR_FRU_TEMP_NAME,
     },
     SensorDef {
@@ -203,6 +246,7 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_TWO_STATES,
         assertion_mask: EVENTS_NONE,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (0, 0, 0),
         name: ipmc_defs::IPMC_SDR_PAYLOAD_RESULTS_NAME,
     },
     SensorDef {
@@ -212,7 +256,18 @@ const SENSORS: [SensorDef; SENSOR_COUNT] = [
         reading_mask: MASK_TWO_STATES,
         assertion_mask: EVENTS_NONE,
         deassertion_mask: EVENTS_NONE,
+        tier3_extra: (0, 0, 0),
         name: ipmc_defs::IPMC_SDR_PAYLOAD_STATUS_NAME,
+    },
+    SensorDef {
+        number: SENSOR_PAYLOAD_MODE,
+        sensor_type: SENSOR_TYPE_PAYLOAD_MODE,
+        event_type: EVENT_TYPE_SENSOR_SPECIFIC,
+        reading_mask: MASK_PAYLOAD_MODE,
+        assertion_mask: EVENTS_PAYLOAD_MODE,
+        deassertion_mask: EVENTS_NONE,
+        tier3_extra: (0, 0, 0),
+        name: ipmc_defs::IPMC_SDR_PAYLOAD_MODE_NAME,
     },
 ];
 
@@ -266,21 +321,44 @@ const fn sensor_capabilities(tier: u32) -> u8 {
     SENSOR_CAPS_AUTO_REARM | control
 }
 
+/// tier3_bits -- the (reading, assertion, deassertion) bits `def` adds at `tier`: the M5 bit of
+/// the FRU State sensor where `tier::activation_control`, the 400 kHz states of the IPMB Link
+/// sensor where `tier::fast_mode`; zero otherwise.
+const fn tier3_bits(tier: u32, def: &SensorDef) -> (u16, u16, u16) {
+    let on = match def.number {
+        SENSOR_FRU_STATE => tier::activation_control(tier),
+        SENSOR_SYSTEM_IPMB_LINK => tier::fast_mode(tier),
+        _ => false,
+    };
+    if on {
+        def.tier3_extra
+    } else {
+        (0, 0, 0)
+    }
+}
+
+/// reading_mask_of -- the reading mask of `def` at `tier` (Table 43-2 bytes 19..20).
+const fn reading_mask_of(tier: u32, def: &SensorDef) -> u16 {
+    def.reading_mask | tier3_bits(tier, def).0
+}
+
 /// event_masks_of -- (assertion, deassertion) masks of `def` at `tier`: 0000h unless the IPMC
 /// generates events.
 const fn event_masks_of(tier: u32, def: &SensorDef) -> (u16, u16) {
     if tier::event_generator(tier) {
-        (def.assertion_mask, def.deassertion_mask)
+        let extra = tier3_bits(tier, def);
+        (def.assertion_mask | extra.1, def.deassertion_mask | extra.2)
     } else {
         (0, 0)
     }
 }
 
-/// event_masks -- (assertion, deassertion) event masks of sensor `number` (0..SENSOR_COUNT) at
-/// `tier`, the values the SDR record carries and the power-up event enables start from
-/// (`event_enable`); None for a number outside the table.
-pub(crate) const fn event_masks(tier: u32, number: usize) -> Option<(u16, u16)> {
-    if number < SENSORS.len() {
+/// event_masks -- (assertion, deassertion) event masks of sensor `number` (0..sensor_count(tier))
+/// at `tier`, the values the SDR record carries and the power-up event enables start from
+/// (`event_enable`), and the most the Tier-3 Set Sensor Event Enable handler (extension) lets
+/// a Chassis Manager enable; None for a number the Tier does not have.
+pub const fn event_masks(tier: u32, number: usize) -> Option<(u16, u16)> {
+    if number < sensor_count(tier) {
         Some(event_masks_of(tier, &SENSORS[number]))
     } else {
         None
@@ -304,7 +382,7 @@ const fn compact_record(id: u16, owner_address: u8, tier: u32, def: &SensorDef) 
     r.push(def.event_type); // 13
     r.push_all(&assertion.to_le_bytes()); // 14..=15: assertion event mask
     r.push_all(&deassertion.to_le_bytes()); // 16..=17: deassertion event mask
-    r.push_all(&def.reading_mask.to_le_bytes()); // 18..=19: reading mask
+    r.push_all(&reading_mask_of(tier, def).to_le_bytes()); // 18..=19: reading mask
     r.push(UNITS1_RESERVED); // 20: sensor units 1
     r.push(0); // 21: base unit, none
     r.push(0); // 22: modifier unit, none
@@ -340,12 +418,13 @@ const fn locator_record(id: u16, owner_address: u8, tier: u32) -> Record {
     finish_record(r)
 }
 
-/// build_records -- the eight records at `tier`: sensors 0..=6 as record IDs 0..=6, the locator
-/// as 7.
-const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT] {
-    let mut records = [EMPTY_RECORD; RECORD_COUNT];
+/// build_records -- the records at `tier`: the sensors as record IDs 0..sensor_count, the locator
+/// after them; the unused slots stay empty.
+const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT_MAX] {
+    let mut records = [EMPTY_RECORD; RECORD_COUNT_MAX];
+    let count = sensor_count(tier);
     let mut i = 0;
-    while i < SENSOR_COUNT {
+    while i < count {
         assert!(
             SENSORS[i].number as usize == i,
             "the sensor table is in number order"
@@ -353,13 +432,14 @@ const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT] {
         records[i] = compact_record(i as u16, owner_address, tier, &SENSORS[i]);
         i += 1;
     }
-    records[SENSOR_COUNT] = locator_record(SENSOR_COUNT as u16, owner_address, tier);
+    records[count] = locator_record(count as u16, owner_address, tier);
     records
 }
 
 // Builds every record once at compile time: an ID string outside 2..=16 bytes, a record past
 // RECORD_MAX or an out-of-order sensor table fails the build here.
-const _: [Record; RECORD_COUNT] = build_records(0x82, ipmc_defs::IPMC_TIER);
+const _: [Record; RECORD_COUNT_MAX] = build_records(0x82, ipmc_defs::IPMC_TIER);
+const _: [Record; RECORD_COUNT_MAX] = build_records(0x82, 3);
 // ipmi_defs.h IPMC_SDR_IPMC_NAME: the locator record fits one Get Device SDR response, the
 // response data less the 2-byte next record ID (Table 35-3), so a "whole record" read works.
 const _: () = assert!(
@@ -409,7 +489,10 @@ pub struct RecordInfo<'a> {
 /// SdrRepository -- the records and the reservation counter.
 #[derive(Clone, Copy, Debug)]
 pub struct SdrRepository {
-    records: [Record; RECORD_COUNT],
+    records: [Record; RECORD_COUNT_MAX],
+    /// The sensors of the Tier this repository describes (`sensor_count`); the records after the
+    /// locator are unused.
+    sensors: usize,
     /// The latest reservation ID handed out; 0 before the first Reserve Device SDR Repository.
     reservation: u16,
 }
@@ -425,18 +508,19 @@ impl SdrRepository {
     pub const fn for_tier(owner_address: u8, tier: u32) -> SdrRepository {
         SdrRepository {
             records: build_records(owner_address, tier),
+            sensors: sensor_count(tier),
             reservation: 0,
         }
     }
 
     /// record_count -- the number of records (Get Device SDR Info "SDR count").
     pub const fn record_count(&self) -> usize {
-        RECORD_COUNT
+        self.sensors + 1
     }
 
     /// sensor_count -- the number of sensors (Get Device SDR Info "sensor count").
     pub const fn sensor_count(&self) -> usize {
-        SENSOR_COUNT
+        self.sensors
     }
 
     /// set_record_byte -- test hook: changes byte `index` of record `id` (no effect when either is
@@ -454,7 +538,7 @@ impl SdrRepository {
 
     /// locator_record_id -- the record ID of the management controller device locator record.
     pub const fn locator_record_id(&self) -> u16 {
-        SENSOR_COUNT as u16
+        self.sensors as u16
     }
 
     /// resolve -- the stored record ID a requested ID names: 0000h is the first record and FFFFh
@@ -463,7 +547,7 @@ impl SdrRepository {
         match requested {
             0 => Some(0),
             NO_NEXT_RECORD => Some(self.locator_record_id()),
-            id if usize::from(id) < RECORD_COUNT => Some(id),
+            id if usize::from(id) < self.record_count() => Some(id),
             _ => None,
         }
     }
@@ -471,6 +555,7 @@ impl SdrRepository {
     /// record -- the bytes of record `id`.
     pub fn record(&self, id: u16) -> Option<&[u8]> {
         self.records
+            .get(..self.record_count())?
             .get(usize::from(id))
             .map(|record| record.as_bytes())
     }
@@ -503,7 +588,7 @@ impl SdrRepository {
     /// next_id -- the record ID after `id`, NO_NEXT_RECORD (FFFFh) after the last.
     pub fn next_id(&self, id: u16) -> u16 {
         match id.checked_add(1) {
-            Some(next) if usize::from(next) < RECORD_COUNT => next,
+            Some(next) if usize::from(next) < self.record_count() => next,
             _ => NO_NEXT_RECORD,
         }
     }
@@ -543,7 +628,7 @@ mod tests {
         0x00, 0xC9, b'F', b'R', b'U', b' ', b'S', b't', b'a', b't', b'e',
     ];
 
-    /// Locator, from Table 43-8 for "IPMC" (4 characters): ID 0007h, 51h, 12h, length 11 + 4 =
+    /// Locator, from Table 43-8 for "IPMC" (4 characters): ID 0007h (8 at Tier-3), 51h, 12h, length 11 + 4 =
     /// 0Fh; slave address 82h; channel 00h; global init 01h; capabilities 0Bh (sensor, device
     /// SDRs, FRU inventory); reserved 00h x 3; entity A0h, 60h; OEM 00h; C4h; "IPMC".
     const LOCATOR: [u8; 20] = [
@@ -564,19 +649,23 @@ mod tests {
         let (init, caps, assertion) = [
             (0x01, 0x43, 0x0000u16),
             (0x03, 0x42, 0x0053),
-            (0x03, 0x40, 0x0053),
+            (0x03, 0x40, 0x0073),
         ][tier];
         let (global_init, locator_caps) = [(0x01, 0x0B), (0x00, 0x2B), (0x00, 0x2F)][tier];
+        let reading = [0x0053u16, 0x0053, 0x0073][tier];
         let mut sensor0 = SENSOR0;
         sensor0[10] = init;
         sensor0[11] = caps;
         sensor0[14..16].copy_from_slice(&assertion.to_le_bytes());
+        sensor0[18..20].copy_from_slice(&reading.to_le_bytes());
+        let r = repo();
         let mut locator = LOCATOR;
+        // The locator is the record after the sensors: ID 7 below Tier-3, 8 with sensor 7.
+        locator[..2].copy_from_slice(&r.locator_record_id().to_le_bytes());
         locator[7] = global_init;
         locator[8] = locator_caps;
-        let r = repo();
         assert_eq!(r.record(0).unwrap(), &sensor0);
-        assert_eq!(r.record(7).unwrap(), &locator);
+        assert_eq!(r.record(r.locator_record_id()).unwrap(), &locator);
     }
 
     #[test]
@@ -594,8 +683,8 @@ mod tests {
         ];
         // Sensor initialization and capabilities (bytes 10, 11) per Tier, and the event masks
         // (bytes 14..18: assertion, deassertion) of sensors 0..=6 at Tier-2/3 (Tier-1: all zero).
-        let tier = ipmc_defs::IPMC_TIER as usize - 1;
-        let (init, caps) = [(0x01, 0x43), (0x03, 0x42), (0x03, 0x40)][tier];
+        let tier = (ipmc_defs::IPMC_TIER as usize - 1).min(1);
+        let (init, caps) = [(0x01, 0x43), (0x03, 0x42)][tier];
         let masks: [[u8; 4]; 7] = [
             [0x53, 0x00, 0x00, 0x00],
             [0x0F, 0x00, 0x00, 0x00],
@@ -605,7 +694,9 @@ mod tests {
             [0; 4],
             [0; 4],
         ];
-        let r = repo();
+        // Tier-3 differs from this table in the masks of sensors 0 and 1 (and has sensor 7):
+        // `tier_3_adds_m5_the_400_khz_states_and_the_payload_mode_sensor` pins those.
+        let r = SdrRepository::for_tier(OWNER, tier as u32 + 1);
         for (id, (number, ty, ev, mask, name)) in expect.into_iter().enumerate() {
             let b = r.record(id as u16).unwrap();
             assert_eq!(u16::from_le_bytes([b[0], b[1]]), id as u16, "record ID");
@@ -659,6 +750,9 @@ mod tests {
         for (tier, init, caps, global_init, locator_caps) in tiers {
             let r = SdrRepository::for_tier(OWNER, tier);
             for (id, (assertion, deassertion)) in masks.into_iter().enumerate() {
+                if tier == 3 && id < 2 {
+                    continue; // M5 and the 400 kHz states: the Tier-3 test below
+                }
                 let b = r.record(id as u16).unwrap();
                 assert_eq!((b[10], b[11]), (init, caps), "tier {tier} sensor {id}");
                 let (want_a, want_d) = if tier == 1 {
@@ -678,7 +772,7 @@ mod tests {
                 );
                 assert_eq!(usize::from(b[4]), b.len() - 5, "length unchanged by tier");
             }
-            let l = r.record(7).unwrap();
+            let l = r.record(r.locator_record_id()).unwrap();
             assert_eq!(
                 (l[7], l[8]),
                 (global_init, locator_caps),
@@ -695,30 +789,41 @@ mod tests {
     #[test]
     fn record_ids_are_consecutive_from_zero_and_chain_ends_at_ffff() {
         let r = repo();
-        assert_eq!((r.record_count(), r.sensor_count()), (8, 7));
-        let mut id = r.resolve(0).unwrap();
-        let mut seen = vec![id];
-        loop {
-            let next = r.next_id(id);
-            if next == NO_NEXT_RECORD {
-                break;
+        // (tier, records, sensors): Tier-3 adds sensor 7 and the locator moves behind it.
+        for (tier, records, sensors) in [(1u32, 8u16, 7usize), (2, 8, 7), (3, 9, 8)] {
+            let r = SdrRepository::for_tier(OWNER, tier);
+            assert_eq!(
+                (r.record_count(), r.sensor_count()),
+                (usize::from(records), sensors)
+            );
+            let mut id = r.resolve(0).unwrap();
+            let mut seen = vec![id];
+            loop {
+                let next = r.next_id(id);
+                if next == NO_NEXT_RECORD {
+                    break;
+                }
+                seen.push(next);
+                id = next;
             }
-            seen.push(next);
-            id = next;
+            assert_eq!(seen, (0..records).collect::<Vec<u16>>(), "tier {tier}");
+            assert_eq!(r.locator_record_id(), records - 1);
+            assert_eq!(r.resolve(0xFFFF), Some(records - 1));
+            assert_eq!(r.resolve(records), None);
+            assert!(r.record(records).is_none());
+            assert!(r.describe(records).is_none());
+            assert_eq!(r.describe(records - 1).unwrap().record_type, 0x12);
         }
-        assert_eq!(seen, (0..8).collect::<Vec<u16>>());
-        assert_eq!(r.locator_record_id(), 7);
+        assert_eq!(r.record_count(), record_count(ipmc_defs::IPMC_TIER));
     }
 
     #[test]
     fn resolve_maps_first_and_last_and_rejects_unknown_ids() {
         let r = repo();
         assert_eq!(r.resolve(0x0000), Some(0));
-        assert_eq!(r.resolve(0xFFFF), Some(7));
+        assert_eq!(r.resolve(0xFFFF), Some(r.locator_record_id()));
         assert_eq!(r.resolve(5), Some(5));
-        assert_eq!(r.resolve(8), None);
         assert_eq!(r.resolve(0x0100), None);
-        assert!(r.record(8).is_none());
     }
 
     #[test]
@@ -750,17 +855,56 @@ mod tests {
             })
         );
         assert_eq!(info.name, b"FRU Temperature");
-        let locator = r.describe(7).unwrap();
+        let locator = r.describe(r.locator_record_id()).unwrap();
         assert_eq!((locator.record_type, locator.length), (0x12, 20));
         assert_eq!((locator.sensor, locator.name), (None, &b"IPMC"[..]));
-        assert!(r.describe(8).is_none());
     }
 
     #[test]
     fn owner_address_follows_the_ipmb_address() {
         let r = SdrRepository::new(0x86);
-        for id in 0..RECORD_COUNT as u16 {
+        for id in 0..r.record_count() as u16 {
             assert_eq!(r.record(id).unwrap()[5], 0x86);
         }
+    }
+
+    #[test]
+    fn tier_3_adds_m5_the_400_khz_states_and_the_payload_mode_sensor() {
+        let r = SdrRepository::for_tier(OWNER, 3);
+        let mask = |id: u16, at: usize| {
+            let b = r.record(id).unwrap();
+            u16::from_le_bytes([b[at], b[at + 1]])
+        };
+        // FRU State (Table 10.2.1-1): M0, M1, M4, M5, M6 read and asserted: 0073h.
+        assert_eq!((mask(0, 14), mask(0, 16), mask(0, 18)), (0x0073, 0, 0x0073));
+        // IPMB Link (Table 10.2.2-2): offsets 0..=5 asserted, 4 and 5 also deasserted; the
+        // reading mask holds states 0..=5 (003Fh).
+        assert_eq!(
+            (mask(1, 14), mask(1, 16), mask(1, 18)),
+            (0x003F, 0x0030, 0x003F)
+        );
+        // Payload Mode, hand-written from Table 43-2 for "Payload Mode" (12 characters): ID 0007h,
+        // 51h, 02h, length 27 + 12 = 27h; owner 82h; LUN 00h; sensor 07h; entity A0h, 60h; init
+        // 03h; capabilities 40h; type F7h; event/reading type 6Fh; assertion IPMC_PAYLOAD_MODES,
+        // deassertion 0000h, reading mask IPMC_PAYLOAD_MODES; units 1 C0h, 00h, 00h; share count
+        // 01h; 00h; hysteresis 00h x 2; reserved 00h x 3; OEM 00h; type/length CCh; "Payload
+        // Mode".
+        let [modes_ls, modes_ms] = (ipmc_defs::IPMC_PAYLOAD_MODES as u16).to_le_bytes();
+        let mut want = vec![
+            0x07, 0x00, 0x51, 0x02, 0x27, 0x82, 0x00, 0x07, 0xA0, 0x60, 0x03, 0x40, 0xF7, 0x6F,
+            modes_ls, modes_ms, 0x00, 0x00, modes_ls, modes_ms, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0xCC,
+        ];
+        want.extend_from_slice(b"Payload Mode");
+        assert_eq!(r.record(7).unwrap(), want.as_slice());
+        // The locator is the last record, ID 8, and its bytes are those of Tier-3 (2Fh).
+        let locator = r.record(8).unwrap();
+        assert_eq!(&locator[..2], &[0x08, 0x00]);
+        assert_eq!((locator[7], locator[8]), (0x00, 0x2F));
+        // Below Tier-3 sensor 7 does not exist and the masks lack the Tier-3 bits.
+        let two = SdrRepository::for_tier(OWNER, 2);
+        assert_eq!(&two.record(0).unwrap()[18..20], &[0x53, 0x00]);
+        assert_eq!(&two.record(1).unwrap()[14..20], &[0x0F, 0, 0, 0, 0x0F, 0]);
+        assert_eq!(two.record(7).unwrap()[3], 0x12, "record 7 is the locator");
     }
 }

@@ -11,3 +11,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tier23)"] }
 [dependencies]
 ipmc-core = { path = "../ipmc-core" }
 ipmc-defs = { path = "../ipmc-defs" }
+ipmc-wire = { path = "../ipmc-wire" }

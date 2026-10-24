@@ -136,7 +136,8 @@ fn sdr_prints_one_consistent_line_per_record() {
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 8);
+    // 7 sensor records and the locator; the Payload Mode sensor adds one at Tier-3.
+    assert_eq!(lines.len(), if ipmc_defs::IPMC_TIER == 3 { 9 } else { 8 });
     for (i, line) in lines.iter().enumerate() {
         let (id, hex) = line.split_once(' ').expect("id and bytes");
         assert_eq!(id, format!("{i:04X}"));

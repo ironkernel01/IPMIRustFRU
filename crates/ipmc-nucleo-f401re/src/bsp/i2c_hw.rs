@@ -25,7 +25,9 @@ use cortex_m::interrupt::free;
 use cortex_m::peripheral::NVIC;
 use cortex_m::peripheral::{DCB, DWT};
 use heapless::spsc::{Consumer, Producer, Queue};
+use ipmc_core::link::BusSpeed;
 use ipmc_core::queue::Bus;
+use ipmc_defs::i2c_timing::{hw_ccr, hw_trise};
 use ipmc_sensors::drivers::stm32f401::ports::{Pins, Pull, Speed};
 use stm32f4::stm32f401::{i2c1::RegisterBlock, interrupt, Interrupt, I2C1, I2C3, RCC};
 
@@ -118,13 +120,16 @@ const READ_FILL: u8 = 0xFF;
 /// most 42 MHz.
 const FREQ_MIN_MHZ: u32 = 2;
 const FREQ_MAX_MHZ: u32 = 42;
-/// CCR field: 12 bits, at least 4 in standard mode (RM0368 18.6.8).
+/// FREQ must be at least 4 MHz for fast mode (RM0368 18.6.2, CR2.FREQ).
+const FREQ_FAST_MIN_MHZ: u32 = 4;
+/// CCR field: 12 bits, at least 4 in standard mode and 1 in fast mode (RM0368 18.6.8); bit 15 is
+/// F/S (1 = fast mode) and bit 14 DUTY (0: tLOW = 2 x tHIGH).
 const CCR_MIN: u32 = 4;
+const CCR_FAST_MIN: u32 = 1;
 const CCR_MAX: u32 = 0xFFF;
+const CCR_FAST_MODE: u16 = 1 << 15;
 /// TRISE field: 6 bits (RM0368 18.6.9).
 const TRISE_MAX: u32 = 0x3F;
-/// Standard mode ceiling on SCL rise time is 1000 ns, so TRISE = FREQ(MHz) + 1 (RM0368 18.6.9).
-const TRISE_OVER_FREQ: u32 = 1;
 /// Hz in one MHz.
 const HZ_PER_MHZ: u32 = 1_000_000;
 /// Usable 7-bit slave addresses: 0x00..0x07 and 0x78..0x7F are reserved by the I2C-bus
@@ -211,26 +216,47 @@ impl I2cPeripheral {
 
 // ---- timing ----
 
-/// Timing -- the register values computed from PCLK1 and the own address.
+/// Timing -- the register values computed from PCLK1 and the own address, for both speeds; `speed`
+/// picks the pair `arm` writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Timing {
     /// CR2.FREQ, PCLK1 in MHz.
     freq_mhz: u32,
-    /// CCR.CCR, standard mode.
-    ccr: u32,
-    /// TRISE.TRISE.
-    trise: u32,
+    /// CCR.CCR in standard mode (100 kHz).
+    ccr_standard: u32,
+    /// CCR.CCR in fast mode (400 kHz).
+    ccr_fast: u32,
+    /// The speed the registers are armed for.
+    speed: BusSpeed,
     /// OAR1, 7-bit addressing: ADD[7:1] = the 7-bit address, bit 14 kept at 1.
     oar1: u16,
 }
 
+impl Timing {
+    /// ccr_register -- the CCR register value of the armed speed: the divisor, plus F/S for fast
+    /// mode (DUTY stays 0).
+    fn ccr_register(&self) -> u16 {
+        match self.speed {
+            BusSpeed::Standard => self.ccr_standard as u16,
+            BusSpeed::Fast => self.ccr_fast as u16 | CCR_FAST_MODE,
+        }
+    }
+
+    /// trise_register -- the TRISE value of the armed speed (RM0368 18.6.9).
+    fn trise_register(&self) -> u32 {
+        hw_trise(self.freq_mhz, self.speed == BusSpeed::Fast)
+    }
+}
+
 /// compute -- the register values for `pclk1_hz` and the slave address `own_addr8` (IPMI 8-bit
-/// form: the 7-bit address in bits 7:1, bit 0 clear). Every value is range checked; hardware
-/// free.
-/// 1. FREQ = PCLK1 in MHz (RM0368 18.6.2).
-/// 2. CCR = ceil(PCLK1 / (2 x IPMB_I2C_HZ)) in standard mode (RM0368 18.6.8): SCL low and high
-///    last CCR x TPCLK1 each; rounding up keeps SCL at or below IPMB_I2C_HZ.
-/// 3. TRISE = FREQ + 1 for the 1000 ns standard-mode rise time (RM0368 18.6.9).
+/// form: the 7-bit address in bits 7:1, bit 0 clear), armed at 100 kHz. Every value is range
+/// checked; hardware free; the divisor arithmetic is ipmc-defs `i2c_timing` (host-tested).
+/// 1. FREQ = PCLK1 in MHz (RM0368 18.6.2); fast mode needs at least 4 MHz.
+/// 2. CCR standard = ceil(PCLK1 / (2 x IPMB_I2C_HZ)) (RM0368 18.6.8): SCL low and high last CCR x
+///    TPCLK1 each; rounding up keeps SCL at or below IPMB_I2C_HZ. CCR fast (F/S = 1, DUTY = 0)
+///    = ceil(PCLK1 / (3 x IPMB_I2C_FAST_HZ)): SCL low 2 CCR, high CCR.
+/// 3. TRISE = FREQ + 1 for the 1000 ns standard-mode rise time, FREQ x 300 ns + 1 in fast mode
+///    (RM0368 18.6.9; `Timing::trise_register`).
 /// 4. OAR1 = (own_addr8 >> 1) << 1 | bit 14 (RM0368 18.6.3); the conversion from the 8-bit form
 ///    to the 7-bit address happens here and only here.
 fn compute(pclk1_hz: u32, own_addr8: u8) -> Result<Timing, I2cError> {
@@ -245,24 +271,30 @@ fn compute(pclk1_hz: u32, own_addr8: u8) -> Result<Timing, I2cError> {
         return Err(I2cError::PclkNotWholeMhz);
     }
     let freq_mhz = pclk1_hz / HZ_PER_MHZ;
-    if !(FREQ_MIN_MHZ..=FREQ_MAX_MHZ).contains(&freq_mhz) {
+    // Fast mode needs PCLK1 of 4 MHz or more (RM0368 18.6.2); the floor binds only where fast
+    // mode can be armed, so the Tier-1/2 range is the standard-mode one.
+    let freq_floor = if ipmc_core::tier::FAST_MODE {
+        FREQ_FAST_MIN_MHZ
+    } else {
+        FREQ_MIN_MHZ
+    };
+    if !(FREQ_MIN_MHZ..=FREQ_MAX_MHZ).contains(&freq_mhz) || freq_mhz < freq_floor {
         return Err(I2cError::PclkRange);
     }
-    let scl_hz2 = ipmc_defs::IPMB_I2C_HZ
-        .checked_mul(2)
-        .ok_or(I2cError::ClockDivisor)?;
-    let ccr = pclk1_hz.div_ceil(scl_hz2);
-    if !(CCR_MIN..=CCR_MAX).contains(&ccr) {
+    let ccr_standard = hw_ccr(pclk1_hz, false).ok_or(I2cError::ClockDivisor)?;
+    let ccr_fast = hw_ccr(pclk1_hz, true).ok_or(I2cError::ClockDivisor)?;
+    if !(CCR_MIN..=CCR_MAX).contains(&ccr_standard) || !(CCR_FAST_MIN..=CCR_MAX).contains(&ccr_fast)
+    {
         return Err(I2cError::ClockDivisor);
     }
-    let trise = freq_mhz + TRISE_OVER_FREQ;
-    if trise > TRISE_MAX {
+    if hw_trise(freq_mhz, false) > TRISE_MAX {
         return Err(I2cError::TriseRange);
     }
     Ok(Timing {
         freq_mhz,
-        ccr,
-        trise,
+        ccr_standard,
+        ccr_fast,
+        speed: BusSpeed::Standard,
         oar1: (u16::from(addr7) << 1) | OAR1_KEEP,
     })
 }
@@ -550,8 +582,8 @@ fn pins_to_af(bus: Bus, pins: &BusPins) {
 /// arm -- puts the pins on the peripheral and (re)configures it as the IPMB slave, then unmasks
 /// its interrupts. The one implementation `init` and `resume` share.
 /// 1. SCL and SDA to the alternate function, open-drain, no pull (VITA Rule 9.2.3-2).
-/// 2. PE = 0, then CR2.FREQ, CCR (standard mode), TRISE and OAR1: CCR and TRISE are written only
-///    while PE = 0 (RM0368 18.6.8, 18.6.9).
+/// 2. PE = 0, then CR2.FREQ, CCR (standard or fast mode as `Timing::speed` says), TRISE and OAR1:
+///    CCR and TRISE are written only while PE = 0 (RM0368 18.6.8, 18.6.9).
 /// 3. CR1: ENGC = 1 (general call, Broadcast Get Device ID) and PE = 1; then ACK = 1, after PE
 ///    (RM0368 18.6.1).
 /// 4. CR2: ITEVTEN, ITERREN and ITBUFEN (RM0368 18.6.2).
@@ -565,11 +597,13 @@ fn arm(bus: Bus, slave: &mut Slave, pins: &BusPins) {
     regs.cr1().write(|w| w.pe().disabled());
     // SAFETY: FREQ holds the PCLK1 MHz value range-checked by `compute`; the other bits are 0.
     regs.cr2().write(|w| unsafe { w.bits(t.freq_mhz as u16) });
-    // SAFETY: CCR holds the 12-bit divisor range-checked by `compute`; F/S = 0 (standard mode)
+    // SAFETY: CCR holds the 12-bit divisor range-checked by `compute`; F/S follows the armed speed
     // and DUTY = 0.
-    regs.ccr().write(|w| unsafe { w.bits(t.ccr as u16) });
-    // SAFETY: TRISE holds the 6-bit value range-checked by `compute`.
-    regs.trise().write(|w| unsafe { w.bits(t.trise as u16) });
+    regs.ccr().write(|w| unsafe { w.bits(t.ccr_register()) });
+    // SAFETY: TRISE holds the 6-bit value range-checked by `compute` (the fast value is the
+    // smaller of the two).
+    regs.trise()
+        .write(|w| unsafe { w.bits(t.trise_register() as u16) });
     // SAFETY: OAR1 holds ADD[7:1] and bit 14 as built by `compute`; ADDMODE = 0 (7-bit).
     regs.oar1().write(|w| unsafe { w.bits(t.oar1) });
     regs.cr1().write(|w| w.engc().enabled().pe().enabled());
@@ -836,6 +870,20 @@ fn unmask_slave(bus: Bus) {
 /// resume -- gives `bus` back to the slave: `arm`, exactly as `init` configures it.
 pub fn resume(bus: Bus, pins: &BusPins) {
     static_slot::with_mut(slot(bus), |slave| arm(bus, slave, pins));
+}
+
+/// set_speed -- arms the peripheral of `bus` for `speed` (CCR and TRISE, F/S for 400 kHz; the
+/// slave address and the receive state are as `arm` leaves them). Only while the slave is idle:
+/// `suspend` takes the bus (PE = 0) in one critical section and refuses a busy slave, then the
+/// timing changes and `resume` arms the slave again. False (nothing changed) when the slave is
+/// busy or not running; the master asks again between transfers (`IpmbMaster::set_speed`).
+pub fn set_speed(bus: Bus, pins: &BusPins, speed: BusSpeed) -> bool {
+    if !suspend(bus) {
+        return false;
+    }
+    static_slot::with_mut(slot(bus), |slave| slave.timing.speed = speed);
+    resume(bus, pins);
+    true
 }
 
 // ---- BUSY-flag erratum ----

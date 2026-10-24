@@ -9,6 +9,7 @@
 //!   routing.rs        picks the driver per ipmi_defs.h source switch
 //!   board_sensors.rs  the board table and the snapshot builder
 //!   pin_claims.rs     GPIO pin ownership table and register-field masks (hardware-free)
+//!   reset_pulse.rs    the timing of one payload reset pulse (hardware-free)
 //!   monitor.rs, trace.rs  the sampling step and its console lines
 //! The pure modules have no hardware and are host-tested; `drivers::stm32f401` implements the
 //! traits on the part.
@@ -24,5 +25,6 @@ pub mod eval;
 pub mod hal;
 pub mod monitor;
 pub mod pin_claims;
+pub mod reset_pulse;
 pub mod routing;
 pub mod trace;

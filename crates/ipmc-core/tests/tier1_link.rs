@@ -71,12 +71,14 @@ fn a_refused_set_ipmb_state_leaves_the_buses_alone() {
     assert_eq!(answer.cc, CC_BAD_FIELD);
     assert!(rig.link.bus_state(Bus::A).enabled());
     assert!(!rig.link.bus_state(Bus::B).enabled());
-    // An unsupported parameter (400 kHz): no change either.
+    // An unsupported parameter: no change either. 400 kHz (speed 01b) below Tier-3, the
+    // reserved speed 10b at Tier-3, which supports FAST-MODE.
+    let unsupported_speed = by_tier([0x01, 0x01, 0x02]);
     let answer = rig.send(
         Bus::A,
         NETFN_GROUP_EXT,
         SET_IPMB_STATE,
-        &[0x03, 0x01, 0x01, 0x01],
+        &[0x03, 0x01, 0x01, unsupported_speed],
     );
     assert_eq!(answer.cc, CC_BAD_FIELD);
     assert!(!rig.link.bus_state(Bus::B).enabled());

@@ -13,6 +13,9 @@ include!(concat!(env!("OUT_DIR"), "/ipmi_defs.rs"));
 // Compile-time type and {0, 1} assertions for every define (types.rs).
 mod types;
 
+/// i2c_timing -- the IPMB timing arithmetic: cycles, SCL phases and peripheral divisors.
+pub mod i2c_timing;
+
 /// TIER23_BUILT -- true when build.rs found the Tier-2/3 extension folder (or IPMC_TIER23=1
 /// demanded it) and compiled its header into these constants; false in the Tier-1 build.
 /// The bridge crate `ipmc-ext` selects the extension from the same detection.
@@ -97,6 +100,33 @@ const _: () = assert!(
 const _: () = assert!(
     IPMB_BITBANG_HALF_NS as u128 * 2 * IPMB_I2C_HZ as u128 >= 1_000_000_000,
     "IPMB_BITBANG_HALF_NS is shorter than half a bit at IPMB_I2C_HZ"
+);
+// FAST-MODE (VITA 46.11 Rule 4.1.1-4.4): 400 kHz, the I2C fast-mode maximum. The hardware master
+// derives its CCR from it with F/S = 1 and DUTY = 0 (RM0368 18.6.8).
+const _: () = assert!(
+    IPMB_I2C_FAST_HZ == 400_000,
+    "IPMB_I2C_FAST_HZ must be 400000 (FAST-MODE)"
+);
+// The bit-bang master holds SCL low and high for at least the I2C fast-mode minimums, tLOW 1.3 us
+// and tHIGH 0.6 us (VITA 46.11 Table 9.2.2-1 M0_P1b); the loop overhead and the rise time come
+// on top of the two times, so the clock stays below 400 kHz.
+const _: () = assert!(
+    IPMB_BITBANG_FAST_LOW_NS >= 1_300 && IPMB_BITBANG_FAST_LOW_NS <= 100_000,
+    "IPMB_BITBANG_FAST_LOW_NS must be 1300..=100000 (I2C fast-mode tLOW)"
+);
+const _: () = assert!(
+    IPMB_BITBANG_FAST_HIGH_NS >= 600 && IPMB_BITBANG_FAST_HIGH_NS <= 100_000,
+    "IPMB_BITBANG_FAST_HIGH_NS must be 600..=100000 (I2C fast-mode tHIGH)"
+);
+const _: () = assert!(
+    IPMC_PAYLOAD_RESET_PULSE_MS >= 1 && IPMC_PAYLOAD_RESET_PULSE_MS <= 1_000,
+    "IPMC_PAYLOAD_RESET_PULSE_MS must be 1..=1000"
+);
+// Payload modes (VITA 46.11 Table 10.2.8-1): modes 0..=14 are bits 0..=14; the normal mode 0
+// is always supported and bit 15 is reserved.
+const _: () = assert!(
+    IPMC_PAYLOAD_MODES & 1 == 1 && IPMC_PAYLOAD_MODES >> 15 == 0,
+    "IPMC_PAYLOAD_MODES must have bit 0 set and bits 15 and up clear"
 );
 // 8 entries is the least that rides out a few interleaved retries; 64 is 64 x 32-byte frames
 // of RAM (about 3 KB with keys), the most this part should spend on the cache.
@@ -424,6 +454,7 @@ sdr_name_guard!(IPMC_SDR_FRU_VOLTAGE_NAME);
 sdr_name_guard!(IPMC_SDR_FRU_TEMP_NAME);
 sdr_name_guard!(IPMC_SDR_PAYLOAD_RESULTS_NAME);
 sdr_name_guard!(IPMC_SDR_PAYLOAD_STATUS_NAME);
+sdr_name_guard!(IPMC_SDR_PAYLOAD_MODE_NAME);
 sdr_name_guard!(IPMC_SDR_IPMC_NAME);
 
 // ---- sensors and board I/O ----
