@@ -47,6 +47,9 @@ pub enum Outcome {
 }
 
 /// Result of checking one command against the input tokens.
+// One short-lived value per command tried, on the stack: with no allocator there is nothing to box
+// `Args` into, and its size is MENU_TOKENS_MAX tokens.
+#[allow(clippy::large_enum_variant)]
 enum Match<'a> {
     /// All of: token count in range, keywords equal, required parameters present.
     Yes(Args<'a>),
@@ -64,6 +67,15 @@ fn match_command<'a, C>(command: &Command<C>, words: &[&'a str]) -> Match<'a> {
     let mut args = Args::empty();
     let mut position = 0;
     while let Some(token) = token_at(command.syntax, position) {
+        if token.kind == Kind::Rest {
+            // Every remaining word is a parameter; the syntax ends here (validate_syntax).
+            for &word in words.get(position..).unwrap_or(&[]) {
+                if !args.push(word) {
+                    return Match::No; // unreachable: a line has at most MENU_TOKENS_MAX words
+                }
+            }
+            break;
+        }
         if let Some(&word) = words.get(position) {
             match token.kind {
                 Kind::Keyword => {
@@ -71,7 +83,7 @@ fn match_command<'a, C>(command: &Command<C>, words: &[&'a str]) -> Match<'a> {
                         return Match::No;
                     }
                 }
-                Kind::Required | Kind::Optional => {
+                Kind::Required | Kind::Optional | Kind::Rest => {
                     if !args.push(word) {
                         return Match::No; // unreachable: the shape is at most MENU_TOKENS_MAX
                     }
@@ -80,7 +92,12 @@ fn match_command<'a, C>(command: &Command<C>, words: &[&'a str]) -> Match<'a> {
         }
         position += 1;
     }
-    if (shape.min_tokens..=shape.max_tokens).contains(&words.len()) {
+    let most = if shape.rest {
+        usize::MAX
+    } else {
+        shape.max_tokens
+    };
+    if (shape.min_tokens..=most).contains(&words.len()) {
         Match::Yes(args)
     } else {
         Match::WrongArguments
@@ -594,10 +611,11 @@ mod tests {
             },
             LineCase {
                 name: "too many words in the line is rejected",
-                line: "a b c d e f g h i",
+                // MENU_TOKENS_MAX (40) + 1 words
+                line: "a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a",
                 outcome: Outcome::Rejected(MenuError::TooManyTokens),
                 log: &[],
-                text: Text::Exact("Error: too many words (max 8)\n"),
+                text: Text::Exact("Error: too many words (max 40)\n"),
             },
             LineCase {
                 name: "unknown command prints one error line and the hint",
@@ -712,7 +730,7 @@ mod tests {
         let (outcome, ctx, text) = feed(&mut m, &line);
         assert_eq!(outcome, Outcome::Rejected(MenuError::LineTooLong));
         assert!(ctx.log.is_empty());
-        assert_eq!(text, "Error: line too long (max 80 characters)\n");
+        assert_eq!(text, "Error: line too long (max 128 characters)\n");
     }
 
     #[test]
@@ -919,7 +937,13 @@ mod tests {
     fn group_command_syntax_leaves_room_for_the_group_word() {
         let words = |n: usize| -> &'static str {
             let text: Vec<String> = (0..n)
-                .map(|i| format!("W{}", (b'A' + i as u8) as char))
+                .map(|i| {
+                    format!(
+                        "{}{}",
+                        (b'A' + (i / 26) as u8) as char,
+                        (b'A' + (i % 26) as u8) as char
+                    )
+                })
                 .collect();
             Box::leak(text.join(" ").into_boxed_str())
         };
@@ -983,6 +1007,44 @@ mod tests {
     fn invalid_definition_never_matches() {
         let bad = cmd("A [", on);
         assert!(matches!(match_command(&bad, &["a", "x"]), Match::No));
+    }
+
+    #[test]
+    fn rest_token_takes_zero_one_and_many_words() {
+        let c = cmd("RUN [A] {WORDS...}", show);
+        let args = |words: &[&str]| match match_command(&c, words) {
+            Match::Yes(args) => Some(
+                (0..args.len())
+                    .map(|i| args.get(i).unwrap().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        assert_eq!(args(&["run", "a"]), Some(vec!["a".to_string()]));
+        assert_eq!(
+            args(&["run", "a", "b"]),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        let many = ["run", "a", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        assert_eq!(args(&many).map(|v| v.len()), Some(many.len() - 1));
+        assert!(matches!(match_command(&c, &["run"]), Match::WrongArguments));
+        assert!(matches!(match_command(&c, &["go", "a"]), Match::No));
+    }
+
+    #[test]
+    fn rest_token_not_last_fails_table_validation() {
+        let none: [Command<Ctx>; 0] = [];
+        let bad: &'static [Command<Ctx>] = Box::leak(Box::new([cmd("RUN {W...} [A]", on)]));
+        assert_eq!(
+            Menu::validate_tables(bad, &[]),
+            Err(TableError::RestNotLast)
+        );
+        assert_eq!(
+            Menu::validate_tables(&none, &[group("G", bad)]),
+            Err(TableError::RestNotLast)
+        );
+        let good: &'static [Command<Ctx>] = Box::leak(Box::new([cmd("RUN [A] {W...}", on)]));
+        assert_eq!(Menu::validate_tables(&none, &[group("G", good)]), Ok(()));
     }
 
     #[test]

@@ -9,10 +9,12 @@
 //   SENSORS : SHOW, SDR, TRACE {OFF|EVENTS|ALL}     POWER : ON, OFF, CLEAR, STATUS
 //   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, RESTORE
 //   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
+//   DEBUG: STATUS, LOG {ON|OFF}, DUMP {CSV|TRACE}, CLEAR, TRACE {IPMI|I2C} {ON|OFF},
+//          EVENTS {ON|OFF}, IPMI [NETFN] [CMD] {DATA...}, INJECT [BUS] {BYTES...}, CACHE {CLEAR}
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
 // IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; FRU SHOW, FRU DUMP, FRU STORE, FRU
-// RESTORE and SENSORS SDR live in data_cmds.rs.
+// RESTORE and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs.
 
 use core::fmt;
 
@@ -29,6 +31,7 @@ use crate::bsp::led::{self, Shown};
 use crate::bsp::reset_cause::ResetCause;
 use crate::bsp::{systick, uart};
 use crate::data_cmds;
+use crate::debug_cmds;
 use crate::ipmb_link::{self, IpmbLink};
 use crate::sensing::{self, Sensing};
 
@@ -237,7 +240,55 @@ static FRU_COMMANDS: [ConsoleCommand; 4] = [
     },
 ];
 
-static GROUPS: [Group<Context>; 7] = [
+static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
+    Command {
+        syntax: "STATUS",
+        help: "Debug switches, capture log use, event receiver, duplicate cache",
+        handler: debug_cmds::cmd_debug_status,
+    },
+    Command {
+        syntax: "LOG {STATE}",
+        help: "Capture log ON or OFF; no argument shows its state",
+        handler: debug_cmds::cmd_debug_log,
+    },
+    Command {
+        syntax: "DUMP {FORMAT}",
+        help: "Print the capture log: CSV (default) or TRACE",
+        handler: debug_cmds::cmd_debug_dump,
+    },
+    Command {
+        syntax: "CLEAR",
+        help: "Empty the capture log",
+        handler: debug_cmds::cmd_debug_clear,
+    },
+    Command {
+        syntax: "TRACE {WHAT} {STATE}",
+        help: "Console trace: IPMI (request, link and event lines) or I2C (one line per frame), ON or OFF",
+        handler: debug_cmds::cmd_debug_trace,
+    },
+    Command {
+        syntax: "EVENTS {STATE}",
+        help: "Event messages ON (receiver 20h) or OFF (receiver FFh)",
+        handler: debug_cmds::cmd_debug_events,
+    },
+    Command {
+        syntax: "IPMI [NETFN] [CMD] {DATA...}",
+        help: "Run one IPMI request locally, as from 20h; nothing goes on the bus",
+        handler: debug_cmds::cmd_debug_ipmi,
+    },
+    Command {
+        syntax: "INJECT [BUS] {BYTES...}",
+        help: "Hand a whole IPMB frame to the link as if received on bus A or B",
+        handler: debug_cmds::cmd_debug_inject,
+    },
+    Command {
+        syntax: "CACHE {ACTION}",
+        help: "Duplicate cache: no argument shows the entries, CLEAR empties it",
+        handler: debug_cmds::cmd_debug_cache,
+    },
+];
+
+static GROUPS: [Group<Context>; 8] = [
     Group {
         name: "SYS",
         description: "System status, reset and version",
@@ -272,6 +323,11 @@ static GROUPS: [Group<Context>; 7] = [
         name: "FRU",
         description: "FRU image, its decoded areas and the flash log",
         commands: &FRU_COMMANDS,
+    },
+    Group {
+        name: "DEBUG",
+        description: "Test switches, the IPMB capture log and local IPMI requests",
+        commands: &DEBUG_COMMANDS,
     },
 ];
 
@@ -332,6 +388,11 @@ impl Console {
             menu: Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP_COMMANDS, &GROUPS),
             editor: LineEditor::new(),
         }
+    }
+
+    /// start_events -- applies the events-at-boot setting (ipmi_defs.h IPMC_EVENTS_AT_BOOT).
+    pub fn start_events(&mut self) {
+        debug_cmds::events_off_at_boot(self.ctx.ipmb);
     }
 
     /// start_sensors -- applies the power-at-boot setting (ipmi_defs.h IPMC_POWER_AT_BOOT).

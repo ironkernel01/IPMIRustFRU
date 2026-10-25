@@ -287,11 +287,16 @@ mod tests {
 
     #[test]
     fn tokenizer_rejects_too_many_tokens() {
-        let eight = "a b c d e f g h";
-        assert_eq!(Tokens::split(eight).unwrap().as_slice().len(), 8);
-        let nine = "a b c d e f g h i";
-        assert_eq!(nine.split(' ').count(), MENU_TOKENS_MAX + 1);
-        assert!(matches!(Tokens::split(nine), Err(MenuError::TooManyTokens)));
+        let at_limit = "a ".repeat(MENU_TOKENS_MAX);
+        assert_eq!(
+            Tokens::split(&at_limit).unwrap().as_slice().len(),
+            MENU_TOKENS_MAX
+        );
+        let over = "a ".repeat(MENU_TOKENS_MAX + 1);
+        assert!(matches!(
+            Tokens::split(&over),
+            Err(MenuError::TooManyTokens)
+        ));
     }
 
     #[test]

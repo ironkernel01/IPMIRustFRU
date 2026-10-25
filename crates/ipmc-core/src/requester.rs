@@ -145,6 +145,8 @@ enum Phase {
 /// TxReport -- what `tx_done` tells the link for a trace line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TxReport {
+    /// Responder address of the request, 8-bit form.
+    pub dest_addr8: u8,
     pub seq: u8,
     pub netfn: u8,
     pub cmd: u8,
@@ -155,6 +157,8 @@ pub(crate) struct TxReport {
 /// Ended -- what the link traces once when a request ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Ended {
+    /// Responder address of the request, 8-bit form.
+    pub dest_addr8: u8,
     pub seq: u8,
     pub netfn: u8,
     pub cmd: u8,
@@ -429,6 +433,7 @@ impl Requester {
             Phase::Waiting(now_ms)
         };
         Some(TxReport {
+            dest_addr8: self.dest_addr8,
             seq: self.seq,
             netfn: self.netfn,
             cmd: self.cmd,
@@ -499,6 +504,7 @@ impl Requester {
         self.untraced = false;
         let done = self.completion.as_ref()?;
         Some(Ended {
+            dest_addr8: self.dest_addr8,
             seq: done.seq,
             netfn: done.netfn,
             cmd: done.cmd,

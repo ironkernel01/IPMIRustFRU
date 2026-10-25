@@ -19,7 +19,7 @@ const fn pin(port: PortId, pin: u8) -> PinId {
 
 /// ADC -- ADC1 assignment. External input 0 is A0 (PA0, channel 0, rail "12V payload"), 1 is A1
 /// (PA1, channel 1, "5V"), 2 is A2 (PA4, channel 4, "3V3 payload"), 3 is A3 (PB0, channel 8,
-/// "1V0 core").
+/// "+3.3V_AUX").
 pub const ADC: AdcMap = AdcMap {
     vrefint_channel: 17,
     temperature_channel: 18,

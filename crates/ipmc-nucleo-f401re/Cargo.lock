@@ -160,6 +160,7 @@ dependencies = [
  "ipmc-fru",
  "ipmc-menu",
  "ipmc-sensors",
+ "ipmc-wire",
  "panic-halt",
  "stm32f4",
 ]

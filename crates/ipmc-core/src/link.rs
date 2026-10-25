@@ -26,13 +26,14 @@
 //! Nothing here blocks or waits.
 
 use crate::addr::AddrInfo;
+use crate::capture::{CommandName, CoreNames, NetFnName, TxFault};
 use crate::cmd::app::CMD_GET_DEVICE_ID;
 use crate::commands::{Command, COMMANDS};
 use crate::dispatch::{dispatch_with, Context};
-use crate::dupcache::{DupCache, Key};
+use crate::dupcache::{CacheEntry, DupCache, Key};
 use crate::ext::Extension;
 use crate::ipmb::{self, IpmbError, IPMB_MAX_LEN, NETFN_APP};
-use crate::queue::{Bus, EgressQueue, Fifo};
+use crate::queue::{Bus, EgressFrame, EgressQueue, Fifo};
 use crate::requester::Requester;
 use crate::sensor::{LinkBus, LinkSensor, LocalStatus};
 use crate::trace::Trace;
@@ -51,10 +52,90 @@ pub const TX_RETRIES: u8 = ipmc_defs::IPMB_TX_RETRIES as u8;
 /// STOP is late (`Link::late_responses`).
 pub const RESPONSE_DEADLINE_MS: u32 = 227;
 
+/// CM_ADDR8 -- the Chassis Manager's 8-bit IPMB address (ipmi_defs.h IPMB_CM_ADDR8, guarded
+/// 2..=0xFE with bit 0 clear in ipmc-defs, so the cast is exact).
+pub const CM_ADDR8: u8 = ipmc_defs::IPMB_CM_ADDR8 as u8;
+
 /// General-call address byte that precedes a broadcast frame (IPMI 1.5 section 17.9).
 const GENERAL_CALL: u8 = 0x00;
 /// TRACE_ON -- IPMC_IPMI_TRACE from ipmi_defs.h; false removes every trace call.
 const TRACE_ON: bool = ipmc_defs::IPMC_IPMI_TRACE == 1;
+
+/// TxOutcome -- what a driver reports for one transmission: sent, or failed with the cause the
+/// master saw. A plain `bool` converts (true sent, false an unspecified failure).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxOutcome {
+    /// The frame was transmitted.
+    Sent,
+    /// The transmission failed.
+    Failed(TxFault),
+}
+
+impl From<bool> for TxOutcome {
+    fn from(sent: bool) -> Self {
+        if sent {
+            TxOutcome::Sent
+        } else {
+            TxOutcome::Failed(TxFault::Unspecified)
+        }
+    }
+}
+
+/// LocalError -- why `local_request` gave no response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalError {
+    /// The request does not fit one IPMB frame.
+    TooLong,
+    /// The dispatcher produced no response.
+    Dispatch,
+}
+
+impl LocalError {
+    /// name -- log name of the error.
+    pub const fn name(self) -> &'static str {
+        match self {
+            LocalError::TooLong => "TooLong",
+            LocalError::Dispatch => "Dispatch",
+        }
+    }
+}
+
+/// RequestWho -- `to 20h (Chassis Manager)`: the destination of a request this IPMC sent.
+struct RequestWho(u8);
+
+impl core::fmt::Display for RequestWho {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "to {:02X}h", self.0)?;
+        if self.0 == CM_ADDR8 {
+            f.write_str(" (Chassis Manager)")?;
+        }
+        Ok(())
+    }
+}
+
+/// RequestWhat -- `S/E Platform Event seq 0Bh`: the command of a request this IPMC sent, named
+/// from the tables the link reaches without the extension.
+struct RequestWhat {
+    netfn: u8,
+    cmd: u8,
+    seq: u8,
+}
+
+impl core::fmt::Display for RequestWhat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{} {} seq {:02X}h",
+            NetFnName(self.netfn),
+            CommandName {
+                names: &CoreNames(&crate::ext::NoExtension),
+                netfn: self.netfn,
+                cmd: self.cmd
+            },
+            self.seq
+        )
+    }
+}
 
 /// TxPolicy -- how the bus of a response is chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -751,14 +832,19 @@ impl Link {
         if !TRACE_ON {
             return;
         }
+        let who = RequestWho(end.dest_addr8);
+        let what = RequestWhat {
+            netfn: end.netfn,
+            cmd: end.cmd,
+            seq: end.seq,
+        };
         match end.completion_code {
             Some(code) => trace.line(format_args!(
-                "request seq {:02X}h FN({:02X}h) CMD({:02X}h) -> CC {code:02X}h",
-                end.seq, end.netfn, end.cmd
+                "request {who}: {what} answered CC {code:02X}h"
             )),
             None => trace.line(format_args!(
-                "request seq {:02X}h FN({:02X}h) CMD({:02X}h) no response after {} transmissions",
-                end.seq, end.netfn, end.cmd, end.transmissions
+                "request {who}: {what} got no response after {} transmissions",
+                end.transmissions
             )),
         }
     }
@@ -818,17 +904,52 @@ impl Link {
             );
             return;
         }
-        // The handler runs against a private queue so the response can be cached before it
-        // is queued for the bus; the real queue had a free slot when `poll_with` began.
-        let mut staged = EgressQueue::new();
-        ctx.link = self.view();
-        let dispatched = dispatch_with(
+        let dispatched = self.run_dispatch(
             table,
             ext,
             ctx,
             &request,
             pending.bus,
             pending.arrival_ms,
+            trace,
+        );
+        match dispatched {
+            Some(response) => {
+                if let Some(key) = key {
+                    self.cache
+                        .insert(key, response.as_bytes(), pending.arrival_ms);
+                }
+                self.enqueue(response.as_bytes(), pending.bus, pending.arrival_ms);
+            }
+            None => self.dispatch_errors = self.dispatch_errors.saturating_add(1),
+        }
+    }
+
+    /// run_dispatch -- the one dispatch of a request: refreshes `ctx.link`, runs the handler
+    /// against a private queue (so the caller can cache the response before it is queued for the
+    /// bus; the real queue had a free slot when `poll_with` began), then applies a Set IPMB State
+    /// the handler left in `ctx.pending_ipmb`. Some(response), or None when the dispatcher
+    /// produced none. `answer` (bus requests) and `local_request` (console requests) both call it.
+    #[allow(clippy::too_many_arguments)] // the dispatch inputs, as dispatch_with takes them
+    fn run_dispatch(
+        &mut self,
+        table: &[Command],
+        ext: &mut dyn Extension,
+        ctx: &mut Context,
+        request: &ipmb::Frame,
+        bus: Bus,
+        arrival_ms: u32,
+        trace: &mut dyn Trace,
+    ) -> Option<EgressFrame> {
+        let mut staged = EgressQueue::new();
+        ctx.link = self.view();
+        let dispatched = dispatch_with(
+            table,
+            ext,
+            ctx,
+            request,
+            bus,
+            arrival_ms,
             &mut staged,
             trace,
         );
@@ -841,15 +962,84 @@ impl Link {
             let _ = self.set_ipmb_speed(change.speed_a, change.speed_b);
         }
         match (dispatched, staged.pop()) {
-            (Ok(()), Some(response)) => {
-                if let Some(key) = key {
-                    self.cache
-                        .insert(key, response.as_bytes(), pending.arrival_ms);
-                }
-                self.enqueue(response.as_bytes(), pending.bus, pending.arrival_ms);
-            }
-            _ => self.dispatch_errors = self.dispatch_errors.saturating_add(1),
+            (Ok(()), Some(response)) => Some(response),
+            _ => None,
         }
+    }
+
+    /// local_request -- `local_request_with` over the COMMANDS table.
+    #[allow(clippy::too_many_arguments)] // the request fields and the dispatch sinks
+    pub fn local_request(
+        &mut self,
+        ctx: &mut Context,
+        ext: &mut dyn Extension,
+        netfn: u8,
+        cmd: u8,
+        data: &[u8],
+        now_ms: u32,
+        trace: &mut dyn Trace,
+    ) -> Result<(usize, [u8; IPMB_MAX_LEN]), LocalError> {
+        self.local_request_with(COMMANDS, ctx, ext, netfn, cmd, data, now_ms, trace)
+    }
+
+    /// local_request_with -- runs one request from the console as if the Chassis Manager had sent
+    /// it: a frame from `CM_ADDR8` (LUN 0, sequence 0) to this controller goes through
+    /// `run_dispatch` with arrival bus A, so a Set IPMB State changes the bus state as a bus
+    /// request does. No duplicate-cache lookup or insert and nothing on the egress queue; the
+    /// response frame comes back as (length, bytes). Err(TooLong): the request does not fit a
+    /// frame; Err(Dispatch): no response.
+    #[allow(clippy::too_many_arguments)] // the request fields and the dispatch sinks
+    pub fn local_request_with(
+        &mut self,
+        table: &[Command],
+        ctx: &mut Context,
+        ext: &mut dyn Extension,
+        netfn: u8,
+        cmd: u8,
+        data: &[u8],
+        now_ms: u32,
+        trace: &mut dyn Trace,
+    ) -> Result<(usize, [u8; IPMB_MAX_LEN]), LocalError> {
+        let header = ipmb::Header {
+            dest: self.own_addr,
+            netfn,
+            dest_lun: 0,
+            src: CM_ADDR8,
+            seq: 0,
+            src_lun: 0,
+            cmd,
+        };
+        let mut bytes = [0u8; IPMB_MAX_LEN];
+        let len =
+            ipmb::encode_request(&header, data, &mut bytes).map_err(|_| LocalError::TooLong)?;
+        let request =
+            ipmb::parse(bytes.get(..len).unwrap_or(&[])).map_err(|_| LocalError::TooLong)?;
+        let response = self
+            .run_dispatch(table, ext, ctx, &request, Bus::A, now_ms, trace)
+            .ok_or(LocalError::Dispatch)?;
+        let mut out = [0u8; IPMB_MAX_LEN];
+        let frame = response.as_bytes();
+        out.get_mut(..frame.len())
+            .ok_or(LocalError::Dispatch)?
+            .copy_from_slice(frame);
+        Ok((frame.len(), out))
+    }
+
+    /// clear_duplicate_cache -- empties the duplicate cache, so a repeat of any request runs its
+    /// handler again (bench reruns of identical requests).
+    pub fn clear_duplicate_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    /// duplicate_cache_entries -- the duplicate cache's held responses at `now_ms`, for the
+    /// console.
+    pub fn duplicate_cache_entries(&self, now_ms: u32) -> impl Iterator<Item = CacheEntry> + '_ {
+        self.cache.entries(now_ms)
+    }
+
+    /// duplicate_cache_len -- responses held in the duplicate cache.
+    pub fn duplicate_cache_len(&self) -> usize {
+        self.cache.len()
     }
 
     /// enqueue -- puts a response frame on the egress queue with the request's arrival bus and
@@ -958,7 +1148,14 @@ impl Link {
     /// on_request_tx_result -- books the outcome of a request transmission on `bus`: the bus
     /// counters and the requester (success starts the T3 wait; a failure is retransmitted on the
     /// other bus after T6, Rule 4.1.1-7, when it is enabled, else at the next timeout).
-    fn on_request_tx_result(&mut self, bus: Bus, ok: bool, now_ms: u32, trace: &mut dyn Trace) {
+    fn on_request_tx_result(
+        &mut self,
+        bus: Bus,
+        outcome: TxOutcome,
+        now_ms: u32,
+        trace: &mut dyn Trace,
+    ) {
+        let ok = outcome == TxOutcome::Sent;
         let counters = self.counters.get_mut(bus);
         counters.tx_requests = counters.tx_requests.saturating_add(1);
         if ok {
@@ -975,26 +1172,34 @@ impl Link {
         if !TRACE_ON {
             return;
         }
-        let (name, seq, netfn, cmd) = (bus.name(), sent.seq, sent.netfn, sent.cmd);
+        let name = bus.name();
+        let who = RequestWho(sent.dest_addr8);
+        let what = RequestWhat {
+            netfn: sent.netfn,
+            cmd: sent.cmd,
+            seq: sent.seq,
+        };
         let n = sent.transmissions;
-        match (ok, n) {
-            (true, 1) => trace.line(format_args!(
-                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) sent"
-            )),
-            (true, _) => trace.line(format_args!(
-                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) retry {} of {}",
+        match (outcome, n) {
+            (TxOutcome::Sent, 1) => {
+                trace.line(format_args!("IPMB-{name} request {who}: {what} sent"));
+            }
+            (TxOutcome::Sent, _) => trace.line(format_args!(
+                "IPMB-{name} request {who}: {what} retry {} of {}",
                 n - 1,
                 crate::requester::RETRIES
             )),
-            (false, _) => trace.line(format_args!(
-                "IPMB-{name} request seq {seq:02X}h FN({netfn:02X}h) CMD({cmd:02X}h) tx failed (transmission {n} of {})",
+            (TxOutcome::Failed(fault), _) => trace.line(format_args!(
+                "IPMB-{name} request {who}: {what} not delivered, {} (transmission {n} of {})",
+                fault.meaning(sent.dest_addr8),
                 crate::requester::MAX_TRANSMISSIONS
             )),
         }
     }
 
     /// on_tx_result -- the driver reports the outcome of the frame `next_tx` handed out on `bus`,
-    /// at `now_ms` (the end of the transmission).
+    /// at `now_ms` (the end of the transmission). `outcome` is a `TxOutcome`, or a `bool` (true
+    /// sent, false an unspecified failure).
     /// A request frame handed out by `next_tx` is booked by `on_request_tx_result`. Ok: the frame
     /// leaves the queue, and counts as a late response when `now_ms` is more than
     /// RESPONSE_DEADLINE_MS after the request arrived. Failure: the other bus is tried (Rule
@@ -1005,15 +1210,16 @@ impl Link {
     pub fn on_tx_result(
         &mut self,
         bus: Bus,
-        ok: bool,
+        outcome: impl Into<TxOutcome>,
         now_ms: u32,
         trace: &mut dyn Trace,
     ) -> Result<(), LinkError> {
+        let outcome = outcome.into();
         if let Some(sent_on) = self.requester.sending_bus() {
             if sent_on != bus {
                 return Err(LinkError::TxBusMismatch);
             }
-            self.on_request_tx_result(bus, ok, now_ms, trace);
+            self.on_request_tx_result(bus, outcome, now_ms, trace);
             return Ok(());
         }
         let head = self.egress.peek().ok_or(LinkError::NoTxInFlight)?;
@@ -1025,9 +1231,10 @@ impl Link {
         }
         let resends = head.resends();
         let arrival_ms = head.arrival_ms;
-        let seq = ipmb::parse(head.as_bytes()).map_or(0, |f| f.header.seq);
+        let (dest, seq) =
+            ipmb::parse(head.as_bytes()).map_or((0, 0), |f| (f.header.dest, f.header.seq));
         let counters = self.counters.get_mut(bus);
-        if ok {
+        let TxOutcome::Failed(fault) = outcome else {
             counters.tx_ok = counters.tx_ok.saturating_add(1);
             counters.tx_fail_streak = 0;
             if now_ms.wrapping_sub(arrival_ms) > RESPONSE_DEADLINE_MS {
@@ -1035,7 +1242,7 @@ impl Link {
             }
             self.egress.pop();
             return Ok(());
-        }
+        };
         counters.tx_fail = counters.tx_fail.saturating_add(1);
         counters.tx_fail_streak = counters.tx_fail_streak.saturating_add(1);
         let other = bus.other();
@@ -1048,8 +1255,9 @@ impl Link {
             self.last_tx_bus = other;
             if TRACE_ON {
                 trace.line(format_args!(
-                    "IPMB-{} tx failed seq {seq:02X}h, resend {} of {TX_RETRIES} on IPMB-{}",
+                    "IPMB-{} response to {dest:02X}h seq {seq:02X}h not delivered, {}; resend {} of {TX_RETRIES} on IPMB-{}",
                     bus.name(),
+                    fault.meaning(dest),
                     resends + 1,
                     other.name()
                 ));
@@ -1060,8 +1268,9 @@ impl Link {
             counters.tx_dropped = counters.tx_dropped.saturating_add(1);
             if TRACE_ON {
                 trace.line(format_args!(
-                    "IPMB-{} tx failed seq {seq:02X}h, dropped after {resends} resends",
-                    bus.name()
+                    "IPMB-{} response to {dest:02X}h seq {seq:02X}h not delivered, {}; dropped after {resends} resends",
+                    bus.name(),
+                    fault.meaning(dest)
                 ));
             }
         }
@@ -1613,7 +1822,7 @@ mod tests {
         assert_eq!(trace.lines.len(), usize::from(TX_RETRIES) + 1);
         assert_eq!(
             trace.lines[0],
-            "IPMB-A tx failed seq 01h, resend 1 of 3 on IPMB-B"
+            "IPMB-A response to 20h seq 01h not delivered, the transmission failed; resend 1 of 3 on IPMB-B"
         );
         assert!(
             trace.lines[3].contains("dropped after 3 resends"),
@@ -2100,9 +2309,150 @@ mod tests {
         assert_eq!(
             trace.lines,
             [
-                "IPMB-A request seq 00h FN(04h) CMD(02h) sent",
-                "request seq 00h FN(04h) CMD(02h) -> CC 00h"
+                "IPMB-A request to 20h (Chassis Manager): S/E Platform Event seq 00h sent",
+                "request to 20h (Chassis Manager): S/E Platform Event seq 00h answered CC 00h"
             ]
+        );
+    }
+
+    #[test]
+    fn a_failed_request_transmission_names_destination_command_and_cause() {
+        let mut link = requesting_link(false);
+        let mut trace = RecordingTrace::default();
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let (bus, _) = next_frame(&mut link).unwrap();
+        link.on_tx_result(bus, TxOutcome::Failed(TxFault::AddressNack), 1, &mut trace)
+            .unwrap();
+        assert_eq!(
+            trace.lines,
+            ["IPMB-A request to 20h (Chassis Manager): S/E Platform Event seq 00h not delivered, \
+              address 20h not acknowledged: no device answers at 20h (transmission 1 of 11)"]
+        );
+        assert_eq!(link.counters(Bus::A).tx_fail, 1);
+    }
+
+    #[test]
+    fn a_request_without_a_response_ends_with_the_destination_and_the_count() {
+        let mut link = requesting_link(false);
+        let mut trace = RecordingTrace::default();
+        link.requester.submit(&platform_event(), 0).unwrap();
+        let mut now = 0;
+        for _ in 0..crate::requester::MAX_TRANSMISSIONS {
+            let (bus, _) = next_frame(&mut link).unwrap();
+            link.on_tx_result(bus, true, now, &mut trace).unwrap();
+            now += crate::requester::TIMEOUT_MS;
+            link.poll(&mut ctx(), &mut NoExtension, now, &mut trace);
+        }
+        assert_eq!(
+            trace.lines.last().map(String::as_str),
+            Some(
+                "request to 20h (Chassis Manager): S/E Platform Event seq 00h got no response \
+                 after 11 transmissions"
+            )
+        );
+    }
+
+    /// local_get_device_id -- Get Device ID through `local_request` on `link`.
+    fn local_get_device_id(link: &mut Link) -> (usize, [u8; IPMB_MAX_LEN]) {
+        link.local_request(
+            &mut ctx(),
+            &mut NoExtension,
+            NETFN_APP,
+            CMD_GET_DEVICE_ID,
+            &[],
+            0,
+            &mut NoTrace,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn local_request_returns_the_bytes_a_bus_request_would_queue() {
+        let mut bus = link_with(false, TxPolicy::Alternate);
+        let frame = request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, 0, &[]);
+        assert_eq!(bus.on_frame(Bus::A, &frame, 0), Ok(()));
+        assert_eq!(poll_real(&mut bus, 0), 1);
+        let queued = drain(&mut bus);
+        let mut local = link_with(false, TxPolicy::Alternate);
+        let (len, bytes) = local_get_device_id(&mut local);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(&bytes[..len], queued[0].1.as_slice());
+        // No queue, no cache entry, no counter moved by the local request.
+        assert!(local.egress_empty());
+        assert_eq!(local.duplicate_cache_len(), 0);
+        assert_eq!(bus.duplicate_cache_len(), 1);
+        assert_eq!(local.dispatch_errors(), 0);
+        // The same request twice runs the handler twice (no cache lookup).
+        let again = local_get_device_id(&mut local);
+        assert_eq!(&again.1[..again.0], &bytes[..len]);
+    }
+
+    #[test]
+    fn a_local_set_ipmb_state_changes_the_bus_state_as_a_bus_request_does() {
+        use crate::dispatch::VSO_IDENTIFIER;
+        let data = [VSO_IDENTIFIER, 0xFF, 0x01]; // IPMB-A no change, IPMB-B Local Control
+        let mut local = link_with(true, TxPolicy::Alternate);
+        assert!(!local.bus_state(Bus::B).enabled());
+        let (len, bytes) = local
+            .local_request(
+                &mut ctx(),
+                &mut NoExtension,
+                crate::ipmb::NETFN_GROUP_EXT,
+                0x09,
+                &data,
+                0,
+                &mut NoTrace,
+            )
+            .unwrap();
+        assert_eq!(
+            ipmb::parse(&bytes[..len]).unwrap().completion_code,
+            Some(cc::OK)
+        );
+        assert!(local.bus_state(Bus::B).enabled());
+        // The same request over the bus gives the same bus state.
+        let mut bus = link_with(true, TxPolicy::Alternate);
+        let frame = request(OWN, crate::ipmb::NETFN_GROUP_EXT, 0x09, 0, &data);
+        assert_eq!(bus.on_frame(Bus::A, &frame, 0), Ok(()));
+        poll_real(&mut bus, 0);
+        assert_eq!(bus.bus_state(Bus::B), local.bus_state(Bus::B));
+    }
+
+    #[test]
+    fn a_local_request_too_long_for_a_frame_is_refused() {
+        let mut link = link_with(false, TxPolicy::Alternate);
+        let data = [0u8; IPMB_MAX_LEN];
+        let result = link.local_request(
+            &mut ctx(),
+            &mut NoExtension,
+            NETFN_APP,
+            CMD_GET_DEVICE_ID,
+            &data,
+            0,
+            &mut NoTrace,
+        );
+        assert_eq!(result.err(), Some(LocalError::TooLong));
+    }
+
+    #[test]
+    fn clearing_the_duplicate_cache_makes_a_repeat_run_the_handler_again() {
+        let mut link = link_with(false, TxPolicy::Alternate);
+        let frame = count_request(1, &[]);
+        let before = runs();
+        for expected_runs in [1, 1] {
+            assert_eq!(link.on_frame(Bus::A, &frame, 0), Ok(()));
+            poll(&mut link, 0);
+            drain(&mut link);
+            assert_eq!(runs() - before, expected_runs, "a repeat is replayed");
+        }
+        assert_eq!(link.duplicate_cache_len(), 1);
+        link.clear_duplicate_cache();
+        assert_eq!(link.duplicate_cache_len(), 0);
+        assert_eq!(link.on_frame(Bus::A, &frame, 0), Ok(()));
+        poll(&mut link, 0);
+        assert_eq!(
+            runs() - before,
+            2,
+            "the cleared cache runs the handler again"
         );
     }
 

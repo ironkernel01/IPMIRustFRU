@@ -18,6 +18,23 @@
 #ifndef IPMI_DEFS_H
 #define IPMI_DEFS_H
 
+/* ==========================================================================================
+ * BENCH / TEST SWITCHES -- check these before a system build
+ * ==========================================================================================
+ * IPMC_EVENTS_AT_BOOT (the Tier-2/3 event generator; no effect in a Tier-1 build)
+ *   0 = BENCH DEFAULT: events off from start-up. The IPMC sends itself Set Event Receiver FFh,
+ *       so nothing is retried toward a Chassis Manager that never acknowledges (the Aardvark
+ *       bench). The console prints the line Events: off from start-up at every boot.
+ *   1 = SYSTEM BUILD: event messages go to the Event Receiver 20h from power-up (VITA 46.11
+ *       Rule 7-5).
+ * IPMC_LOG_AT_BOOT: 1 = the capture log records from start-up; DEBUG LOG ON|OFF at run time.
+ * IPMC_I2C_TRACE_AT_BOOT: 1 = one console line per IPMB frame in and out from start-up;
+ *       DEBUG TRACE I2C ON|OFF at run time.
+ * ========================================================================================== */
+#define IPMC_EVENTS_AT_BOOT 0                     /* 0 = bench: events off from start-up (default); 1 = system build: events to Event Receiver 20h from power-up (VITA 46.11 Rule 7-5) */
+#define IPMC_LOG_AT_BOOT 1                        /* 1 = the capture log records from start-up; DEBUG LOG ON|OFF at run time */
+#define IPMC_I2C_TRACE_AT_BOOT 0                  /* 1 = one console line per IPMB frame in and out from start-up; DEBUG TRACE I2C ON|OFF at run time */
+
 #define IPMB_MASTER_HW 0                          /* hardware I2C master */
 #define IPMB_MASTER_BITBANG 1                     /* peripheral off, pins driven open-drain, peripheral back on */
 #define IPMB_MASTER_MODE IPMB_MASTER_BITBANG      /* master method; both buses use the same one */
@@ -52,6 +69,8 @@
 #define IPMB_FAULT_STREAK 8                       /* consecutive bus-fault errors on one IPMB (stretch timeout, SCL or SDA stuck low, bus busy, slave BERR or TIMEOUT) before the bus is marked faulted in the IPMB Link sensor (2..=64); address and data NACKs are not bus faults; a good write or frame resets the count (VITA 46.11 Rule 9.3-10) */
 #define IPMB_FAULT_CLEAR_MS 1000                  /* both lines must read idle-high continuously this long before a faulted bus is cleared (100..=60000), milliseconds */
 #define IPMC_IPMI_TRACE 1                         /* 1 = trace every dispatched request on the console; 0 = silent */
+#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536): whole IPMB frames in and out and the trace lines, oldest overwritten first */
+#define IPMC_LOG_TEXT_MAX 160                     /* longest trace line kept in the log, bytes (32..=200); a longer line is cut and ends in ... */
 
 #define IPMB_STRAP_FROM_PINS 0                    /* strap value is read from the pins */
 #define IPMB_STRAP_FORCED 1                       /* strap value comes from this file (bare board) */
@@ -62,9 +81,9 @@
 
 #define IPMC_CONSOLE_BAUD 115200                  /* console UART baud rate, 8N1; gen.ps1 reads this line for COM3 */
 #define IPMC_CONSOLE_BYTES_PER_POLL 16            /* most console bytes one main-loop pass handles; a pass also runs at most one command line, so sensor sampling and the IPMB link are serviced every iteration (1..IPMC_UART_RX_BUF); blocking console output is a known cost the Phase 6 link scheduler accounts for (227 ms response deadline, VITA Rule 4.1.1-11) */
-#define IPMC_UART_RX_BUF 128                      /* console RX ring bytes; power of two, one slot stays empty; usable bytes (size - 1) must cover IPMC_MENU_LINE_MAX; the rest (47 bytes = 4.1 ms at 115200 baud) absorbs bytes that arrive during a blocking transmit */
-#define IPMC_MENU_LINE_MAX 80                     /* longest accepted console line in bytes; a longer line is rejected */
-#define IPMC_MENU_TOKENS_MAX 8                    /* most whitespace-separated tokens in one console line or one command syntax */
+#define IPMC_UART_RX_BUF 256                      /* console RX ring bytes; power of two, one slot stays empty; usable bytes (size - 1) must cover IPMC_MENU_LINE_MAX; the rest (127 bytes = 11 ms at 115200 baud) absorbs bytes that arrive during a blocking transmit */
+#define IPMC_MENU_LINE_MAX 128                    /* longest accepted console line in bytes; a longer line is rejected */
+#define IPMC_MENU_TOKENS_MAX 40                   /* most whitespace-separated tokens in one console line or one command syntax */
 #define IPMC_FRU_DUMP_BYTES_PER_LINE 16           /* bytes on one line of the console FRU DUMP (1..16; 16 x 3 characters plus a 6-character offset fit an 80-column console) */
 #define IPMC_FW_NAME "ipmc-nucleo-f401re"                    /* firmware name in the banner and SYS VERSION */
 #define IPMC_CONSOLE_PROMPT "ipmc"                /* root prompt text of the console menu */
@@ -159,9 +178,9 @@
 #define IPMC_RAIL3_NOMINAL_MV 3300                /* rail 3 nominal, millivolts */
 #define IPMC_RAIL3_DIV_NUM 2                      /* rail 3 divider numerator (3.3 V -> 1.65 V at the pin, headroom for the +10 % window) */
 #define IPMC_RAIL3_DIV_DEN 1                      /* rail 3 divider denominator */
-#define IPMC_RAIL4_NAME "1V0 core"                /* rail 4: A3, PB0, ADC1 channel 8 */
-#define IPMC_RAIL4_NOMINAL_MV 1000                /* rail 4 nominal, millivolts */
-#define IPMC_RAIL4_DIV_NUM 1                      /* rail 4 divider numerator (direct) */
+#define IPMC_RAIL4_NAME "+3.3V_AUX"               /* rail 4: A3, PB0, ADC1 channel 8 */
+#define IPMC_RAIL4_NOMINAL_MV 3300                /* rail 4 nominal, millivolts */
+#define IPMC_RAIL4_DIV_NUM 2                      /* rail 4 divider numerator (3.3 V -> 1.65 V at the pin, headroom for the +10 % window) */
 #define IPMC_RAIL4_DIV_DEN 1                      /* rail 4 divider denominator */
 #define IPMC_TEMP_LNC_C 0                         /* [i32] lower non-critical threshold, degrees C: reading <= it sets the flag */
 #define IPMC_TEMP_LC_C -10                        /* [i32] lower critical threshold, degrees C */

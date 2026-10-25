@@ -204,6 +204,19 @@ const _: () = assert!(
 );
 const _: () = assert!(IPMC_IPMI_TRACE <= 1, "IPMC_IPMI_TRACE must be 0 or 1");
 
+// The capture log ring (ipmc-core capture.rs): 1 KiB holds a few frames, 64 KiB is the most the
+// 96 KiB of RAM could spare; a trace line is kept to IPMC_LOG_TEXT_MAX bytes, 32 holds a short
+// status line, 200 the longest the console prints. The relations to IPMB_MSG_MAX are guarded
+// beside the type (capture.rs).
+const _: () = assert!(
+    IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 65536,
+    "IPMC_LOG_SIZE must be 1024..=65536"
+);
+const _: () = assert!(
+    IPMC_LOG_TEXT_MAX >= 32 && IPMC_LOG_TEXT_MAX <= 200,
+    "IPMC_LOG_TEXT_MAX must be 32..=200"
+);
+
 // ---- console, LED and menu limits ----
 
 // Highest baud the USART2 divider reaches at the highest PCLK1: 42 MHz / 16 (RM0368 19.3.4,

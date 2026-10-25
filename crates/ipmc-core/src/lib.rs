@@ -7,6 +7,8 @@
 
 /// addr -- geographic address decode and strap-source resolution.
 pub mod addr;
+/// capture -- the capture log: IPMB frames and trace lines in a ring, CSV and trace printers.
+pub mod capture;
 /// cmd -- command handlers, one module per NetFn group.
 pub mod cmd;
 /// commands -- the command table, one row per command.

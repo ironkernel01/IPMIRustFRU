@@ -78,6 +78,25 @@ impl Key {
     }
 }
 
+/// CacheEntry -- one held response as the console shows it (`DupCache::entries`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheEntry {
+    /// Requester address (rqSA) of the request.
+    pub rq_sa: u8,
+    /// Request sequence number.
+    pub rq_seq: u8,
+    /// Request NetFn.
+    pub netfn: u8,
+    /// Command code.
+    pub cmd: u8,
+    /// Time since the response was stored, milliseconds.
+    pub age_ms: u32,
+    /// The response is still inside DUP_WINDOW_MS, so a repeat would be replayed from it.
+    pub live: bool,
+    /// Length of the cached response frame.
+    pub response_len: usize,
+}
+
 #[derive(Clone, Copy)]
 struct Entry {
     key: Key,
@@ -164,6 +183,38 @@ impl DupCache {
         same_key.or_else(reusable).unwrap_or_else(oldest)
     }
 
+    /// clear -- empties the cache: a repeat of any request runs its handler again. The eviction
+    /// count stays.
+    pub fn clear(&mut self) {
+        self.entries = [Entry::EMPTY; DUP_CACHE];
+    }
+
+    /// len -- entries held, whether or not their window has run out yet.
+    pub fn len(&self) -> usize {
+        self.entries.iter().filter(|e| e.used).count()
+    }
+
+    /// entries -- the held entries at `now_ms`, in slot order.
+    pub fn entries(&self, now_ms: u32) -> impl Iterator<Item = CacheEntry> + '_ {
+        self.entries
+            .iter()
+            .filter(|e| e.used)
+            .map(move |e| CacheEntry {
+                rq_sa: e.key.rq_sa,
+                rq_seq: e.key.rq_seq,
+                netfn: e.key.netfn,
+                cmd: e.key.cmd,
+                age_ms: now_ms.wrapping_sub(e.stored_ms),
+                live: e.live(now_ms),
+                response_len: e.len,
+            })
+    }
+
+    /// is_empty -- no entry is held.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// evictions -- live entries replaced because the cache was full, since start.
     pub const fn evictions(&self) -> u32 {
         self.evictions
@@ -204,6 +255,29 @@ mod tests {
             completion_code: None,
             data,
         }
+    }
+
+    #[test]
+    fn entries_clear_and_len_follow_the_held_responses() {
+        let mut cache = DupCache::new();
+        assert!(cache.is_empty());
+        cache.insert(key(3), &[1, 2, 3], 100);
+        cache.insert(key(4), &[9], 150);
+        assert_eq!(cache.len(), 2);
+        let held: Vec<_> = cache
+            .entries(200)
+            .map(|e| (e.rq_seq, e.age_ms, e.live, e.response_len))
+            .collect();
+        assert_eq!(held, [(3, 100, true, 3), (4, 50, true, 1)]);
+        // An entry past the window is still held but no longer live.
+        let late = 100 + DUP_WINDOW_MS;
+        assert_eq!(
+            cache.entries(late).map(|e| e.live).collect::<Vec<_>>(),
+            [false, true]
+        );
+        cache.clear();
+        assert_eq!((cache.len(), cache.entries(200).count()), (0, 0));
+        assert!(cache.lookup(&key(3), 200).is_none());
     }
 
     #[test]

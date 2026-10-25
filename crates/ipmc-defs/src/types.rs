@@ -40,6 +40,11 @@ const _: u32 = IPMB_TXQ_DEPTH;
 const _: u32 = IPMB_FAULT_STREAK;
 const _: u32 = IPMB_FAULT_CLEAR_MS;
 const _: u32 = IPMC_IPMI_TRACE;
+const _: u32 = IPMC_LOG_SIZE;
+const _: u32 = IPMC_LOG_AT_BOOT;
+const _: u32 = IPMC_LOG_TEXT_MAX;
+const _: u32 = IPMC_I2C_TRACE_AT_BOOT;
+const _: u32 = IPMC_EVENTS_AT_BOOT;
 const _: u32 = IPMB_STRAP_FROM_PINS;
 const _: u32 = IPMB_STRAP_FORCED;
 const _: u32 = IPMB_GA_SOURCE;
@@ -180,6 +185,18 @@ const _: () = assert!(
 const _: () = assert!(
     matches!(IPMC_IPMI_TRACE, 0 | 1),
     "IPMC_IPMI_TRACE must be 0 or 1"
+);
+const _: () = assert!(
+    matches!(IPMC_LOG_AT_BOOT, 0 | 1),
+    "IPMC_LOG_AT_BOOT must be 0 or 1"
+);
+const _: () = assert!(
+    matches!(IPMC_I2C_TRACE_AT_BOOT, 0 | 1),
+    "IPMC_I2C_TRACE_AT_BOOT must be 0 or 1"
+);
+const _: () = assert!(
+    matches!(IPMC_EVENTS_AT_BOOT, 0 | 1),
+    "IPMC_EVENTS_AT_BOOT must be 0 or 1"
 );
 const _: () = assert!(
     matches!(IPMB_NVMRO_FORCED, 0 | 1),

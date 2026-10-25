@@ -24,6 +24,7 @@ macro_rules! out {
 mod bsp;
 mod console;
 mod data_cmds;
+mod debug_cmds;
 #[cfg(ipmc_eval)]
 mod eval;
 mod fru_log;
@@ -156,6 +157,7 @@ fn main() -> ! {
     );
     // Banner first: start_sensors may print the first power event line.
     console.banner();
+    console.start_events();
     console.start_sensors();
     console.prompt();
     #[cfg(ipmc_eval)]

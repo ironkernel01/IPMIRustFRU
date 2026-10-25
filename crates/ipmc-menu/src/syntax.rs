@@ -12,6 +12,8 @@ pub enum Kind {
     Keyword,
     Required,
     Optional,
+    /// `{NAME...}`: zero or more remaining words; the last token of a syntax only.
+    Rest,
 }
 
 /// SynToken -- one syntax token and its kind. `text` is the token as written (brackets included).
@@ -28,6 +30,7 @@ pub enum TableError {
     FirstTokenNotKeyword,
     MalformedToken,
     OptionalNotLast,
+    RestNotLast,
     SyntaxTooLong,
     DuplicateKeywords,
     ReservedKeyword,
@@ -45,6 +48,7 @@ impl TableError {
             TableError::FirstTokenNotKeyword => "FirstTokenNotKeyword",
             TableError::MalformedToken => "MalformedToken",
             TableError::OptionalNotLast => "OptionalNotLast",
+            TableError::RestNotLast => "RestNotLast",
             TableError::SyntaxTooLong => "SyntaxTooLong",
             TableError::DuplicateKeywords => "DuplicateKeywords",
             TableError::ReservedKeyword => "ReservedKeyword",
@@ -56,18 +60,40 @@ impl TableError {
     }
 }
 
-/// Shape -- token counts a syntax accepts: keywords + required, and that plus the optional ones.
+/// Shape -- token counts a syntax accepts: keywords + required, and that plus the optional ones
+/// (a trailing `{NAME...}` counts as one token here and accepts any number of words, `rest`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     pub min_tokens: usize,
     pub max_tokens: usize,
+    pub rest: bool,
 }
+
+/// REST_SUFFIX -- the end of a `{NAME...}` token: three dots and the closing brace.
+const REST_SUFFIX: &[u8] = b"...}";
 
 /// RESERVED_WORDS -- words the engine owns at every level. No table may start a command with one of them.
 pub(crate) const RESERVED_WORDS: [&str; 4] = ["HELP", "?", "UP", ".."];
 
+/// ends_with_rest_suffix -- `word` ends in `...}`.
+const fn ends_with_rest_suffix(word: &[u8]) -> bool {
+    let (n, m) = (word.len(), REST_SUFFIX.len());
+    if n < m {
+        return false;
+    }
+    let mut i = 0;
+    while i < m {
+        if word[n - m + i] != REST_SUFFIX[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// token_at -- the `n`th whitespace-separated token of `s` (0-based), classified by its first
-/// byte: `[` required, `{` optional, anything else a keyword. None past the last token.
+/// byte: `[` required, `{` optional (`{NAME...}` the rest), anything else a keyword. None past
+/// the last token.
 pub const fn token_at(s: &str, n: usize) -> Option<SynToken<'_>> {
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -89,6 +115,7 @@ pub const fn token_at(s: &str, n: usize) -> Option<SynToken<'_>> {
             };
             let kind = match word[0] {
                 b'[' => Kind::Required,
+                b'{' if ends_with_rest_suffix(word) => Kind::Rest,
                 b'{' => Kind::Optional,
                 _ => Kind::Keyword,
             };
@@ -119,8 +146,8 @@ const fn is_bracket(b: u8) -> bool {
     matches!(b, b'[' | b']' | b'{' | b'}')
 }
 
-/// A well-formed parameter is `[NAME]` or `{NAME}`: a non-empty name with no bracket inside.
-/// A keyword contains no bracket at all.
+/// A well-formed parameter is `[NAME]`, `{NAME}` or `{NAME...}`: a non-empty name with no
+/// bracket inside. A keyword contains no bracket at all.
 const fn token_well_formed(t: SynToken<'_>) -> bool {
     let bytes = t.text.as_bytes();
     let (from, to) = match t.kind {
@@ -136,6 +163,13 @@ const fn token_well_formed(t: SynToken<'_>) -> bool {
             }
             (1, bytes.len() - 1)
         }
+        Kind::Rest => {
+            // `{` + name + `...}`: the name needs one byte.
+            if bytes.len() < 1 + 1 + REST_SUFFIX.len() {
+                return false;
+            }
+            (1, bytes.len() - REST_SUFFIX.len())
+        }
     };
     let mut i = from;
     while i < to {
@@ -150,14 +184,19 @@ const fn token_well_formed(t: SynToken<'_>) -> bool {
 /// validate_syntax -- checks one syntax string and returns its token-count shape.
 ///
 /// Rejects: no token; first token not a keyword; a malformed parameter; anything after an
-/// optional parameter that is not itself optional; more than `MENU_TOKENS_MAX` tokens.
+/// optional parameter that is not itself optional; anything after a `{NAME...}`; more than
+/// `MENU_TOKENS_MAX` tokens.
 pub const fn validate_syntax(s: &str) -> Result<Shape, TableError> {
     let mut n = 0;
     let mut min_tokens = 0;
     let mut seen_optional = false;
+    let mut seen_rest = false;
     while let Some(t) = token_at(s, n) {
         if n >= MENU_TOKENS_MAX {
             return Err(TableError::SyntaxTooLong);
+        }
+        if seen_rest {
+            return Err(TableError::RestNotLast);
         }
         if !token_well_formed(t) {
             return Err(TableError::MalformedToken);
@@ -167,6 +206,10 @@ pub const fn validate_syntax(s: &str) -> Result<Shape, TableError> {
         }
         match t.kind {
             Kind::Optional => seen_optional = true,
+            Kind::Rest => {
+                seen_optional = true;
+                seen_rest = true;
+            }
             Kind::Keyword | Kind::Required => {
                 if seen_optional {
                     return Err(TableError::OptionalNotLast);
@@ -182,6 +225,7 @@ pub const fn validate_syntax(s: &str) -> Result<Shape, TableError> {
     Ok(Shape {
         min_tokens,
         max_tokens: n,
+        rest: seen_rest,
     })
 }
 
@@ -281,6 +325,33 @@ mod tests {
     }
 
     #[test]
+    fn rest_token_is_the_last_token_only() {
+        let kind = |s, n| token_at(s, n).map(|t| t.kind);
+        assert_eq!(kind("RUN {WORDS...}", 1), Some(Kind::Rest));
+        assert_eq!(kind("RUN {WORDS}", 1), Some(Kind::Optional));
+        let s = validate_syntax("RUN [A] {WORDS...}").unwrap();
+        assert_eq!((s.min_tokens, s.max_tokens, s.rest), (2, 3, true));
+        let s = validate_syntax("RUN {A} {WORDS...}").unwrap();
+        assert_eq!((s.min_tokens, s.max_tokens, s.rest), (1, 3, true));
+        assert!(!validate_syntax("RUN {A}").unwrap().rest);
+        for bad in [
+            "RUN {W...} [A]",
+            "RUN {W...} {A}",
+            "RUN {W...} {V...}",
+            "RUN {W...} NOW",
+        ] {
+            assert_eq!(validate_syntax(bad), Err(TableError::RestNotLast), "{bad}");
+        }
+        for bad in ["RUN {...}", "RUN {W...", "RUN {W{...}"] {
+            assert_eq!(
+                validate_syntax(bad),
+                Err(TableError::MalformedToken),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn shape_counts_keywords_required_optional() {
         let s = validate_syntax("SET MODE [MODE] {LEVEL}").unwrap();
         assert_eq!((s.min_tokens, s.max_tokens), (3, 4));
@@ -308,11 +379,12 @@ mod tests {
             validate_syntax("GO {A} NOW"),
             Err(TableError::OptionalNotLast)
         );
+        let tokens = |n: usize| "A ".repeat(n);
         assert_eq!(
-            validate_syntax("A B C D E F G H I"),
+            validate_syntax(&tokens(MENU_TOKENS_MAX + 1)),
             Err(TableError::SyntaxTooLong)
         );
-        assert!(validate_syntax("A B C D E F G H").is_ok());
+        assert!(validate_syntax(&tokens(MENU_TOKENS_MAX)).is_ok());
     }
 
     #[test]

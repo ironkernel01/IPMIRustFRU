@@ -27,6 +27,13 @@ pub trait Extension {
         out: &mut [u8],
     ) -> Option<(&'static str, Result<usize, u8>)>;
 
+    /// command_name -- the name of a command the extension answers (netFn even, the request
+    /// form), for the trace and capture lines. None: the extension has no such command.
+    fn command_name(&self, netfn: u8, cmd: u8) -> Option<&'static str> {
+        let _ = (netfn, cmd);
+        None
+    }
+
     /// poll -- one call per `Link::poll`, after the queued requests are answered, with the link
     /// view in `ctx.link` refreshed and the requester the extension sends its requests through.
     fn poll(
