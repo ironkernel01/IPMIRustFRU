@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 10-24-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 10-25-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -65,7 +65,7 @@ to `diagrams/out/png/`).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -81,26 +81,29 @@ IPMI code builds for the PC as an emulator that replays captured Chassis Manager
 serves a live Chassis Manager over TCP. This document explains how the code works, crate by
 crate and module by module, for a software engineer who maintains or extends it.
 
-- **Primary function:** Tier-1 IPMC: the 13 Tier-1 mandatory commands plus Broadcast Get Device
-  ID, the 7 mandatory sensors, FRU 0 with Common Header, Board Info and Product Info areas,
-  the FRU 0 Operational State machine (M0, M1, M4, M6; M5 at Tier-3), dual-bus link rules (alternation,
-  resend on the other bus, Set IPMB State), a startup self test and NVMRO write protection.
-- **Supported modes:** firmware on the STM32F401RE with the bit-bang IPMB master (default) or
-  the hardware I2C master; x86 emulator with capture replay (`replay`), real-time TCP serving
-  (`serve`) and an SDR dump (`sdr`).
-- **Build modes:** the public build is the Tier-1 IPMC described here. A commercial release
-  build adds a private Tier-2/3 extension through the hook interface of section 4 (Build modes
-  and the Tier-2/3 extension); the commands and behaviour it adds are listed in section 7.2,
-  each marked "commercial release build". The public build answers those commands C1h. The
-  commercial release build is Tier-3 by default (`IPMC_TIER` 3).
-- **Non-goals of the public build:** Tier-2 and Tier-3 functions (events, payload power control
-  by the Chassis Manager, FRU activation policy; they belong to the commercial release build),
-  optional Tier-1 commands (Get Mandatory Sensor Numbers,
-  FRU Control Capabilities, Get IPMB Link Info, Get FRU Hash, Get Device GUID, Set SEL Time:
-  all answer C1h), subsidiary FRUs, and IPMI bridging. The built FRU image has no Internal Use
-  or MultiRecord area; `verify` still checks those areas when a written image contains them.
+The primary function is a Tier-1 IPMC: the 13 Tier-1 mandatory commands plus Broadcast Get Device
+ID, the 7 mandatory sensors, FRU 0 with Common Header, Board Info and Product Info areas,
+the FRU 0 Operational State machine (M0, M1, M4, M6; M5 at Tier-3), dual-bus link rules (alternation,
+resend on the other bus, Set IPMB State), a startup self test and NVMRO write protection.
 
-The source of truth for every statement here is the code. Where the VITA 46.11-2022 text and the
+The firmware runs on the STM32F401RE with the bit-bang IPMB master (default) or
+the hardware I2C master. The x86 emulator offers capture replay (`replay`), real-time TCP serving
+(`serve`) and an SDR dump (`sdr`).
+
+The public build is the Tier-1 IPMC described here. A commercial release
+build adds a private Tier-2/3 extension through the hook interface of section 4 (Build modes
+and the Tier-2/3 extension); the commands and behaviour it adds are listed in section 7.2,
+each marked "commercial release build". The public build answers those commands C1h. The
+commercial release build is Tier-3 by default (`IPMC_TIER` 3).
+
+The public build leaves out Tier-2 and Tier-3 functions (events, payload power control
+by the Chassis Manager, FRU activation policy; they belong to the commercial release build),
+optional Tier-1 commands (Get Mandatory Sensor Numbers,
+FRU Control Capabilities, Get IPMB Link Info, Get FRU Hash, Get Device GUID, Set SEL Time:
+all answer C1h), subsidiary FRUs, and IPMI bridging. The built FRU image has no Internal Use
+or MultiRecord area; `verify` still checks those areas when a written image contains them.
+
+The code is the authority for every statement here. Where the VITA 46.11-2022 text and the
 captured live Chassis Manager disagree, the code follows the specification.
 
 <div style="page-break-after: always;"></div>
@@ -108,7 +111,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -151,7 +154,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -211,7 +214,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -268,38 +271,38 @@ the private Tier-2/3 extension enters the build.
 
 ### Key design choices
 
-- **Link layer as a pure state machine** (`ipmc-core/src/link.rs`): frames in with the STOP
-  time, responses out with the bus to use, results back. The same object runs in the firmware
+- The link layer (`ipmc-core/src/link.rs`) is a pure state machine: frames go in with the STOP
+  time, responses come out with the bus to use, results come back. The same object runs in the firmware
   and the emulator, so the dual-bus rules are tested on the PC against 309 captured exchanges.
-- **Bit-bang master on the slave's own pins** (`bsp/i2c_bitbang.rs`): the I2C peripheral stays
+- The bit-bang master (`bsp/i2c_bitbang.rs`) drives the slave's own pins. The I2C peripheral stays
   a slave; for a transmission it is switched off, the same pins are driven open-drain as GPIO,
   then the peripheral is switched back on. This follows the earlier PIC32 controller and avoids
   the STM32 I2C master state machine; the hardware master stays available behind
   `IPMB_MASTER_MODE`.
-- **Response bus chosen at first transmission** (`Link::next_tx`), not at queue time, so
+- The response bus is chosen at first transmission (`Link::next_tx`), not at queue time, so
   alternation follows the frames really handed to a driver, resends included.
-- **Duplicate cache keyed by the exact request** (`dupcache.rs`): a retry runs no handler, so a
+- The duplicate cache (`dupcache.rs`) is keyed by the exact request, so a retry runs no handler and a
   retried Write FRU Data or Set IPMB State takes effect once.
-- **Set IPMB State hand-off** (`PendingIpmbState`): the handler cannot reach the Link; it
+- Set IPMB State uses a hand-off (`PendingIpmbState`). The handler cannot reach the Link; it
   validates against a read-only view and leaves the change for `Link::poll`, which applies it
   before the response is queued.
-- **Append-only FRU flash log** (`ipmc-fru/src/persist.rs`): two sectors, records with a commit
+- The FRU flash log (`ipmc-fru/src/persist.rs`) is append-only, with two sectors and records with a commit
   word programmed last and a CRC-32, highest sequence number wins at boot; a power cut at any
   word leaves the previous image loadable.
-- **Compile-time configuration** (`ipmc-defs`): a malformed or out-of-range define fails the
+- Configuration is checked at compile time (`ipmc-defs`). A malformed or out-of-range define fails the
   build with its line number or the guard that names it.
-- **Requester in the link layer** (`requester.rs`): the request sequence number, response
+- The requester (`requester.rs`) sits in the link layer. The request sequence number, response
   matching and the resend timing sit beside the response path of `Link`, so one `next_tx` hands
   out both and responses keep priority over requests. The extension decides what to send and
   when; a Tier-1 build never sends a request (Rule 7-4).
-- **Processor reset by hand-off** (`reset_gate.rs`): a handler asks for a Cold Reset through
+- A processor reset uses a hand-off (`reset_gate.rs`). A handler asks for a Cold Reset through
   `Context::pending_reset`; the owner of the processor performs it when the gate says nothing is
   lost (section 8.2).
-- **Processor and payload services by hand-off** (`dispatch.rs`): a handler never switches
+- Processor and payload services use a hand-off (`dispatch.rs`). A handler never switches
   payload power, pulses the payload reset output or restarts the link; it leaves a request in the
   `Context` (`pending_power`, `pending_payload_reset`, `pending_reset`) and the owner of that
   resource performs it (section 6.3, section 8.2).
-- **Tier rules in one place** (`tier.rs`): Get Device ID, the Device SDR records, the event
+- The tier rules live in one place (`tier.rs`). Get Device ID, the Device SDR records, the event
   enables, the FRU state machine, the sensor count and the IPMB speed derive their
   Tier-dependent behaviour from six rules (section 9.6).
 
@@ -308,7 +311,7 @@ the private Tier-2/3 extension enters the build.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -337,25 +340,25 @@ detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7
 | `1` | on; a missing marker file fails the build and names it |
 | any other value | fails the build |
 
-- **Defines.** Off: `ipmi_defs.h` plus `IPMC_TIER` = 1 in the generated file. On: the extension's
+- Defines: off uses `ipmi_defs.h` plus `IPMC_TIER` = 1 in the generated file; on, the extension's
   header is parsed by the same parser and merged; a name in both headers fails the build, and so
   does `IPMC_TIER` in `ipmi_defs.h` or missing from the extension's header. The guards of the
   extension's defines are mounted from the extension folder.
-- **Publishing the decision.** `ipmc-defs` declares `links = "ipmc_defs"` and prints
+- `ipmc-defs` publishes the decision. It declares `links = "ipmc_defs"` and prints
   `cargo:tier23=1` or `0` (and `cargo:eval=1` or `0`); cargo hands these to each direct dependent
   as `DEP_IPMC_DEFS_TIER23` and `DEP_IPMC_DEFS_EVAL`. `build.rs` also sets `cfg(tier23)` for
   `ipmc-defs` itself and exports `ipmc_defs::TIER23_BUILT`.
-- **One build-script step for the dependents.** `ipmc-ext` and the firmware crate include
+- The dependents share one build-script step. `ipmc-ext` and the firmware crate include
   `crates/ipmc-defs/dep_cfg.rs` and call `cfg_from_defs(key, cfg, path)`, which turns the
   published value into `cfg(tier23)` or `cfg(ipmc_eval)`. They read no file and no other
   variable, so they cannot disagree with `ipmc-defs`.
-- **The bridge.** With `cfg(tier23)`, `ipmc-ext` mounts the extension's sources through a relative
+- With `cfg(tier23)`, `ipmc-ext` mounts the extension's sources through a relative
   `#[path]` and `Active` is the extension's state type; otherwise `Active` is `NoExtension`. A
   compile-time assertion requires a build without the extension to report `IPMC_TIER` 1.
-- **Adding the folder.** The build script cannot watch a folder that is missing, so after adding
+- The build script cannot watch a folder that is missing, so after adding
   it to a tree already built without it, run `cargo clean -p ipmc-defs`. `gen.ps1 build` sets
   `IPMC_TIER23` from the folder.
-- **Evaluation switch.** `IPMC_EVAL` is unset or 0 (off) or 1 (on); `IPMC_EVAL=1` without the
+- `IPMC_EVAL` is unset or 0 (off) or 1 (on); `IPMC_EVAL=1` without the
   extension, or outside the release profile, fails the build. On, it prints a build warning with
   the length and sets `cfg(ipmc_eval)`.
 
@@ -382,7 +385,7 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -518,7 +521,7 @@ Pin assignments are not in `ipmi_defs.h`: they live in the owning board-support 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -896,7 +899,7 @@ driver) and simulates every sensor group.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1090,7 +1093,7 @@ owning module and that table together.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1126,7 +1129,7 @@ flash and, after a software reset, the request sequence words described below.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1190,7 +1193,7 @@ emulator models the board.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1280,23 +1283,23 @@ output and prints that; FRU Control still answers 00h. The emulator models the p
 
 The evaluation image is a time-limited build of the commercial release build (owner decision 20).
 
-- **Build.** `gen.ps1 build -Eval` or `gen.ps1 flash -Eval` sets `IPMC_EVAL=1` and writes
+- `gen.ps1 build -Eval` or `gen.ps1 flash -Eval` sets `IPMC_EVAL=1` and writes
   `ipmc-nucleo-f401re-eval.bin`; without `-Eval` the script passes `IPMC_EVAL=0`, so a build made
   after an evaluation build carries none of it. `-Eval` needs the extension folder.
-- **Condition.** `ipmc-defs` accepts `IPMC_EVAL=1` only with the extension built in and the
+- `ipmc-defs` accepts `IPMC_EVAL=1` only with the extension built in and the
   release profile, and fails the build otherwise. It sets `cfg(ipmc_eval)`, which the firmware
   crate takes through `dep_cfg.rs`. Every evaluation line sits behind that cfg (`eval.rs`,
   `bsp/eval_timer.rs`, the timer start and the period check in `main.rs`,
   `IpmbLink::stop_for_eval`), so no other image, a Tier-1 or normal release or debug build,
   contains any evaluation code or a flag that could stop the IPMB.
-- **Clock.** `bsp/eval_timer.rs` runs TIM2 as a free-running 32-bit up-counter at 10 kHz (0.1 ms
+- `bsp/eval_timer.rs` runs TIM2 as a free-running 32-bit up-counter at 10 kHz (0.1 ms
   per tick, 7158 minutes of range), clocked from PCLK1 (twice PCLK1 when the APB1 prescaler is
   not 1, RM0368 section 6.2). It starts after the console and before the banner; a start failure
   stops the image, because it could not end the evaluation. SysTick is not used. The banner of the
   evaluation image carries the line `EVALUATION BUILD: the IPMB stops after N minutes`.
-- **Period.** `IPMC_EVAL_MINUTES` of run time (section 5, Tier-2/3 header). A power cycle starts a
+- The period is `IPMC_EVAL_MINUTES` of run time (section 5, Tier-2/3 header). A power cycle starts a
   new period.
-- **Expiry.** The main loop calls `stop_for_eval` once and prints one console line. It switches
+- At expiry the main loop calls `stop_for_eval` once and prints one console line. It switches
   both I2C slaves off through the driver's suspend (a healthy bus waits up to the pause time for
   idle, a faulted one is switched off at once), drops what is queued and never calls
   `IpmbLink::service` again, so the whole IPMB, responses and requests, stops. The console and the
@@ -1308,7 +1311,7 @@ The evaluation image is a time-limited build of the commercial release build (ow
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1366,7 +1369,7 @@ event enable). Set Payload Mode, in the commercial release build, is its only wr
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1467,7 +1470,7 @@ enables cannot disagree.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1482,17 +1485,17 @@ enables cannot disagree.
 
 Source: `diagrams/src/ipmc-software.js`, sheet 2.
 
-- **Receive path:** the I2C EV interrupt (`i2c_hw.rs` `on_event`) clears ADDR, starts a frame with
+- On receive, the I2C EV interrupt (`i2c_hw.rs` `on_event`) clears ADDR, starts a frame with
   the matched address byte, appends each data byte, and at STOP posts the frame with the SysTick
   time to that bus's SPSC queue. A frame longer than 33 bytes, an address-only write or a full
   queue is dropped and counted. The ER interrupt counts and clears error flags and drops the
   partial frame, except for ARLO alone (the hardware master lost arbitration), which is counted and
   keeps the reception, because the winner's frame may be addressed to this slave. A read of the slave answers FFh bytes.
-- **Main loop:** `IpmbLink::service` samples NVMRO, drains both queues in STOP-time order into
+- In the main loop, `IpmbLink::service` samples NVMRO, drains both queues in STOP-time order into
   `Link::on_frame` (at most 2 x `IPMB_RX_QUEUE_DEPTH` frames per pass), runs `Link::poll`, books
   slave errors on the fault streak, transmits at most one response, clears faulted buses whose
   lines have been idle-high for `IPMB_FAULT_CLEAR_MS`, and runs the FRU log save step.
-- **Transmit path:** `Link::next_tx` gives the oldest response and its bus; the master writes it
+- On transmit, `Link::next_tx` gives the oldest response and its bus; the master writes it
   (`write_retrying`: free-bus wait, then the transfer, arbitration retries on the same bus inside
   one T2 + T1 budget); `Link::on_tx_result` pops the frame on success or moves it to the other
   bus for a resend.
@@ -1560,7 +1563,7 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1628,7 +1631,7 @@ the payload off at boot.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1702,7 +1705,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1750,7 +1753,7 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1788,7 +1791,7 @@ save keeps the write pending and retries once per delay.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1860,7 +1863,7 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1952,7 +1955,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2034,7 +2037,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2121,7 +2124,7 @@ procedure and expected result of each.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2172,7 +2175,7 @@ procedure and expected result of each.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-24-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">

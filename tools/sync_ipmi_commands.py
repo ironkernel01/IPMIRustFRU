@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sync_ipmi_commands.py - keep Documentation/ipmi_commands.md in step with the code.
 
-Source of truth: the COMMANDS rows of crates/ipmc-core/src/commands.rs, one line each:
+Input: the COMMANDS rows of crates/ipmc-core/src/commands.rs, one line each:
     cmd(NETFN_APP, 0x01, "Get Device ID", "IPMI 2.0 20.1", app::get_device_id),
 The NetFn names map to numbers through the NETFN_* consts of crates/ipmc-core/src/ipmb.rs, read
 from the source. The tool rewrites only the generated regions of the document, each between
