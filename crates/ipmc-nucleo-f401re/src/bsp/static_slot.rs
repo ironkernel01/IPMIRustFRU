@@ -25,3 +25,14 @@ pub fn install<T>(slot: &StaticSlot<T>, value: T) {
 pub fn with_mut<T, R>(slot: &StaticSlot<T>, f: impl FnOnce(&mut T) -> R) -> Option<R> {
     free(|cs| slot.borrow(cs).borrow_mut().as_mut().map(f))
 }
+
+/// try_with_mut -- `with_mut` that also yields `None` when the state is already borrowed (a
+/// fault handler that fired inside `with_mut` of the same slot), instead of panicking.
+pub fn try_with_mut<T, R>(slot: &StaticSlot<T>, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+    free(|cs| {
+        slot.borrow(cs)
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut state| state.as_mut().map(f))
+    })
+}

@@ -209,8 +209,8 @@ const _: () = assert!(IPMC_IPMI_TRACE <= 1, "IPMC_IPMI_TRACE must be 0 or 1");
 // status line, 200 the longest the console prints. The relations to IPMB_MSG_MAX are guarded
 // beside the type (capture.rs).
 const _: () = assert!(
-    IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 65536,
-    "IPMC_LOG_SIZE must be 1024..=65536"
+    IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 65536 && IPMC_LOG_SIZE.is_power_of_two(),
+    "IPMC_LOG_SIZE must be a power of two, 1024..=65536 (the usable size is one byte less)"
 );
 const _: () = assert!(
     IPMC_LOG_TEXT_MAX >= 32 && IPMC_LOG_TEXT_MAX <= 200,
@@ -231,6 +231,40 @@ const _: () = assert!(
 const _: () = assert!(
     IPMC_UART_RX_BUF.is_power_of_two() && IPMC_UART_RX_BUF >= 2,
     "IPMC_UART_RX_BUF must be a power of two"
+);
+// The console TX ring is a ByteRing as well (power of two). Console output waits only while the
+// ring is full, so it must hold the longest line the capture log keeps plus its CR LF; 256 bytes
+// is the smallest ring that does. The application port has its own rate (USART1 is on PCLK2, at
+// most 84 MHz: 84 MHz / 16 = 5.25 MBd), its flow control is a switch, and its rings are powers
+// of two; the receive ring holds at least one 64-byte application line.
+const USART1_BAUD_MAX: u32 = 5_250_000;
+const _: () = assert!(
+    IPMC_UART_TX_BUF.is_power_of_two()
+        && IPMC_UART_TX_BUF >= 256
+        && IPMC_UART_TX_BUF <= 16384
+        && IPMC_UART_TX_BUF > IPMC_LOG_TEXT_MAX + 2,
+    "IPMC_UART_TX_BUF must be a power of two, 256..=16384, above IPMC_LOG_TEXT_MAX + 2"
+);
+const _: () = assert!(
+    (IPMC_APP_UART_ENABLE == 0 || IPMC_APP_UART_ENABLE == 1)
+        && (IPMC_APP_UART_FLOW == 0 || IPMC_APP_UART_FLOW == 1),
+    "IPMC_APP_UART_ENABLE and IPMC_APP_UART_FLOW must be 0 or 1"
+);
+const _: () = assert!(
+    IPMC_APP_UART_BAUD >= 1 && IPMC_APP_UART_BAUD <= USART1_BAUD_MAX,
+    "IPMC_APP_UART_BAUD must be 1..=5250000 (USART1 limit at PCLK2 = 84 MHz)"
+);
+const _: () = assert!(
+    IPMC_APP_UART_RX_BUF.is_power_of_two()
+        && IPMC_APP_UART_RX_BUF >= 64
+        && IPMC_APP_UART_RX_BUF <= 16384,
+    "IPMC_APP_UART_RX_BUF must be a power of two, 64..=16384"
+);
+const _: () = assert!(
+    IPMC_APP_UART_TX_BUF.is_power_of_two()
+        && IPMC_APP_UART_TX_BUF >= 64
+        && IPMC_APP_UART_TX_BUF <= 16384,
+    "IPMC_APP_UART_TX_BUF must be a power of two, 64..=16384"
 );
 const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,

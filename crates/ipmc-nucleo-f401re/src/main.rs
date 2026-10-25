@@ -1,6 +1,6 @@
 // main.rs - ipmc-nucleo-f401re entry point for the NUCLEO-F401RE.
 // Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it
-// services exists), UART, IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
+// services exists), console UART, application UART (when enabled), IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
 // ipmi_defs.h source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
 // before the I2C slaves exist), IPMB drivers (the own address is known; bus
 // recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
@@ -62,11 +62,11 @@ fn main() -> ! {
     // SysTick services the LED state, so it starts only after `led::init` has published it.
     bsp::systick::init(cp.SYST, clock.hclk_hz);
     let uart_result = bsp::uart::init(
+        bsp::uart::Port::Console,
         &dp.RCC,
-        dp.USART2,
+        bsp::uart::UartPeripheral::U2(dp.USART2),
         &mut cp.NVIC,
         clock.pclk1_hz,
-        ipmc_defs::IPMC_CONSOLE_BAUD,
     );
     match uart_result {
         Ok(()) => {}
@@ -76,6 +76,24 @@ fn main() -> ! {
             bsp::led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
             bsp::fault::park();
         }
+    }
+    // The application port (APP_UART, USART1 on PCLK2) starts after the console, so a start-up
+    // failure of it can be reported on the console. With IPMC_APP_UART_ENABLE 0 USART1 is never
+    // clocked and its pins stay parked.
+    let app_uart_fault = if ipmc_defs::IPMC_APP_UART_ENABLE == 1 {
+        bsp::uart::init(
+            bsp::uart::Port::App,
+            &dp.RCC,
+            bsp::uart::UartPeripheral::U1(dp.USART1),
+            &mut cp.NVIC,
+            clock.pclk2_hz,
+        )
+        .err()
+    } else {
+        None
+    };
+    if let Some(bsp::uart::UartError::Pins(e)) = app_uart_fault {
+        bsp::fault::claim_failed(e);
     }
     // Evaluation build: the run-time clock starts here, before the banner. A clock that cannot
     // start stops the image (it could not end the evaluation).
@@ -112,9 +130,9 @@ fn main() -> ! {
     }
 
     // FRU flash log: loads the stored image (`None`: the built image stays in use) and erases the
-    // stale sector when it is due and NVMRO is deasserted. After the UART (it prints), before the
-    // I2C slaves start: an erase stalls the core for up to 2 s and no slave exists yet to miss a
-    // frame. The DWT cycle counter runs first so the erase can give SysTick the stalled time
+    // store sector when it holds only damage and NVMRO is deasserted. After the UART (it prints),
+    // before the I2C slaves start: an erase stalls the core for up to 500 ms (16 KB sector) and no
+    // slave exists yet to miss a frame. The DWT cycle counter runs first so the erase can give SysTick the stalled time
     // (systick::catch_up); a counter that does not run is reported by the IPMB master start.
     let _ = bsp::ipmb_common::start_cycle_counter(&mut cp.DCB, &mut cp.DWT);
     let nvmro = bsp::ga::nvmro_asserted();
@@ -157,6 +175,9 @@ fn main() -> ! {
     );
     // Banner first: start_sensors may print the first power event line.
     console.banner();
+    if let Some(error) = app_uart_fault {
+        out!("APP_UART not started: {}\n", error.name());
+    }
     console.start_events();
     console.start_sensors();
     console.prompt();

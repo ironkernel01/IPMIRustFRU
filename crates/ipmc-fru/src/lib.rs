@@ -8,7 +8,7 @@
 //! - `records.rs`: the common header, the board and product info areas, the compile-time image
 //!   built from the IPMC_FRU_* defines, the decoder and `verify`.
 //! - `store.rs`: `FruStore`, the scratchpad memory, and `FruError`.
-//! - `persist.rs`: the stored record, the two-sector flash log behind the `FlashLog` trait, the
+//! - `persist.rs`: the stored record, the one-sector flash log behind the `FlashLog` trait, the
 //!   boot load and the save after a Write FRU Data.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

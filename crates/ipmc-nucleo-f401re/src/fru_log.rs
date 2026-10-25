@@ -24,8 +24,8 @@ pub struct FruLog {
 
 impl FruLog {
     /// boot -- starts the log and loads the stored image; one console line each for the outcome.
-    /// Call it after the clock init and the UART, before the IPMB drivers start: erasing the
-    /// stale sector (see `Persist::boot`) stalls the core for up to 2 s.
+    /// Call it after the clock init and the UART, before the IPMB drivers start: erasing a
+    /// sector without a valid record (see `Persist::boot`) stalls the core for up to 500 ms.
     /// Returns the log and the stored image; None means the built image stays in use (nothing
     /// stored, the log off, or a flash fault). While `nvmro_asserted` the boot erases nothing
     /// (VITA 46.11 Rec 4.1.10-1).
@@ -59,14 +59,13 @@ impl FruLog {
                 error.name()
             );
         }
-        for sector in report.erased.into_iter().flatten() {
-            out!("FRU log: erased stale sector {} at boot\n", sector.name());
+        if report.erased {
+            out!("FRU log: erased the store sector at boot (no valid record)\n");
         }
         match report.loaded {
-            Some((sector, seq)) => out!(
-                "FRU log: loaded record {} from sector {} ({} damaged slots skipped)\n",
+            Some(seq) => out!(
+                "FRU log: loaded record {} ({} damaged slots skipped)\n",
                 seq,
-                sector.name(),
                 report.skipped
             ),
             None => out!("FRU log: no stored image, built image in use\n"),

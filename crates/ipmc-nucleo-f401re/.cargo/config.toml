@@ -1,3 +1,7 @@
 [build]
 target = "thumbv7em-none-eabihf"
+# link.x is this crate's own linker script (crates/ipmc-nucleo-f401re/link.x, derived from
+# cortex-m-rt 0.7.7's link.x.in): the linker finds it in the build directory, the crate root,
+# before the copy cortex-m-rt writes to its build output. It places the vector table in flash
+# sector 0 and the program from sector 2, and leaves sector 1 to the FRU flash store.
 rustflags = ["-C", "link-arg=-Tlink.x"]

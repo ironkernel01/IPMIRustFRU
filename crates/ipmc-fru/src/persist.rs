@@ -1,11 +1,17 @@
 //! persist.rs - keeps the FRU scratchpad on flash: the stored record, the load at boot, the save
-//! after a Write FRU Data, the two-sector log and the dirty/delay rule.
+//! after a Write FRU Data, the one-sector log and the dirty/delay rule.
 //!
-//! The firmware implements `FlashLog` over two erase sectors; everything else is here and runs
-//! on the host in the tests. The log is two sectors of equal size. A save appends one record to
-//! the active sector; when it is full the log switches to the other sector, which holds only
-//! older records and is erased first when it is not blank. Boot takes the valid record with the
-//! highest sequence number.
+//! The firmware implements `FlashLog` over one erase sector (the 16 KB sector 1 of the
+//! STM32F401RE, RM0368 Table 5, `STORE_START`..`STORE_LEN`); everything else is here and runs on
+//! the host in the tests. The log is that one sector. A save appends one record to it; when the
+//! next record does not fit, the save erases the sector and writes the newest image as the first
+//! record. Boot takes the valid record with the highest sequence number.
+//!
+//! Single-sector trade-off (owner decision 10-25-2026, no second copy): a power cut between that
+//! erase and that write loses the stored image, and the next start-up loads the built image. The
+//! erase comes after `Persist::save_needs_erase` and happens once per `RECORDS_PER_SECTOR`
+//! saves: a record is `RECORD_LEN` bytes, so the 16 KB sector holds 16384 / RECORD_LEN = 60
+//! records (RECORD_LEN is 272 bytes at IPMC_FRU_SIZE 256) before the erase.
 //!
 //! Record (little-endian, every field word-aligned, `RECORD_LEN` bytes, SIZE = IPMC_FRU_SIZE):
 //!
@@ -27,7 +33,7 @@
 //! non-zero value). A build from before the byte rejects a record whose settings are not 00h.
 //!
 //! A slot is valid when the commit word, the length, the version, the sequence and the CRC all
-//! check. Erased flash reads FFh. The scan reads every slot of a sector: the next record goes
+//! check. Erased flash reads FFh. The scan reads every slot of the sector: the next record goes
 //! after the last slot that is not all FFh, so an all-FFh slot left behind by a save that failed
 //! before it programmed a bit is never taken for the end of the log (a record after it still
 //! counts). A slot written only in part (power cut) fails a check, is skipped, and the next
@@ -38,8 +44,9 @@
 //! uses its number up, so a record the driver reported as failed but that did land cannot share
 //! its number with the next one.
 //!
-//! Power cut at any word: the previous record is still valid and wins (tested for every word of
-//! a record). The erase of the stale sector never touches the sector holding the newest record.
+//! Power cut at any word of an append: the previous record is still valid and wins (tested for
+//! every word of a record). The erase of the full sector is the one operation that can lose the
+//! image (see above).
 
 use crate::records::SIZE;
 use crate::store::FruStore;
@@ -88,40 +95,75 @@ const _: () = assert!(OFF_IMAGE == OFF_SETTINGS + 1);
 /// IPMC_FRU_SCAN_CHUNK, guarded in ipmc-defs: a multiple of 4, 16..=272).
 const BLANK_CHUNK: usize = ipmc_defs::IPMC_FRU_SCAN_CHUNK as usize;
 
-/// LogSector -- one of the two erase sectors of the log.
+/// STORE_START -- first byte of the store sector: sector 1 of the STM32F401RE (RM0368 Table 5).
+pub const STORE_START: u32 = 0x0800_4000;
+/// STORE_LEN -- bytes of the store sector: sector 1 is 16 KB (RM0368 Table 5).
+pub const STORE_LEN: u32 = 16 * 1024;
+/// RECORDS_PER_SECTOR -- whole records the sector holds before a save erases it.
+pub const RECORDS_PER_SECTOR: usize = STORE_LEN as usize / RECORD_LEN;
+
+/// RegionError -- why the linked store region is not the sector the log is built for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogSector {
-    A,
-    B,
+pub enum RegionError {
+    /// The region start is not on a 16 KB boundary.
+    NotSectorAligned,
+    /// The region does not start at the store sector (RM0368 Table 5, sector 1).
+    Shifted,
+    /// The region is shorter than the sector.
+    TooShort,
+    /// The region is longer than the sector.
+    TooLong,
+    /// The vector table reaches into the region.
+    VectorsReachIn,
+    /// The program starts inside the region.
+    ProgramInside,
 }
 
-impl LogSector {
-    /// BOTH -- the two sectors, A first.
-    pub const BOTH: [LogSector; 2] = [LogSector::A, LogSector::B];
-
-    /// other -- the other sector of the log.
-    pub const fn other(self) -> LogSector {
+impl RegionError {
+    /// text -- text for the console.
+    pub const fn text(self) -> &'static str {
         match self {
-            LogSector::A => LogSector::B,
-            LogSector::B => LogSector::A,
+            RegionError::NotSectorAligned => "the store region is not sector-aligned",
+            RegionError::Shifted => "the store region is not flash sector 1",
+            RegionError::TooShort => "the store region is shorter than sector 1",
+            RegionError::TooLong => "the store region is longer than sector 1",
+            RegionError::VectorsReachIn => "the vector table reaches into the store region",
+            RegionError::ProgramInside => "the program starts inside the store region",
         }
     }
+}
 
-    /// index -- 0 for A, 1 for B.
-    pub const fn index(self) -> usize {
-        match self {
-            LogSector::A => 0,
-            LogSector::B => 1,
-        }
+/// store_region_ok -- checks the linker's store region `start..end` against the sector the log
+/// erases: it must be exactly sector 1 (`STORE_START`, `STORE_LEN`, aligned to its size), the
+/// vector table must end at or before `start` (`vectors_end`) and the program must start at or
+/// after `end` (`text_start`), so an erase of the store never touches code. Returns the region
+/// length. The firmware passes the values of the linker symbols (memory.x, link.x).
+pub const fn store_region_ok(
+    start: u32,
+    end: u32,
+    vectors_end: u32,
+    text_start: u32,
+) -> Result<u32, RegionError> {
+    if !start.is_multiple_of(STORE_LEN) {
+        return Err(RegionError::NotSectorAligned);
     }
-
-    /// name -- "A" or "B" for log lines.
-    pub const fn name(self) -> &'static str {
-        match self {
-            LogSector::A => "A",
-            LogSector::B => "B",
-        }
+    if start != STORE_START {
+        return Err(RegionError::Shifted);
     }
+    let len = end.wrapping_sub(start);
+    if end < start || len < STORE_LEN {
+        return Err(RegionError::TooShort);
+    }
+    if len > STORE_LEN {
+        return Err(RegionError::TooLong);
+    }
+    if vectors_end > start {
+        return Err(RegionError::VectorsReachIn);
+    }
+    if text_start < end {
+        return Err(RegionError::ProgramInside);
+    }
+    Ok(len)
 }
 
 /// FlashError -- why a flash operation failed (the firmware driver maps its status flags here).
@@ -190,22 +232,17 @@ impl From<FlashError> for PersistError {
     }
 }
 
-/// FlashLog -- the two log sectors, as the firmware's flash driver offers them.
+/// FlashLog -- the log sector, as the firmware's flash driver offers it.
 pub trait FlashLog {
-    /// Bytes per log sector (both sectors are the same size).
+    /// Bytes of the log sector.
     fn sector_len(&self) -> usize;
-    /// Reads `out.len()` bytes at `offset` of `sector`; Err(Range) beyond the sector.
-    fn read(&self, sector: LogSector, offset: usize, out: &mut [u8]) -> Result<(), FlashError>;
+    /// Reads `out.len()` bytes at `offset` of the sector; Err(Range) beyond the sector.
+    fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError>;
     /// Programs whole words; `offset` and `words.len() * 4` within the sector, word-aligned.
     /// The words land little-endian in memory; the location must be erased.
-    fn program(
-        &mut self,
-        sector: LogSector,
-        offset: usize,
-        words: &[u32],
-    ) -> Result<(), FlashError>;
-    /// Erases `sector`: every byte reads FFh afterwards.
-    fn erase(&mut self, sector: LogSector) -> Result<(), FlashError>;
+    fn program(&mut self, offset: usize, words: &[u32]) -> Result<(), FlashError>;
+    /// Erases the sector: every byte reads FFh afterwards.
+    fn erase(&mut self) -> Result<(), FlashError>;
     /// The clock in milliseconds (wrapping), read when `Persist` needs the time after a flash
     /// operation: an erase can take seconds, so a time read before it is stale.
     fn millis(&self) -> u32;
@@ -307,18 +344,14 @@ impl SectorInfo {
     }
 }
 
-/// is_erased_from -- true when every byte of `sector` from `start` to its end reads FFh.
-fn is_erased_from<F: FlashLog>(
-    flash: &F,
-    sector: LogSector,
-    start: usize,
-) -> Result<bool, FlashError> {
+/// is_erased_from -- true when every byte of the sector from `start` to its end reads FFh.
+fn is_erased_from<F: FlashLog>(flash: &F, start: usize) -> Result<bool, FlashError> {
     let mut chunk = [0u8; BLANK_CHUNK];
     let mut offset = start;
     while offset < flash.sector_len() {
         let len = BLANK_CHUNK.min(flash.sector_len() - offset);
         let part = chunk.get_mut(..len).ok_or(FlashError::Range)?;
-        flash.read(sector, offset, part)?;
+        flash.read(offset, part)?;
         if part.iter().any(|&b| b != ERASED) {
             return Ok(false);
         }
@@ -327,23 +360,19 @@ fn is_erased_from<F: FlashLog>(
     Ok(true)
 }
 
-/// read_slot -- the record-sized region at `offset` of `sector`.
-fn read_slot<F: FlashLog>(
-    flash: &F,
-    sector: LogSector,
-    offset: usize,
-) -> Result<[u8; RECORD_LEN], FlashError> {
+/// read_slot -- the record-sized region at `offset` of the sector.
+fn read_slot<F: FlashLog>(flash: &F, offset: usize) -> Result<[u8; RECORD_LEN], FlashError> {
     let mut record = [0u8; RECORD_LEN];
-    flash.read(sector, offset, &mut record)?;
+    flash.read(offset, &mut record)?;
     Ok(record)
 }
 
-/// scan_sector -- reads every slot of `sector`, bounded by the sector length over RECORD_LEN.
+/// scan_sector -- reads every slot of the sector, bounded by the sector length over RECORD_LEN.
 /// The next free slot is the one after the last slot that is not blank; a blank slot before it
 /// (a save that failed before programming a bit, then a save after it) is a hole, never reused.
 /// The bytes past the last whole slot must read erased too, else the sector has no usable room
 /// (an interrupted erase leaves such garbage).
-fn scan_sector<F: FlashLog>(flash: &F, sector: LogSector) -> Result<SectorInfo, FlashError> {
+fn scan_sector<F: FlashLog>(flash: &F) -> Result<SectorInfo, FlashError> {
     let slots = flash.sector_len() / RECORD_LEN;
     let mut info = SectorInfo {
         next_free: None,
@@ -352,7 +381,7 @@ fn scan_sector<F: FlashLog>(flash: &F, sector: LogSector) -> Result<SectorInfo, 
     let mut used_end = 0;
     for slot in 0..slots {
         let offset = slot * RECORD_LEN;
-        match classify(&read_slot(flash, sector, offset)?) {
+        match classify(&read_slot(flash, offset)?) {
             Slot::Blank => continue,
             Slot::Valid(seq) => {
                 info.valid += 1;
@@ -362,9 +391,7 @@ fn scan_sector<F: FlashLog>(flash: &F, sector: LogSector) -> Result<SectorInfo, 
         }
         used_end = offset + RECORD_LEN;
     }
-    if used_end + RECORD_LEN <= flash.sector_len()
-        && is_erased_from(flash, sector, slots * RECORD_LEN)?
-    {
+    if used_end + RECORD_LEN <= flash.sector_len() && is_erased_from(flash, slots * RECORD_LEN)? {
         info.next_free = Some(used_end);
     }
     Ok(info)
@@ -373,46 +400,42 @@ fn scan_sector<F: FlashLog>(flash: &F, sector: LogSector) -> Result<SectorInfo, 
 /// Saved -- what one save did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Saved {
-    /// The sector the record went to.
-    pub sector: LogSector,
-    /// Its offset in that sector.
+    /// Its offset in the sector.
     pub offset: usize,
     /// Its sequence number.
     pub seq: u32,
-    /// The sector erased first to make room (the other sector was not blank), if any.
-    pub erased: Option<LogSector>,
+    /// The sector was full and was erased first; the record is the first one in it.
+    pub erased: bool,
 }
 
 /// BootReport -- what `boot` found and did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootReport {
-    /// The sector and sequence number of the record loaded; None when no valid record exists.
-    pub loaded: Option<(LogSector, u32)>,
-    /// The sectors erased at boot (the stale one, or every non-blank one when no record is valid).
-    pub erased: [Option<LogSector>; 2],
-    /// Slots skipped as partly written or damaged, over both sectors.
+    /// The sequence number of the record loaded; None when no valid record exists.
+    pub loaded: Option<u32>,
+    /// The sector was erased at boot (it held no valid record, only damage).
+    pub erased: bool,
+    /// Slots skipped as partly written or damaged.
     pub skipped: u32,
-    /// The housekeeping erase that failed, if one did. The image found is still returned: a
-    /// failed erase of a stale sector loses nothing, and the next save erases again as needed.
+    /// The housekeeping erase that failed, if one did. A failed erase of a sector without a
+    /// valid record loses nothing, and the next save erases again as needed.
     pub housekeeping: Option<PersistError>,
 }
 
 /// Status -- the log state the console shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
-    /// The sector new records go to.
-    pub active: LogSector,
-    /// Valid records per sector (A, B).
-    pub records: [u32; 2],
+    /// Valid records in the sector.
+    pub records: u32,
     /// Highest sequence number in the log; None while the log holds no record.
     pub newest_seq: Option<u32>,
-    /// Bytes still free in the active sector (a whole number of records is smaller).
+    /// Bytes still free in the sector (a whole number of records is smaller).
     pub bytes_free: usize,
     /// A write is waiting for its delay or for NVMRO to clear.
     pub pending: bool,
     /// SysTick time of the last successful save; None before the first.
     pub last_save_ms: Option<u32>,
-    /// The other sector holds old records and waits for its erase.
+    /// The sector has no room for another record: the next save erases it first.
     pub erase_pending: bool,
     /// Successful saves since boot.
     pub saves: u32,
@@ -427,8 +450,7 @@ pub struct Status {
 /// to the save that may erase.
 pub struct Persist {
     sector_len: usize,
-    info: [SectorInfo; 2],
-    active: LogSector,
+    info: SectorInfo,
     next_seq: u32,
     pending: bool,
     last_write_ms: u32,
@@ -443,8 +465,7 @@ impl Persist {
     pub const fn new() -> Persist {
         Persist {
             sector_len: 0,
-            info: [SectorInfo::BLANK; 2],
-            active: LogSector::A,
+            info: SectorInfo::BLANK,
             next_seq: 1,
             pending: false,
             last_write_ms: 0,
@@ -455,31 +476,20 @@ impl Persist {
         }
     }
 
-    fn info_of(&self, sector: LogSector) -> &SectorInfo {
-        &self.info[sector.index()]
-    }
-
-    fn info_mut(&mut self, sector: LogSector) -> &mut SectorInfo {
-        &mut self.info[sector.index()]
-    }
-
-    /// boot -- scans both sectors and loads the newest valid record.
+    /// boot -- scans the sector and loads the newest valid record.
     /// 1. The sector must hold at least one record, in whole words.
-    /// 2. Both sectors are scanned (`scan_sector`); the valid record with the highest sequence
-    ///    number is the stored image, its sector is the active one and the next sequence number
-    ///    follows it.
-    /// 3. No valid record anywhere: every non-blank sector is erased (nothing is lost) and the
-    ///    built image stays in use (`Ok(None)`).
-    /// 4. Otherwise the stale sector (the one without the newest record) is erased when it is not
-    ///    blank and the active sector is more than half full, so a run-time erase stays rare.
-    ///    The stale sector holds only older records: a power cut during this erase loses none.
-    ///    An erase that fails (steps 3 and 4) never discards the image found: `boot` still
-    ///    returns it, with the error in `BootReport::housekeeping`.
+    /// 2. The sector is scanned (`scan_sector`); the valid record with the highest sequence
+    ///    number is the stored image and the next sequence number follows it. Nothing is
+    ///    erased: the sector is the only copy, and a full sector is erased by the next save,
+    ///    which writes the newest image straight after.
+    /// 3. No valid record: a sector that is not blank (damage only, nothing is lost) is erased
+    ///    and the built image stays in use (`Ok(None)`). An erase that fails does not stop the
+    ///    boot: the error is in `BootReport::housekeeping`.
     ///
-    /// While `nvmro_asserted` steps 3 and 4 erase nothing (VITA 46.11 Rec 4.1.10-1: no write to
-    /// IPMC non-volatile memory); the sectors keep their state and the first save after NVMRO
-    /// clears erases what it needs. Call it before the I2C drivers start: an erase takes the
-    /// flash away from the CPU for up to the sector erase time.
+    /// While `nvmro_asserted` step 3 erases nothing (VITA 46.11 Rec 4.1.10-1: no write to IPMC
+    /// non-volatile memory); the sector keeps its state and the first save after NVMRO clears
+    /// erases what it needs. Call it before the I2C drivers start: an erase takes the flash away
+    /// from the CPU for up to the sector erase time.
     pub fn boot<F: FlashLog>(
         &mut self,
         flash: &mut F,
@@ -490,66 +500,40 @@ impl Persist {
             return Err(PersistError::SectorGeometry);
         }
         self.sector_len = sector_len;
-        self.info = [
-            scan_sector(flash, LogSector::A)?,
-            scan_sector(flash, LogSector::B)?,
-        ];
+        self.info = scan_sector(flash)?;
         let mut report = BootReport {
             loaded: None,
-            erased: [None, None],
-            skipped: self.info.iter().map(|i| i.skipped).sum(),
+            erased: false,
+            skipped: self.info.skipped,
             housekeeping: None,
         };
-        let newest = LogSector::BOTH
-            .into_iter()
-            .filter_map(|s| self.info_of(s).newest.map(|seq| (s, seq)))
-            .max_by_key(|&(_, seq)| seq);
-        let Some((sector, seq)) = newest else {
-            for s in LogSector::BOTH {
-                if !nvmro_asserted && !self.info_of(s).is_blank() {
-                    match self.erase_sector(flash, s) {
-                        Ok(()) => report.erased[s.index()] = Some(s),
-                        Err(error) => {
-                            report.housekeeping = Some(error);
-                            break;
-                        }
-                    }
+        let Some(seq) = self.info.newest else {
+            if !nvmro_asserted && !self.info.is_blank() {
+                match self.erase_sector(flash) {
+                    Ok(()) => report.erased = true,
+                    Err(error) => report.housekeeping = Some(error),
                 }
             }
-            self.active = LogSector::A;
             self.next_seq = 1;
             return Ok((None, report));
         };
-        self.active = sector;
         self.next_seq = seq.checked_add(1).ok_or(PersistError::SequenceExhausted)?;
-        report.loaded = Some((sector, seq));
-        let (image, settings) = self.read_newest(flash, sector, seq)?;
-        let more_than_half_full = self
-            .info_of(sector)
-            .next_free
-            .is_none_or(|free| free > self.sector_len / 2);
-        let stale = sector.other();
-        if !nvmro_asserted && more_than_half_full && !self.info_of(stale).is_blank() {
-            match self.erase_sector(flash, stale) {
-                Ok(()) => report.erased[stale.index()] = Some(stale),
-                Err(error) => report.housekeeping = Some(error),
-            }
-        }
+        report.loaded = Some(seq);
+        let (image, settings) = self.read_newest(flash, seq)?;
         let mut store = FruStore::from_image(image);
         store.load_nv_settings(settings);
         Ok((Some(store), report))
     }
 
-    /// read_newest -- the image and the settings byte (masked) of the valid record `seq` in
-    /// `sector`: found again by a scan of the sector (the scan keeps no offsets, to stay small).
+    /// read_newest -- the image and the settings byte (masked) of the valid record `seq`: found
+    /// again by a scan of the sector (the scan keeps no offsets, to stay small).
     fn read_newest<F: FlashLog>(
         &self,
         flash: &F,
-        sector: LogSector,
         seq: u32,
     ) -> Result<([u8; SIZE], u8), PersistError> {
         for slot in 0..self.sector_len / RECORD_LEN {
-            let record = read_slot(flash, sector, slot * RECORD_LEN)?;
+            let record = read_slot(flash, slot * RECORD_LEN)?;
             if classify(&record) == Slot::Valid(seq) {
                 let mut image = [0u8; SIZE];
                 if let Some(bytes) = record.get(OFF_IMAGE..OFF_CRC) {
@@ -563,24 +547,21 @@ impl Persist {
         Err(PersistError::Flash(FlashError::Verify))
     }
 
-    /// erase_sector -- erases `sector`, checks that it reads blank and records it as blank.
-    fn erase_sector<F: FlashLog>(
-        &mut self,
-        flash: &mut F,
-        sector: LogSector,
-    ) -> Result<(), PersistError> {
-        flash.erase(sector)?;
-        if !is_erased_from(flash, sector, 0)? {
+    /// erase_sector -- erases the sector, checks that it reads blank and records it as blank.
+    fn erase_sector<F: FlashLog>(&mut self, flash: &mut F) -> Result<(), PersistError> {
+        flash.erase()?;
+        if !is_erased_from(flash, 0)? {
             return Err(PersistError::Flash(FlashError::Verify));
         }
-        *self.info_mut(sector) = SectorInfo::BLANK;
+        self.info = SectorInfo::BLANK;
         Ok(())
     }
 
     /// save -- appends the record of `image` and the settings byte to the log.
-    /// 1. The active sector has a free slot: the record goes there.
-    /// 2. Else the log switches to the other sector; when that one is not blank it is erased
-    ///    first (`flash.erase`; the full active sector keeps the newest record meanwhile).
+    /// 1. The sector has a free slot: the record goes there.
+    /// 2. Else the sector is erased (`flash.erase`) and the record becomes its first one. The
+    ///    sector held the only copy, so a power cut between the erase and the end of the
+    ///    programming loses the stored image (module comment).
     /// 3. The words after the commit word are programmed, then the commit word; the slot is read
     ///    back and must classify as valid with the same sequence number (Err(Verify) otherwise).
     ///
@@ -598,35 +579,29 @@ impl Persist {
         if seq > SEQ_MAX {
             return Err(PersistError::SequenceExhausted);
         }
-        let mut erased = None;
-        let (sector, offset) = match self.info_of(self.active).next_free {
-            Some(offset) => (self.active, offset),
+        let mut erased = false;
+        let offset = match self.info.next_free {
+            Some(offset) => offset,
             None => {
-                let other = self.active.other();
-                if !self.info_of(other).is_blank() {
-                    self.erase_sector(flash, other)?;
-                    erased = Some(other);
-                }
-                (other, 0)
+                self.erase_sector(flash)?;
+                erased = true;
+                0
             }
         };
         let record = encode(seq, image, settings);
         let words = pack_words(&record);
-        if let Err(error) = Self::program_record(flash, sector, offset, &words, &record) {
-            self.skip_slot(sector, offset);
+        if let Err(error) = Self::program_record(flash, offset, &words, &record) {
+            self.skip_slot(offset);
             // seq <= SEQ_MAX (checked above), so this does not overflow.
             self.next_seq = seq + 1;
             return Err(error);
         }
-        self.active = sector;
         self.next_seq = seq + 1;
         let next = offset + RECORD_LEN;
-        let info = self.info_mut(sector);
-        info.next_free = (next + RECORD_LEN <= flash.sector_len()).then_some(next);
-        info.newest = Some(seq);
-        info.valid += 1;
+        self.info.next_free = (next + RECORD_LEN <= flash.sector_len()).then_some(next);
+        self.info.newest = Some(seq);
+        self.info.valid += 1;
         Ok(Saved {
-            sector,
             offset,
             seq,
             erased,
@@ -636,15 +611,14 @@ impl Persist {
     /// program_record -- the programming order and the read-back of one record.
     fn program_record<F: FlashLog>(
         flash: &mut F,
-        sector: LogSector,
         offset: usize,
         words: &[u32; RECORD_WORDS],
         record: &[u8; RECORD_LEN],
     ) -> Result<(), PersistError> {
         let (commit, rest) = words.split_at(1);
-        flash.program(sector, offset + WORD, rest)?;
-        flash.program(sector, offset, commit)?;
-        let stored = read_slot(flash, sector, offset)?;
+        flash.program(offset + WORD, rest)?;
+        flash.program(offset, commit)?;
+        let stored = read_slot(flash, offset)?;
         if stored != *record
             || classify(&stored) != Slot::Valid(u32::from_le_bytes(field(record, OFF_SEQ)))
         {
@@ -655,20 +629,16 @@ impl Persist {
 
     /// skip_slot -- marks the slot at `offset` unusable after a failed program: the next record
     /// goes to the slot after it, or the sector counts as full.
-    fn skip_slot(&mut self, sector: LogSector, offset: usize) {
+    fn skip_slot(&mut self, offset: usize) {
         let next = offset + RECORD_LEN;
-        let sector_len = self.sector_len;
-        let info = self.info_mut(sector);
-        info.skipped += 1;
-        info.next_free = (next + RECORD_LEN <= sector_len).then_some(next);
+        self.info.skipped += 1;
+        self.info.next_free = (next + RECORD_LEN <= self.sector_len).then_some(next);
     }
 
     /// restore -- FRU RESTORE: saves `image` (the built image) as a new record with the next
-    /// sequence number, immediately and not after the delay. One record write, so a power cut at
-    /// any point loads either the previous newest image or `image`, never an older one; the old
-    /// records are reclaimed by the normal sector rules (the erase the next save or boot needs).
-    /// A pending write is dropped on success (the caller replaces the store with `image`); on
-    /// failure nothing changes.
+    /// sequence number, immediately and not after the delay. When the sector is full this erases
+    /// it first, like any save. A pending write is dropped on success (the caller replaces the
+    /// store with `image`); on failure nothing changes.
     pub fn restore<F: FlashLog>(
         &mut self,
         flash: &mut F,
@@ -680,11 +650,9 @@ impl Persist {
         Ok(saved)
     }
 
-    /// save_needs_erase -- the next save erases a sector first: the active sector has no free
-    /// slot and the other one is not blank.
+    /// save_needs_erase -- the next save erases the sector first: it has no free slot.
     pub fn save_needs_erase(&self) -> bool {
-        self.info_of(self.active).next_free.is_none()
-            && !self.info_of(self.active.other()).is_blank()
+        self.info.next_free.is_none()
     }
 
     /// poll -- the dirty/delay rule, called every main-loop pass with the SysTick time.
@@ -697,7 +665,7 @@ impl Persist {
     ///    failure is reported (`FlashLog::millis`, read after the operation: a slow erase that
     ///    fails must not use up the delay), so a failing flash is retried once per delay, not
     ///    once per pass.
-    /// 4. A save that has to erase a sector (`save_needs_erase`) waits until `erase_ok`: the
+    /// 4. A save that has to erase the sector (`save_needs_erase`) waits until `erase_ok`: the
     ///    firmware passes true when the bus has been quiet; the image stays safe in RAM.
     ///
     /// Returns the outcome of a save attempted in this call, None when none was due.
@@ -743,17 +711,16 @@ impl Persist {
 
     /// status -- the log state for the console.
     pub fn status(&self) -> Status {
-        let active = self.info_of(self.active);
         Status {
-            active: self.active,
-            records: [self.info[0].valid, self.info[1].valid],
-            newest_seq: self.info.iter().filter_map(|i| i.newest).max(),
-            bytes_free: active
+            records: self.info.valid,
+            newest_seq: self.info.newest,
+            bytes_free: self
+                .info
                 .next_free
                 .map_or(0, |free| self.sector_len.saturating_sub(free)),
             pending: self.pending,
             last_save_ms: self.last_save_ms,
-            erase_pending: !self.info_of(self.active.other()).is_blank(),
+            erase_pending: self.save_needs_erase(),
             saves: self.saves,
             failures: self.failures,
             last_error: self.last_error,

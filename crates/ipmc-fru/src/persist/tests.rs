@@ -14,7 +14,7 @@ const DELAY_MS: u32 = 1000;
 const TAG_AT: usize = SIZE - 1;
 
 struct Mock {
-    sectors: [Vec<u8>; 2],
+    sector: Vec<u8>,
     /// Words that may still be programmed; None = unlimited. At 0 the next word fails.
     budget: Option<usize>,
     words_programmed: usize,
@@ -23,7 +23,7 @@ struct Mock {
     late_error: Option<usize>,
     /// The next erase sets only the first half of the sector to FFh and fails (power cut).
     torn_erase: bool,
-    erases: Vec<LogSector>,
+    erases: usize,
     /// The clock `FlashLog::millis` reports; an erase advances it by `erase_ms` (a slow erase).
     now: u32,
     erase_ms: u32,
@@ -36,12 +36,12 @@ struct Mock {
 impl Mock {
     fn new() -> Mock {
         Mock {
-            sectors: [vec![ERASED; SECTOR_LEN], vec![ERASED; SECTOR_LEN]],
+            sector: vec![ERASED; SECTOR_LEN],
             budget: None,
             words_programmed: 0,
             late_error: None,
             torn_erase: false,
-            erases: Vec::new(),
+            erases: 0,
             now: 0,
             erase_ms: 0,
             erase_fails: false,
@@ -52,24 +52,18 @@ impl Mock {
 
 impl FlashLog for Mock {
     fn sector_len(&self) -> usize {
-        self.sectors[0].len()
+        self.sector.len()
     }
 
-    fn read(&self, sector: LogSector, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
-        let end = offset.checked_add(out.len()).ok_or(FlashError::Range)?;
-        let bytes = self.sectors[sector.index()]
-            .get(offset..end)
-            .ok_or(FlashError::Range)?;
-        out.copy_from_slice(bytes);
+    fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+        for (i, slot) in out.iter_mut().enumerate() {
+            let at = offset.checked_add(i).ok_or(FlashError::Range)?;
+            *slot = *self.sector.get(at).ok_or(FlashError::Range)?;
+        }
         Ok(())
     }
 
-    fn program(
-        &mut self,
-        sector: LogSector,
-        offset: usize,
-        words: &[u32],
-    ) -> Result<(), FlashError> {
+    fn program(&mut self, offset: usize, words: &[u32]) -> Result<(), FlashError> {
         if self.nvmro {
             return Err(FlashError::NvmroAsserted);
         }
@@ -81,7 +75,8 @@ impl FlashLog for Mock {
                 return Err(FlashError::Programming);
             }
             let at = offset + i * WORD;
-            let target = self.sectors[sector.index()]
+            let target = self
+                .sector
                 .get_mut(at..at + WORD)
                 .ok_or(FlashError::Range)?;
             for (byte, new) in target.iter_mut().zip(word.to_le_bytes()) {
@@ -96,16 +91,16 @@ impl FlashLog for Mock {
         Ok(())
     }
 
-    fn erase(&mut self, sector: LogSector) -> Result<(), FlashError> {
+    fn erase(&mut self) -> Result<(), FlashError> {
         if self.nvmro {
             return Err(FlashError::NvmroAsserted);
         }
-        self.erases.push(sector);
+        self.erases += 1;
         self.now = self.now.wrapping_add(self.erase_ms);
         if self.erase_fails {
             return Err(FlashError::Timeout);
         }
-        let bytes = &mut self.sectors[sector.index()];
+        let bytes = &mut self.sector;
         if std::mem::take(&mut self.torn_erase) {
             bytes[..SECTOR_LEN / 2].fill(ERASED);
             return Err(FlashError::Timeout);
@@ -194,9 +189,9 @@ fn empty_flash_loads_the_built_image() {
     let (log, store, report) = booted(&mut flash);
     assert!(store.is_none(), "None means: use the built image");
     assert_eq!(report.loaded, None);
-    assert_eq!(report.erased, [None, None]);
+    assert!(!report.erased);
     assert_eq!(log.status().newest_seq, None);
-    assert!(flash.erases.is_empty());
+    assert_eq!(flash.erases, 0);
 }
 
 #[test]
@@ -207,64 +202,62 @@ fn save_then_load_returns_the_image_and_starts_at_sequence_1() {
     assert_eq!(
         saved,
         Saved {
-            sector: LogSector::A,
             offset: 0,
             seq: 1,
-            erased: None
+            erased: false
         }
     );
     let (_, store, report) = booted(&mut flash);
     assert_eq!(store.unwrap().image(), &image(0x11));
-    assert_eq!(report.loaded, Some((LogSector::A, 1)));
+    assert_eq!(report.loaded, Some(1));
 }
 
 #[test]
-fn the_newest_sequence_wins_across_both_sectors() {
-    // 4 records fill A (1..=4), the next 4 fill B (5..=8), the 9th erases A and lands there.
-    let mut flash = Mock::new();
-    let (mut log, _, _) = booted(&mut flash);
-    for (count, want) in [
-        (5u8, (LogSector::B, 5u32)),
-        (8, (LogSector::B, 8)),
-        (9, (LogSector::A, 9)),
-    ] {
-        let done = u8::try_from(log.status().newest_seq.unwrap_or(0)).unwrap();
-        save_tags(&mut log, &mut flash, done + 1..=count);
-        let (_, store, report) = booted(&mut flash);
-        assert_eq!(report.loaded, Some(want), "after {count} saves");
-        assert_eq!(store.unwrap().image()[TAG_AT], count);
-    }
-}
-
-#[test]
-fn a_full_sector_switches_and_marks_the_old_one_erase_pending() {
+fn the_newest_sequence_wins_and_survives_the_erase_of_a_full_sector() {
+    // 4 records fill the sector (1..=4); the 5th erases it and becomes the first record.
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
     save_tags(&mut log, &mut flash, 1..=4);
-    let s = log.status();
-    assert_eq!(
-        (s.active, s.records, s.erase_pending),
-        (LogSector::A, [4, 0], false)
-    );
+    let (_, store, report) = booted(&mut flash);
+    assert_eq!(report.loaded, Some(4));
+    assert_eq!(store.unwrap().image()[TAG_AT], 4);
     let saved = log.save(&mut flash, &image(5), 0).unwrap();
     assert_eq!(
-        (saved.sector, saved.offset, saved.erased),
-        (LogSector::B, 0, None)
+        saved,
+        Saved {
+            offset: 0,
+            seq: 5,
+            erased: true
+        }
     );
+    let (_, store, report) = booted(&mut flash);
+    assert_eq!(
+        report.loaded,
+        Some(5),
+        "the sequence goes on after the erase"
+    );
+    assert_eq!(store.unwrap().image()[TAG_AT], 5);
+    assert_eq!(report.skipped, 0);
+}
+
+#[test]
+fn a_full_sector_is_erased_by_the_next_save_alone() {
+    let mut flash = Mock::new();
+    let (mut log, _, _) = booted(&mut flash);
+    save_tags(&mut log, &mut flash, 1..=3);
     let s = log.status();
-    assert_eq!(
-        (s.active, s.records, s.erase_pending),
-        (LogSector::B, [4, 1], true)
-    );
-    assert!(flash.erases.is_empty(), "the switch alone erases nothing");
-    // B fills, then the next save erases A first and reports it.
-    save_tags(&mut log, &mut flash, 6..=8);
-    let saved = log.save(&mut flash, &image(9), 0).unwrap();
-    assert_eq!(
-        (saved.sector, saved.erased),
-        (LogSector::A, Some(LogSector::A))
-    );
-    assert_eq!(flash.erases, [LogSector::A]);
+    assert_eq!((s.records, s.erase_pending), (3, false));
+    assert!(!log.save_needs_erase());
+    log.save(&mut flash, &image(4), 0).unwrap();
+    let s = log.status();
+    assert_eq!((s.records, s.erase_pending, s.bytes_free), (4, true, 0));
+    assert!(log.save_needs_erase());
+    assert_eq!(flash.erases, 0, "filling the sector erases nothing");
+    let saved = log.save(&mut flash, &image(5), 0).unwrap();
+    assert_eq!((saved.offset, saved.erased), (0, true));
+    assert_eq!(flash.erases, 1);
+    let s = log.status();
+    assert_eq!((s.records, s.erase_pending), (1, false));
 }
 
 #[test]
@@ -279,7 +272,7 @@ fn a_power_cut_after_any_single_word_loads_the_previous_good_image() {
         assert_eq!(result.is_ok(), complete, "cut after word {cut_after}");
         if !complete {
             // The commit word goes last: a cut before the final word leaves it erased.
-            let commit = &flash.sectors[0][RECORD_LEN..RECORD_LEN + WORD];
+            let commit = &flash.sector[RECORD_LEN..RECORD_LEN + WORD];
             assert_eq!(commit, [ERASED; WORD], "cut after word {cut_after}");
         }
         flash.budget = None;
@@ -316,10 +309,10 @@ fn a_flipped_bit_in_a_stored_image_fails_the_crc_and_the_previous_record_loads()
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
     save_tags(&mut log, &mut flash, 1..=2);
-    flash.sectors[0][RECORD_LEN + OFF_IMAGE + 10] ^= 0x20;
+    flash.sector[RECORD_LEN + OFF_IMAGE + 10] ^= 0x20;
     let (_, store, report) = booted(&mut flash);
     assert_eq!(store.unwrap().image()[TAG_AT], 1);
-    assert_eq!(report.loaded, Some((LogSector::A, 1)));
+    assert_eq!(report.loaded, Some(1));
     assert_eq!(report.skipped, 1);
 }
 
@@ -386,7 +379,7 @@ fn the_delay_coalesces_quick_writes_into_one_save() {
         )
         .is_none());
     let s = log.status();
-    assert_eq!((s.saves, s.records, s.pending), (1, [1, 0], false));
+    assert_eq!((s.saves, s.records, s.pending), (1, 1, false));
     assert_eq!(s.last_save_ms, Some(last_write + DELAY_MS));
     assert_eq!(
         loaded_tag(&mut flash),
@@ -422,39 +415,37 @@ fn a_failing_flash_is_retried_once_per_delay() {
 }
 
 #[test]
-fn boot_erases_the_stale_sector_only_when_the_active_one_is_over_half_full() {
-    // After 5 saves B holds one record: under half full, A stays.
-    let mut flash = Mock::new();
-    let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=5);
-    let (_, _, report) = booted(&mut flash);
-    assert_eq!(report.erased, [None, None]);
-    assert!(flash.erases.is_empty());
-    // After 7 saves B holds three of four: A is erased, the newest record survives.
-    save_tags(&mut log, &mut flash, 6..=7);
-    let (log, store, report) = booted(&mut flash);
-    assert_eq!(report.erased, [Some(LogSector::A), None]);
-    assert_eq!(flash.erases, [LogSector::A]);
-    assert_eq!(store.unwrap().image()[TAG_AT], 7);
-    assert!(!log.status().erase_pending);
+fn boot_never_erases_a_sector_that_holds_a_valid_record() {
+    // Single sector: the erase of a full sector belongs to the next save, which writes the
+    // newest image straight after; a boot erase would destroy the only copy.
+    for saves in [1u8, 3, 4] {
+        let mut flash = Mock::new();
+        let (mut log, _, _) = booted(&mut flash);
+        save_tags(&mut log, &mut flash, 1..=saves);
+        let (log, store, report) = booted(&mut flash);
+        assert!(!report.erased, "saves {saves}");
+        assert_eq!(flash.erases, 0, "saves {saves}");
+        assert_eq!(store.unwrap().image()[TAG_AT], saves);
+        assert_eq!(log.save_needs_erase(), saves == 4, "saves {saves}");
+    }
 }
 
 #[test]
-fn boot_clears_sectors_that_hold_no_valid_record() {
+fn boot_clears_a_sector_that_holds_no_valid_record() {
     let mut flash = Mock::new();
-    flash.sectors[0][5] = 0x00; // garbage in A: an interrupted write or erase
+    flash.sector[5] = 0x00; // garbage: an interrupted write or erase
     let (log, store, report) = booted(&mut flash);
     assert!(store.is_none());
-    assert_eq!(report.erased, [Some(LogSector::A), None]);
+    assert!(report.erased);
     assert_eq!(report.skipped, 1);
-    assert!(flash.sectors[0].iter().all(|&b| b == ERASED));
+    assert!(flash.sector.iter().all(|&b| b == ERASED));
     assert_eq!(log.status().newest_seq, None);
 }
 
 #[test]
 fn a_sector_too_small_for_one_record_is_refused() {
     let mut flash = Mock::new();
-    flash.sectors = [vec![ERASED; RECORD_LEN - 4], vec![ERASED; RECORD_LEN - 4]];
+    flash.sector = vec![ERASED; RECORD_LEN - 4];
     assert_eq!(
         Persist::new().boot(&mut flash, false).err(),
         Some(PersistError::SectorGeometry)
@@ -462,18 +453,16 @@ fn a_sector_too_small_for_one_record_is_refused() {
 }
 
 #[test]
-fn garbage_after_the_last_record_leaves_no_room_in_that_sector() {
+fn garbage_after_the_last_record_leaves_no_room_so_the_save_erases_first() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
     save_tags(&mut log, &mut flash, 1..=1);
-    flash.sectors[0][SECTOR_LEN - 1] = 0x7F; // an interrupted erase left a cell programmed
+    flash.sector[SECTOR_LEN - 1] = 0x7F; // an interrupted erase left a cell programmed
     let (mut log, _, _) = booted(&mut flash);
+    assert!(log.save_needs_erase(), "the sector is treated as full");
     let saved = log.save(&mut flash, &image(2), 0).unwrap();
-    assert_eq!(
-        (saved.sector, saved.erased),
-        (LogSector::B, None),
-        "A is treated as full"
-    );
+    assert_eq!((saved.offset, saved.erased), (0, true));
+    assert_eq!(loaded_tag(&mut flash), Some(2));
 }
 
 #[test]
@@ -496,7 +485,7 @@ fn a_save_that_programs_nothing_leaves_a_hole_and_the_record_after_it_still_load
         );
         let (mut log, store, report) = booted(&mut flash);
         assert_eq!(store.map(|s| s.image()[TAG_AT]), Some(7), "hole {hole}");
-        assert_eq!(report.erased, [None, None], "hole {hole}: nothing erased");
+        assert!(!report.erased, "hole {hole}: nothing erased");
         let next = log.save(&mut flash, &image(8), 0).unwrap();
         assert_eq!(
             next.offset,
@@ -521,66 +510,79 @@ fn a_driver_error_after_the_record_landed_uses_its_sequence_number_up() {
     let saved = log.save(&mut flash, &image(2), 0).unwrap();
     assert_eq!((saved.offset, saved.seq), (RECORD_LEN, 2));
     let (_, store, report) = booted(&mut flash);
-    assert_eq!(report.loaded, Some((LogSector::A, 2)));
+    assert_eq!(report.loaded, Some(2));
     assert_eq!(store.unwrap().image()[TAG_AT], 2, "the later write wins");
 }
 
 #[test]
 fn boot_with_nvmro_asserted_erases_nothing() {
-    // (saves before the boot, garbage byte in sector A): both would make a boot erase a sector.
-    for (saves, garbage) in [(7u8, false), (0, true)] {
-        let mut flash = Mock::new();
-        let (mut log, _, _) = booted(&mut flash);
-        save_tags(&mut log, &mut flash, 1..=saves);
-        if garbage {
-            flash.sectors[0][5] = 0x00;
-        }
-        let (_, store, report) = booted_nvmro(&mut flash, true);
-        assert_eq!(report.erased, [None, None], "saves {saves}");
-        assert!(flash.erases.is_empty(), "saves {saves}");
-        assert_eq!(
-            store.map(|s| s.image()[TAG_AT]),
-            (saves > 0).then_some(saves)
-        );
-        let (_, _, report) = booted(&mut flash);
-        assert_ne!(report.erased, [None, None], "NVMRO clear: the erase is due");
-    }
+    // A sector with garbage and no valid record is erased by a boot, unless NVMRO is asserted.
+    let mut flash = Mock::new();
+    flash.sector[5] = 0x00;
+    let (_, store, report) = booted_nvmro(&mut flash, true);
+    assert!(store.is_none());
+    assert!(!report.erased);
+    assert_eq!(flash.erases, 0);
+    let (_, _, report) = booted(&mut flash);
+    assert!(report.erased, "NVMRO clear: the erase is due");
+    // A sector with a valid record is never erased by a boot, NVMRO or not.
+    let mut flash = Mock::new();
+    let (mut log, _, _) = booted(&mut flash);
+    save_tags(&mut log, &mut flash, 1..=4);
+    let (_, store, report) = booted_nvmro(&mut flash, true);
+    assert_eq!(store.map(|s| s.image()[TAG_AT]), Some(4));
+    assert!(!report.erased);
+    assert_eq!(flash.erases, 0);
 }
 
 #[test]
-fn a_power_cut_during_the_switch_erase_keeps_the_newest_record() {
+fn a_power_cut_between_the_erase_and_the_write_loses_the_image() {
+    // Owner decision 10-25-2026: one sector, no second copy. The save of the 5th record erases
+    // the full sector and the power goes before the first word lands: the next start-up finds
+    // no record and loads the built image.
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=8);
-    // B is full and active; the 9th save erases A first, and the power goes in that erase.
+    save_tags(&mut log, &mut flash, 1..=4);
+    flash.budget = Some(0);
+    assert_eq!(
+        log.save(&mut flash, &image(5), 0),
+        Err(PersistError::Flash(FlashError::Programming))
+    );
+    assert_eq!(flash.erases, 1);
+    assert_eq!(loaded_tag(&mut flash), None, "the stored image is gone");
+}
+
+#[test]
+fn a_power_cut_during_the_erase_never_loads_a_damaged_image() {
+    let mut flash = Mock::new();
+    let (mut log, _, _) = booted(&mut flash);
+    save_tags(&mut log, &mut flash, 1..=4);
+    // The erase is torn: the first half of the sector reads FFh, the rest is as it was.
     flash.torn_erase = true;
     assert_eq!(
-        log.save(&mut flash, &image(9), 0),
+        log.save(&mut flash, &image(5), 0),
         Err(PersistError::Flash(FlashError::Timeout))
     );
     let (mut log, store, report) = booted(&mut flash);
-    assert_eq!(report.loaded, Some((LogSector::B, 8)));
-    assert_eq!(store.unwrap().image()[TAG_AT], 8);
-    assert_eq!(
-        report.erased,
-        [Some(LogSector::A), None],
-        "the torn sector is erased again"
+    let tag = store.map(|s| s.image()[TAG_AT]);
+    assert!(
+        matches!(tag, Some(4) | None),
+        "only a whole record of the old log may load, got {tag:?}"
     );
-    let saved = log.save(&mut flash, &image(9), 0).unwrap();
-    assert_eq!(
-        (saved.sector, saved.offset, saved.seq),
-        (LogSector::A, 0, 9)
-    );
-    assert_eq!(loaded_tag(&mut flash), Some(9));
+    assert_eq!(report.loaded.is_some(), tag.is_some());
+    // The log goes on: the next save erases (garbage or a full sector) and writes record one.
+    let saved = log.save(&mut flash, &image(6), 0).unwrap();
+    assert_eq!(saved.offset, if saved.erased { 0 } else { saved.offset });
+    assert_eq!(loaded_tag(&mut flash), Some(6));
 }
 
 #[test]
 fn the_highest_sequence_number_loads_and_no_record_follows_it() {
     let mut flash = Mock::new();
     let words = pack_words(&encode(SEQ_MAX, &image(5), 0));
-    flash.program(LogSector::A, 0, &words).unwrap();
+    flash.program(0, &words).unwrap();
     let (mut log, store, report) = booted(&mut flash);
-    assert_eq!(report.loaded, Some((LogSector::A, SEQ_MAX)));
+    assert_eq!(report.loaded, Some(SEQ_MAX));
     assert_eq!(store.unwrap().image()[TAG_AT], 5);
     assert_eq!(
         log.save(&mut flash, &image(6), 0),
@@ -594,49 +596,35 @@ fn the_highest_sequence_number_loads_and_no_record_follows_it() {
 }
 
 #[test]
-fn a_failed_boot_erase_keeps_the_loaded_image_and_reports_the_error() {
-    // Seven saves: B holds three of four records, so the boot erases A, and that erase fails.
+fn a_failed_boot_erase_is_reported_and_the_log_stays_usable() {
+    // Garbage after the last slot and no valid record: the boot erases, the erase fails.
     let mut flash = Mock::new();
-    let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=7);
+    flash.sector[SECTOR_LEN - 1] = 0x7F;
     flash.erase_fails = true;
     let (mut log, store, report) = booted(&mut flash);
-    assert_eq!(
-        store.unwrap().image()[TAG_AT],
-        7,
-        "the image is not discarded"
-    );
-    assert_eq!(report.loaded, Some((LogSector::B, 7)));
-    assert_eq!(report.erased, [None, None]);
-    assert_eq!(
-        report.housekeeping,
-        Some(PersistError::Flash(FlashError::Timeout))
-    );
-    assert!(log.status().erase_pending, "A still waits for its erase");
-    // Persistence stays usable: the next save goes to B.
-    let saved = log.save(&mut flash, &image(8), 0).unwrap();
-    assert_eq!((saved.sector, saved.seq), (LogSector::B, 8));
-    // With no valid record the failed erase is reported the same way.
-    let mut flash = Mock::new();
-    flash.sectors[0][5] = 0x00;
-    flash.erase_fails = true;
-    let (_, store, report) = booted(&mut flash);
     assert!(store.is_none());
+    assert!(!report.erased);
     assert_eq!(
         report.housekeeping,
         Some(PersistError::Flash(FlashError::Timeout))
     );
+    // The next save tries the erase again, and succeeds once the flash does.
+    assert!(log.save(&mut flash, &image(1), 0).is_err());
+    flash.erase_fails = false;
+    let saved = log.save(&mut flash, &image(2), 0).unwrap();
+    assert_eq!((saved.offset, saved.erased), (0, true));
+    assert_eq!(loaded_tag(&mut flash), Some(2));
 }
 
 #[test]
 fn restore_is_one_record_write_and_the_built_image_wins() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=6);
+    save_tags(&mut log, &mut flash, 1..=3);
     let built = *FruStore::new().image();
     let saved = log.restore(&mut flash, &built, 0).unwrap();
-    assert_eq!(saved.seq, 7);
-    assert!(flash.erases.is_empty(), "no erase: the record is appended");
+    assert_eq!(saved.seq, 4);
+    assert_eq!(flash.erases, 0, "no erase: the record is appended");
     assert_eq!(loaded_tag(&mut flash), Some(built[TAG_AT]));
     assert!(!log.pending());
 }
@@ -646,25 +634,28 @@ fn restore_interrupted_at_every_word_loads_the_previous_newest_or_the_built_imag
     let built = *FruStore::new().image();
     let previous = 0xA5u8;
     assert_ne!(built[TAG_AT], previous);
-    // 3 saves leave room in A; 4 fill A so the restore switches to B; 8 fill both sectors so the
-    // restore erases A first.
-    for saves in [3u8, 4, 8] {
+    // 2 earlier saves and the previous image leave room: the restore appends, so a cut leaves
+    // the previous image. With 3 earlier saves the sector is full and the restore erases it
+    // first: a cut after the erase leaves no record at all (the single-sector trade-off), so
+    // the built image is in use.
+    for (saves, full) in [(2u8, false), (3, true)] {
         for cut_after in 0..=RECORD_WORDS {
             let mut flash = Mock::new();
             let (mut log, _, _) = booted(&mut flash);
-            save_tags(&mut log, &mut flash, 1..saves);
+            save_tags(&mut log, &mut flash, 1..=saves);
             log.save(&mut flash, &image(previous), 0).unwrap();
+            assert_eq!(log.save_needs_erase(), full);
             flash.budget = Some(cut_after);
             let result = log.restore(&mut flash, &built, 0);
             flash.budget = None;
-            let want = if result.is_ok() {
-                built[TAG_AT]
-            } else {
-                previous
+            let want = match (result.is_ok(), full) {
+                (true, _) => Some(built[TAG_AT]),
+                (false, false) => Some(previous),
+                (false, true) => None,
             };
             assert_eq!(
                 loaded_tag(&mut flash),
-                Some(want),
+                want,
                 "saves {saves}, cut after word {cut_after}"
             );
         }
@@ -677,13 +668,14 @@ fn restore_with_a_failed_or_torn_erase_loads_the_previous_newest_image() {
     for torn in [false, true] {
         let mut flash = Mock::new();
         let (mut log, _, _) = booted(&mut flash);
-        // Both sectors full: A holds 1..=4, B holds 5..=8 and is active; the restore erases A.
-        save_tags(&mut log, &mut flash, 1..=8);
+        // The sector is full (1..=4); the restore erases it.
+        save_tags(&mut log, &mut flash, 1..=4);
         flash.torn_erase = torn;
         flash.erase_fails = !torn;
         assert!(log.restore(&mut flash, &built, 0).is_err(), "torn {torn}");
         flash.erase_fails = false;
-        assert_eq!(loaded_tag(&mut flash), Some(8), "torn {torn}");
+        // The torn erase spared the last record (it lies in the second half of the sector).
+        assert_eq!(loaded_tag(&mut flash), Some(4), "torn {torn}");
     }
 }
 
@@ -691,10 +683,10 @@ fn restore_with_a_failed_or_torn_erase_loads_the_previous_newest_image() {
 fn the_retry_delay_after_a_failed_slow_erase_runs_from_the_failure() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=8); // both sectors full: the next save erases A
+    save_tags(&mut log, &mut flash, 1..=4); // the sector is full: the next save erases it
     let mut store = FruStore::new();
     store.write(TAG_AT, &[4]).unwrap();
-    flash.erase_ms = 2_000; // longer than the delay, as a 128 KB sector erase can be
+    flash.erase_ms = 2_000; // longer than the delay, as a slow sector erase can be
     flash.erase_fails = true;
     assert!(log
         .poll(&mut flash, &mut store, 0, false, DELAY_MS, true)
@@ -714,7 +706,7 @@ fn the_retry_delay_after_a_failed_slow_erase_runs_from_the_failure() {
             true
         )
         .is_none());
-    assert_eq!(flash.erases.len(), 1, "no second erase inside the delay");
+    assert_eq!(flash.erases, 1, "no second erase inside the delay");
     let retry = log.poll(
         &mut flash,
         &mut store,
@@ -730,7 +722,7 @@ fn the_retry_delay_after_a_failed_slow_erase_runs_from_the_failure() {
 fn an_erase_waits_for_a_quiet_bus_and_a_plain_save_does_not() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=8);
+    save_tags(&mut log, &mut flash, 1..=4);
     assert!(log.save_needs_erase());
     let mut store = FruStore::new();
     store.write(TAG_AT, &[4]).unwrap();
@@ -742,15 +734,9 @@ fn an_erase_waits_for_a_quiet_bus_and_a_plain_save_does_not() {
             .is_none(),
         "busy bus: the erase waits, the write stays pending"
     );
-    assert!(log.pending() && flash.erases.is_empty());
+    assert!(log.pending() && flash.erases == 0);
     let saved = log.poll(&mut flash, &mut store, DELAY_MS + 1, false, DELAY_MS, true);
-    assert!(matches!(
-        saved,
-        Some(Ok(Saved {
-            erased: Some(_),
-            ..
-        }))
-    ));
+    assert!(matches!(saved, Some(Ok(Saved { erased: true, .. }))));
     // A save that needs no erase goes out on a busy bus.
     assert!(!log.save_needs_erase());
     store.write(TAG_AT, &[5]).unwrap();
@@ -765,17 +751,15 @@ fn an_erase_waits_for_a_quiet_bus_and_a_plain_save_does_not() {
 fn a_driver_that_refuses_for_nvmro_leaves_flash_and_the_image_untouched() {
     let mut flash = Mock::new();
     let (mut log, _, _) = booted(&mut flash);
-    save_tags(&mut log, &mut flash, 1..=7);
-    let before = flash.sectors.clone();
+    save_tags(&mut log, &mut flash, 1..=4);
+    let before = flash.sector.clone();
     flash.nvmro = true;
-    // Boot: the erase is refused, the image still loads.
+    // Boot: nothing to erase, the image loads.
     let (_, store, report) = booted(&mut flash);
-    assert_eq!(store.unwrap().image()[TAG_AT], 7);
-    assert_eq!(
-        report.housekeeping,
-        Some(PersistError::Flash(FlashError::NvmroAsserted))
-    );
-    // Restore and save are refused, and nothing is written or erased.
+    assert_eq!(store.unwrap().image()[TAG_AT], 4);
+    assert_eq!(report.housekeeping, None);
+    // Restore and save need the erase of the full sector: refused, and nothing is written or
+    // erased.
     let built = *FruStore::new().image();
     assert_eq!(
         log.restore(&mut flash, &built, 0),
@@ -785,9 +769,20 @@ fn a_driver_that_refuses_for_nvmro_leaves_flash_and_the_image_untouched() {
         log.save(&mut flash, &image(9), 0),
         Err(PersistError::Flash(FlashError::NvmroAsserted))
     );
-    assert_eq!(flash.sectors, before);
+    assert_eq!(flash.sector, before);
     flash.nvmro = false;
-    assert_eq!(loaded_tag(&mut flash), Some(7));
+    assert_eq!(loaded_tag(&mut flash), Some(4));
+    // A damaged sector at boot: the housekeeping erase is refused the same way.
+    let mut flash = Mock::new();
+    flash.sector[5] = 0x00;
+    flash.nvmro = true;
+    let (mut log, store, report) = booted_nvmro(&mut flash, false);
+    assert!(store.is_none());
+    assert_eq!(
+        report.housekeeping,
+        Some(PersistError::Flash(FlashError::NvmroAsserted))
+    );
+    assert!(log.save(&mut flash, &image(1), 0).is_err());
 }
 
 #[test]
@@ -797,7 +792,7 @@ fn the_settings_byte_rides_in_the_version_word_and_reads_zero_in_an_older_record
     let mut older = encode(3, &image(4), 0);
     assert_eq!(older[OFF_VERSION..OFF_IMAGE], [1, 0]);
     let mut flash = Mock::new();
-    flash.sectors[0][..RECORD_LEN].copy_from_slice(&older);
+    flash.sector[..RECORD_LEN].copy_from_slice(&older);
     let (_, store, _) = booted(&mut flash);
     assert_eq!(store.unwrap().nv_settings(), 0, "older record");
     // (settings written, settings read back): bits 0 and 1 are kept, the others masked off.
@@ -832,4 +827,99 @@ fn a_settings_change_marks_the_store_dirty_and_is_saved_with_the_image() {
     let saved = log.poll(&mut flash, &mut store, DELAY_MS, false, DELAY_MS, true);
     assert!(matches!(saved, Some(Ok(_))));
     assert_eq!(booted(&mut flash).1.unwrap().nv_settings(), 0b10);
+}
+
+#[test]
+fn the_store_region_check_accepts_sector_1_and_names_every_other_layout() {
+    const VECTORS_END: u32 = 0x0800_0400;
+    const TEXT: u32 = 0x0800_8000;
+    // (start, end, vectors_end, text_start, expected)
+    type Case = (u32, u32, u32, u32, Result<u32, RegionError>);
+    let cases: [Case; 11] = [
+        (0x0800_4000, 0x0800_8000, VECTORS_END, TEXT, Ok(STORE_LEN)),
+        (0x0800_4000, 0x0800_8000, 0x0800_4000, TEXT, Ok(STORE_LEN)),
+        (
+            0x0800_8000,
+            0x0800_C000,
+            VECTORS_END,
+            0x0800_C000,
+            Err(RegionError::Shifted),
+        ),
+        (
+            0x0800_0000,
+            0x0800_4000,
+            VECTORS_END,
+            0x0800_4000,
+            Err(RegionError::Shifted),
+        ),
+        (
+            0x0800_4000,
+            0x0800_7000,
+            VECTORS_END,
+            TEXT,
+            Err(RegionError::TooShort),
+        ),
+        (
+            0x0800_4000,
+            0x0800_4000,
+            VECTORS_END,
+            TEXT,
+            Err(RegionError::TooShort),
+        ),
+        (
+            0x0800_4000,
+            0x0800_C000,
+            VECTORS_END,
+            0x0800_C000,
+            Err(RegionError::TooLong),
+        ),
+        (
+            0x0800_4200,
+            0x0800_8200,
+            VECTORS_END,
+            0x0800_8200,
+            Err(RegionError::NotSectorAligned),
+        ),
+        (
+            0x0800_4000,
+            0x0800_8000,
+            0x0800_4400,
+            TEXT,
+            Err(RegionError::VectorsReachIn),
+        ),
+        (
+            0x0800_4000,
+            0x0800_8000,
+            VECTORS_END,
+            0x0800_6000,
+            Err(RegionError::ProgramInside),
+        ),
+        (
+            0x0800_4000,
+            0x0800_8000,
+            VECTORS_END,
+            0x0800_7FFF,
+            Err(RegionError::ProgramInside),
+        ),
+    ];
+    for (start, end, vectors_end, text_start, want) in cases {
+        assert_eq!(
+            store_region_ok(start, end, vectors_end, text_start),
+            want,
+            "region {start:08X}..{end:08X}, vectors end {vectors_end:08X}, program {text_start:08X}"
+        );
+    }
+}
+
+#[test]
+fn a_16_kb_sector_holds_sixty_records_of_the_default_image() {
+    assert_eq!(STORE_LEN, 16 * 1024);
+    assert_eq!(
+        RECORDS_PER_SECTOR,
+        STORE_LEN as usize / RECORD_LEN,
+        "the count the module comment states"
+    );
+    if SIZE == 256 {
+        assert_eq!((RECORD_LEN, RECORDS_PER_SECTOR), (272, 60));
+    }
 }

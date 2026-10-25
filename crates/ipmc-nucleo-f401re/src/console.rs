@@ -19,7 +19,7 @@
 use core::fmt;
 
 use cortex_m::peripheral::SCB;
-use ipmc_core::addr::AddrInfo;
+use ipmc_core::addr::{self, AddrInfo};
 use ipmc_core::trace::Trace;
 use ipmc_menu::{
     report_line_error, Args, CmdError, CmdResult, Command, EditEvent, Group, LineEditor, Menu,
@@ -29,9 +29,10 @@ use ipmc_menu::{
 use crate::bsp::clock::{ClockFault, ClockInfo};
 use crate::bsp::led::{self, Shown};
 use crate::bsp::reset_cause::ResetCause;
-use crate::bsp::{systick, uart};
+use crate::bsp::uart::{self, Port};
+use crate::bsp::{ga, systick};
 use crate::data_cmds;
-use crate::debug_cmds;
+use crate::debug_cmds::{self, DumpJob};
 use crate::ipmb_link::{self, IpmbLink};
 use crate::sensing::{self, Sensing};
 
@@ -45,15 +46,18 @@ pub struct Context {
     pub(crate) sensing: Sensing,
     /// IPMB link layer; the IPMB STATS and IPMB STATE handlers read it.
     pub(crate) ipmb: &'static mut IpmbLink,
+    /// The DEBUG DUMP in progress, continued by `Console::poll` (debug_cmds.rs).
+    pub(crate) dump: Option<DumpJob>,
 }
 
 /// ConsoleTrace -- console sink of the trace hook, shared by the sensors and the IPMB link:
-/// one line per call, the newline becomes CR LF in `uart::print`.
+/// one line per call, written whole into the console TX ring when it has room and dropped (and
+/// counted) otherwise, so a trace line never holds the main loop (`uart::print_line_or_drop`).
 pub(crate) struct ConsoleTrace;
 
 impl Trace for ConsoleTrace {
     fn line(&mut self, args: fmt::Arguments) {
-        out!("{}\n", args);
+        uart::print_line_or_drop(Port::Console, args);
     }
 }
 
@@ -229,7 +233,7 @@ static FRU_COMMANDS: [ConsoleCommand; 4] = [
     },
     Command {
         syntax: "STORE",
-        help: "Flash log state: active sector, records, newest sequence, free bytes, pending write",
+        help: "Flash log state: records, newest sequence, free bytes, pending write, next erase",
         handler: data_cmds::cmd_fru_store,
     },
     Command {
@@ -253,7 +257,7 @@ static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
     },
     Command {
         syntax: "DUMP {FORMAT}",
-        help: "Print the capture log: CSV (default) or TRACE",
+        help: "Print the capture log: CSV (default) or TRACE; any key stops it",
         handler: debug_cmds::cmd_debug_dump,
     },
     Command {
@@ -384,6 +388,7 @@ impl Console {
                 clock_fault,
                 sensing,
                 ipmb,
+                dump: None,
             },
             menu: Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP_COMMANDS, &GROUPS),
             editor: LineEditor::new(),
@@ -460,6 +465,7 @@ impl Console {
                 "failed"
             }
         );
+        out!("{}\n", addr::bootloader_pin_text(ga::bootloader_pin_high()));
         out!("Type HELP or ? for commands.\n");
     }
 
@@ -472,20 +478,30 @@ impl Console {
     /// lines. One call handles at most IPMC_CONSOLE_BYTES_PER_POLL bytes and runs at most one
     /// command line (it returns right after one), so the main loop services sensor sampling
     /// (and, in Phase 6, the IPMB link) every iteration however much the console receives.
-    /// Blocking console output is a known cost: a command that prints a lot holds the loop for
-    /// its transmit time (86.8 us per byte at 115200 baud). The Phase 6 link scheduler accounts
-    /// for that against the 227 ms IPMB response deadline (VITA 46.11 Rule 4.1.1-11); bytes that
-    /// arrive meanwhile wait in the UART RX ring (IPMC_UART_RX_BUF).
+    /// Console output goes into the interrupt-driven TX ring (IPMC_UART_TX_BUF), so a command
+    /// that prints a little does not hold the loop for the wire time (86.8 us per byte at 115200
+    /// baud); output waits only while the ring is full, and a long listing (DEBUG DUMP) is a job
+    /// that prints a few rows per pass (`poll_dump`) so the loop stays inside the 227 ms IPMB
+    /// response deadline (VITA 46.11 Rule 4.1.1-11). Bytes that arrive meanwhile wait in the UART
+    /// RX ring (IPMC_UART_RX_BUF).
     pub fn poll(&mut self) {
+        if self.ctx.dump.is_some() {
+            self.poll_dump();
+            return;
+        }
         for _ in 0..ipmc_defs::IPMC_CONSOLE_BYTES_PER_POLL {
-            let Some(byte) = uart::getc() else { return };
+            let Some(byte) = uart::getc(Port::Console) else {
+                return;
+            };
             match self.editor.push_byte(byte) {
                 EditEvent::Echo(ch) => out!("{}", char::from(ch)),
                 EditEvent::Backspace => out!("\u{8} \u{8}"), // erase the character on screen
                 EditEvent::Line(line) => {
                     out!("\n");
                     self.menu.process_line(line, &mut self.ctx, &mut UartOut);
-                    self.menu.write_prompt(&mut UartOut);
+                    if self.ctx.dump.is_none() {
+                        self.menu.write_prompt(&mut UartOut); // a dump prints it when it ends
+                    }
                     return;
                 }
                 EditEvent::LineTooLong => {
@@ -496,6 +512,27 @@ impl Console {
                 }
                 EditEvent::None => {}
             }
+        }
+    }
+}
+
+impl Console {
+    /// poll_dump -- one main-loop pass of a running DEBUG DUMP. A received byte stops the dump
+    /// (a line feed does not count: a terminal that ends Enter with CR LF sends it right after
+    /// the CR that started the dump); otherwise `DumpJob::step` prints the rows the TX ring has room for. New command lines
+    /// wait: the menu does not run while the job exists. The prompt follows the end of the job.
+    fn poll_dump(&mut self) {
+        let stopped = matches!(uart::getc(Port::Console), Some(byte) if byte != b'\n');
+        if stopped {
+            out!("# dump stopped\n");
+        }
+        let finished = match self.ctx.dump.as_mut() {
+            Some(job) if !stopped => job.step(self.ctx.ipmb),
+            _ => true,
+        };
+        if finished {
+            self.ctx.dump = None;
+            self.menu.write_prompt(&mut UartOut);
         }
     }
 }
@@ -550,6 +587,27 @@ fn print_ga(g: &AddrInfo) {
 
 // ---- handlers ----
 
+/// print_uart -- one line with the failure counters and the free TX bytes of a port.
+fn print_uart(port: Port) {
+    let e = uart::counters(port);
+    out!(
+        "{} UART:{} rx overflow={} tx timeout={} overrun={} tx lines dropped={} tx free={}\n",
+        match port {
+            Port::Console => "Console",
+            Port::App => "App",
+        },
+        match port {
+            Port::Console => "  ",
+            Port::App => "      ",
+        },
+        e.rx_overflow,
+        e.tx_timeout,
+        e.overrun,
+        e.tx_lines_dropped,
+        uart::tx_free(port)
+    );
+}
+
 fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     let s = systick::seconds();
     out!(
@@ -563,19 +621,19 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_ga(&ctx.ipmb.dispatch().addr);
     print_led();
     out!("Last reset:   {}\n", ctx.reset_cause.text());
-    let e = uart::counters();
-    out!(
-        "UART errors:  rx overflow={} tx timeout={} overrun={}\n",
-        e.rx_overflow,
-        e.tx_timeout,
-        e.overrun
-    );
+    print_uart(Port::Console);
+    if ipmc_defs::IPMC_APP_UART_ENABLE == 1 {
+        print_uart(Port::App);
+    } else {
+        out!("App UART:     off (IPMC_APP_UART_ENABLE 0)\n");
+    }
+    out!("{}\n", addr::bootloader_pin_text(ga::bootloader_pin_high()));
     Ok(())
 }
 
 fn cmd_reset(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     out!("Resetting\n");
-    uart::flush();
+    uart::flush(Port::Console);
     SCB::sys_reset()
 }
 

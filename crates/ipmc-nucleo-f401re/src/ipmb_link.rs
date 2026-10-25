@@ -18,9 +18,11 @@
 // the end of `impl IpmbLink`.
 //
 // The FRU flash log (ipmc_fru::persist) is saved from `service`, once a Write FRU Data has been
-// quiet for IPMC_FRU_PERSIST_DELAY_MS. A save that has to erase a sector first takes both IPMB
-// slaves off the bus (`PausedErase`): the core stalls on flash during an erase, so the board stays
-// silent for that time instead of stretching SCL in the middle of a frame.
+// quiet for IPMC_FRU_PERSIST_DELAY_MS. A save that has to erase the store sector first (once per
+// 60 records, when the 16 KB sector is full) takes both IPMB slaves off the bus (`PausedErase`):
+// the core stalls on flash during an erase, so the board stays silent for that time (at most
+// 500 ms for the 16 KB sector, DS10086 Table 45; the console line "IPMB paused <n> ms" reports
+// the measured time) instead of stretching SCL in the middle of a frame.
 
 use core::fmt;
 
@@ -38,7 +40,7 @@ use ipmc_core::queue::Bus;
 use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
 use ipmc_core::trace::Trace;
-use ipmc_fru::persist::{FlashError, FlashLog, LogSector, PersistError, Status};
+use ipmc_fru::persist::{FlashError, FlashLog, PersistError, Status};
 use ipmc_fru::FruStore;
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
@@ -305,7 +307,7 @@ pub fn start_drivers(
             Ok(master) => master,
             Err(error) => {
                 out!("\nFATAL: IPMB master: {}\n", error.name());
-                uart::flush();
+                uart::flush(uart::Port::Console);
                 fault::park()
             }
         };
@@ -482,17 +484,12 @@ impl FlashLog for PausedErase<'_> {
         self.flash.sector_len()
     }
 
-    fn read(&self, sector: LogSector, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
-        self.flash.read(sector, offset, out)
+    fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+        self.flash.read(offset, out)
     }
 
-    fn program(
-        &mut self,
-        sector: LogSector,
-        offset: usize,
-        words: &[u32],
-    ) -> Result<(), FlashError> {
-        self.flash.program(sector, offset, words)
+    fn program(&mut self, offset: usize, words: &[u32]) -> Result<(), FlashError> {
+        self.flash.program(offset, words)
     }
 
     fn millis(&self) -> u32 {
@@ -502,21 +499,19 @@ impl FlashLog for PausedErase<'_> {
     /// erase -- both slaves off, the erase, both back on, one console line with the time the
     /// board was silent (measured with the DWT cycle counter: SysTick does not run while the
     /// core waits on flash).
-    fn erase(&mut self, sector: LogSector) -> Result<(), FlashError> {
+    fn erase(&mut self) -> Result<(), FlashError> {
         let paused = self.suspend_all()?;
         let start = ipmb_common::now();
-        let result = self.flash.erase(sector);
+        let result = self.flash.erase();
         let paused_ms = ipmb_common::now().wrapping_sub(start) / systick::cycles_per_ms().max(1);
         self.resume_all(paused);
         match result {
             Ok(()) => out!(
-                "FRU log: erased sector {} at run time (IPMB paused {} ms)\n",
-                sector.name(),
+                "FRU log: erased the store sector at run time (IPMB paused {} ms)\n",
                 paused_ms
             ),
             Err(error) => out!(
-                "FRU log: erase of sector {} failed at run time: {} (IPMB paused {} ms)\n",
-                sector.name(),
+                "FRU log: erase of the store sector failed at run time: {} (IPMB paused {} ms)\n",
                 error.name(),
                 paused_ms
             ),
@@ -727,10 +722,14 @@ impl IpmbLink {
             reset_pending && (self.reset_save_failed || matches!(outcome, Some(Err(_))));
         match outcome {
             Some(Ok(saved)) => self.status(format_args!(
-                "FRU log: saved record {} to sector {} offset {}",
+                "FRU log: saved record {} at offset {}{}",
                 saved.seq,
-                saved.sector.name(),
-                saved.offset
+                saved.offset,
+                if saved.erased {
+                    " (sector erased first)"
+                } else {
+                    ""
+                }
             )),
             Some(Err(error)) => self.status(format_args!("FRU log: save failed: {}", error.name())),
             None => {}
@@ -905,7 +904,7 @@ impl IpmbLink {
         match request {
             Some(ResetRequest::Cold) => {
                 self.status(format_args!("Cold Reset: restarting"));
-                uart::flush();
+                uart::flush(uart::Port::Console);
                 reset_cause::keep_sequence(
                     self.link.next_request_seq(),
                     self.link.recent_request_seqs(now_ms),

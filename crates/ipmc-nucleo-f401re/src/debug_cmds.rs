@@ -11,7 +11,10 @@
 
 use core::fmt;
 
-use ipmc_core::capture::{CommandName, CsvHeader, CsvRow, HexBytes, NetFnName, TraceRow};
+use ipmc_core::capture::{
+    CommandName, CsvHeader, CsvRow, DumpCursor, HexBytes, NetFnName, Step, TraceRow, PAYLOAD_MAX,
+    TEXT_MAX,
+};
 use ipmc_core::dispatch::cc;
 use ipmc_core::ipmb::{self, IPMB_MAX_LEN, NETFN_SE};
 use ipmc_core::link::{LocalError, CM_ADDR8};
@@ -19,6 +22,7 @@ use ipmc_core::queue::Bus;
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
 use crate::bsp::systick;
+use crate::bsp::uart::{self, Port};
 use crate::console::Context;
 use crate::ipmb_link::IpmbLink;
 
@@ -246,13 +250,74 @@ pub fn cmd_debug_log(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
 }
 
 /// DumpFormat -- the two printers of DEBUG DUMP.
+#[derive(Clone, Copy)]
 enum DumpFormat {
     Csv,
     Trace,
 }
 
-/// cmd_debug_dump -- DEBUG DUMP {FORMAT}: the header line, the records, the end line. A plain
-/// loop over the records: the log is not changed, and the main loop waits while it prints.
+/// ROW_MAX -- room one dump step needs in the console TX ring before it prints a row, so a row
+/// never waits for the wire. The longest row is the larger of a text record and a frame record,
+/// each with its CR LF:
+///   text:  index (10) + time (10) + `TEXT` and commas (12) + quotes (2) + the text, which a
+///          CSV row may double when every character is a quote, so 2 x IPMC_LOG_TEXT_MAX
+///          + 2 for CR LF = 2 x TEXT_MAX + 36
+///   frame: fixed columns and the summary (at most 160 with the trace row's padded NetFn and
+///          command columns) + 3 characters per frame byte (hex and a space)
+///          + 2 for CR LF = 3 x IPMB_MAX_LEN + 162
+/// A bigger TX ring is a design input: the const assert below names the define.
+const TEXT_ROW_MAX: usize = 2 * TEXT_MAX + 36;
+const FRAME_ROW_MAX: usize = 3 * IPMB_MAX_LEN + 162;
+const ROW_MAX: usize = if TEXT_ROW_MAX > FRAME_ROW_MAX {
+    TEXT_ROW_MAX
+} else {
+    FRAME_ROW_MAX
+};
+const _: () = assert!(
+    ROW_MAX < ipmc_defs::IPMC_UART_TX_BUF as usize,
+    "IPMC_UART_TX_BUF must be larger than the longest dump row (ROW_MAX in debug_cmds.rs)"
+);
+
+/// DumpJob -- a DEBUG DUMP in progress. The console holds it and continues it on every
+/// `Console::poll` pass (`step`): whole rows while the console TX ring has room for the longest
+/// one, so the main loop never waits for the wire. It dumps the records held when it started.
+pub struct DumpJob {
+    format: DumpFormat,
+    cursor: DumpCursor,
+}
+
+impl DumpJob {
+    /// step -- prints rows while the TX ring holds the longest row; true when the dump is over
+    /// (the end marker is printed).
+    pub fn step(&mut self, link: &IpmbLink) -> bool {
+        let names = link.names();
+        let log = link.capture();
+        let mut scratch = [0u8; PAYLOAD_MAX];
+        while uart::tx_free(Port::Console) >= ROW_MAX {
+            match self.cursor.next(log) {
+                Step::Row(index) => {
+                    if let Some(record) = log.get(index, &mut scratch) {
+                        match self.format {
+                            DumpFormat::Csv => out!("{}\n", CsvRow(&record, &names)),
+                            DumpFormat::Trace => out!("{}\n", TraceRow(&record, &names)),
+                        }
+                    }
+                }
+                Step::Overwritten(count) => {
+                    out!("# {} records overwritten during the dump\n", count);
+                }
+                Step::Done => {
+                    out!("# end of capture\n");
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// cmd_debug_dump -- DEBUG DUMP {FORMAT}: prints the header line and starts the dump job; the
+/// console prints the rows and the end line on the following main-loop passes (`DumpJob`).
 pub fn cmd_debug_dump(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     let format = match optional(args.text_at(0))? {
         None => DumpFormat::Csv,
@@ -273,17 +338,13 @@ pub fn cmd_debug_dump(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
         stats.records,
         stats.overwritten
     );
-    let names = link.names();
-    match format {
-        DumpFormat::Csv => {
-            out!("{}\n", CsvHeader);
-            link.capture().for_each(|r| out!("{}\n", CsvRow(r, &names)));
-        }
-        DumpFormat::Trace => link
-            .capture()
-            .for_each(|r| out!("{}\n", TraceRow(r, &names))),
+    if matches!(format, DumpFormat::Csv) {
+        out!("{}\n", CsvHeader);
     }
-    out!("# end of capture\n");
+    ctx.dump = Some(DumpJob {
+        format,
+        cursor: DumpCursor::start(link.capture()),
+    });
     Ok(())
 }
 

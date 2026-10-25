@@ -35,6 +35,8 @@ pub mod queue;
 pub mod requester;
 /// reset_gate -- when a pending processor reset may run.
 pub mod reset_gate;
+/// ring -- the byte ring shared by the capture log and the UART driver.
+pub mod ring;
 /// sdr -- the Device SDR repository and its reservation.
 pub mod sdr;
 /// selftest -- the startup self test and the result Get Self Test Results reports.

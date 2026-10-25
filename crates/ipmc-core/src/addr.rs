@@ -195,6 +195,17 @@ pub fn resolve(raw_pins: u8) -> AddrInfo {
     })
 }
 
+/// bootloader_pin_text -- the `BOOTLOADER pin:` line of the banner and SYS STATUS (no line
+/// ending). The BOOTLOADER strap (PC10) is a board input of the bootloader: logic 1 at reset
+/// keeps the bootloader in bootloader mode; the runtime firmware only reports it.
+pub const fn bootloader_pin_text(high: bool) -> &'static str {
+    if high {
+        "BOOTLOADER pin: 1 (the bootloader stays in bootloader mode at reset)"
+    } else {
+        "BOOTLOADER pin: 0"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +322,14 @@ mod tests {
     fn source_text() {
         assert_eq!(Source::Pins.text(), "from pins");
         assert_eq!(Source::Forced.text(), "forced by ipmi_defs.h");
+    }
+
+    #[test]
+    fn the_bootloader_pin_line_names_both_levels() {
+        assert_eq!(bootloader_pin_text(false), "BOOTLOADER pin: 0");
+        assert_eq!(
+            bootloader_pin_text(true),
+            "BOOTLOADER pin: 1 (the bootloader stays in bootloader mode at reset)"
+        );
     }
 }

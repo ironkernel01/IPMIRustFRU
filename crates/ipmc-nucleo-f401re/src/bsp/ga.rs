@@ -1,8 +1,9 @@
-// bsp/ga.rs - strap pin configuration (GA0..GA4, GAP, NVMRO) and the raw level read. Decoding is in ipmc_core::addr.
+// bsp/ga.rs - strap pin configuration (GA0..GA4, GAP, NVMRO, BOOTLOADER) and the raw level read.
+// Decoding is in ipmc_core::addr.
 
 use cortex_m::interrupt;
 use ipmc_core::addr;
-use ipmc_sensors::drivers::stm32f401::ports::{self, Pins, PortError, PortId, Pull};
+use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull};
 
 use super::static_slot::{self, StaticSlot};
 
@@ -14,14 +15,34 @@ const OWNER: &str = "ga";
 /// Mask of the seven strap pins in the raw word.
 const RAW_MASK: u16 = 0x7F;
 
-static PINS: StaticSlot<Pins> = static_slot::empty();
+/// The BOOTLOADER strap: PC10 (morpho CN7-1), owner "boot_pin". The bootloader (Phase 12) treats
+/// logic 1 at reset as "stay in the bootloader"; the runtime firmware only reads and reports it.
+/// An input with the internal pull-down, so an open pin reads 0.
+const BOOT_OWNER: &str = "boot_pin";
+const BOOT_PIN: PinId = PinId {
+    port: PortId::C,
+    pin: 10,
+};
 
-/// init -- claims PC0..PC6 and configures them as pulled-up inputs.
+static PINS: StaticSlot<Pins> = static_slot::empty();
+static BOOT: StaticSlot<Pins> = static_slot::empty();
+
+/// init -- claims PC0..PC6 and configures them as pulled-up inputs; claims PC10 (BOOTLOADER) as
+/// a pulled-down input.
 pub fn init() -> Result<(), PortError> {
     let pins = ports::claim(OWNER, PortId::C, RAW_MASK)?;
     pins.input(Pull::Up);
     static_slot::install(&PINS, pins);
+    let boot = ports::claim_pin(BOOT_OWNER, BOOT_PIN)?;
+    boot.input(Pull::Down);
+    static_slot::install(&BOOT, boot);
     Ok(())
+}
+
+/// bootloader_pin_high -- the live level of the BOOTLOADER pin (PC10): true = logic 1. Reads
+/// false before `init`.
+pub fn bootloader_pin_high() -> bool {
+    static_slot::with_mut(&BOOT, |p| p.read() != 0).unwrap_or(false)
 }
 
 /// nvmro_asserted -- the live NVMRO state: a fresh pin sample through the one decoding rule

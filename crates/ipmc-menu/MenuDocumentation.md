@@ -309,7 +309,7 @@ ipmc
 | 24 | cmd_sensors_sdr | `SENSORS SDR` | - | - | 2 | 2 | The Device SDR records: sensor number, type, event/reading type, ID string |
 | 25 | cmd_fru_show | `FRU SHOW` | - | - | 2 | 2 | FRU image decoded: common header, board and product areas, checksums |
 | 26 | cmd_fru_dump | `FRU DUMP {OFFSET} {COUNT}` | - | OFFSET, COUNT | 2 | 4 | Hex dump of the FRU image; default offset 0 and the rest of the area |
-| 27 | cmd_fru_store | `FRU STORE` | - | - | 2 | 2 | Flash log state: active sector, records, newest sequence, free bytes, pending write |
+| 27 | cmd_fru_store | `FRU STORE` | - | - | 2 | 2 | Flash log state: records, newest sequence, free bytes, pending write, next erase |
 | 28 | cmd_fru_restore | `FRU RESTORE` | - | - | 2 | 2 | Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted |
 
 Groups:

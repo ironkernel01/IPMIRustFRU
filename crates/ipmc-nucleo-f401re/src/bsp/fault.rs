@@ -15,6 +15,7 @@ use cortex_m_rt::{exception, ExceptionFrame};
 
 use ipmc_sensors::drivers::stm32f401::ports::PortError;
 
+use super::uart::Port;
 use super::{led, uart};
 
 /// Fault kind codes in `FAULT_KIND`.
@@ -42,7 +43,7 @@ pub fn park() -> ! {
 /// line naming the pin and both owners; before that it flashes the LED at
 /// IPMC_FAULT_BLINK_CHZ.
 pub fn claim_failed(error: PortError) -> ! {
-    if uart::is_up() {
+    if uart::is_up(Port::Console) {
         report_claim(error);
     } else {
         led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
@@ -67,7 +68,7 @@ fn report_claim(error: PortError) {
         ),
         other => out!("\nFATAL: pin claim failed: {:?}\n", other),
     }
-    uart::flush();
+    uart::flush(Port::Console);
 }
 
 /// record_print_park -- the shared body of both handlers: records `kind` and `value` in the
@@ -76,7 +77,7 @@ fn report_claim(error: PortError) {
 fn record_print_park(kind: u32, value: u32) -> ! {
     FAULT_VALUE.store(value, Ordering::Relaxed);
     FAULT_KIND.store(kind, Ordering::Relaxed);
-    if uart::is_up() {
+    if uart::is_up(Port::Console) {
         if kind == KIND_HARDFAULT {
             out!(
                 "
@@ -92,6 +93,9 @@ UNHANDLED IRQ {}
                 value as i32
             );
         }
+        // The UART interrupt cannot run here (this handler outranks it); `flush` polls the TX
+        // ring out.
+        uart::flush(Port::Console);
     }
     park()
 }

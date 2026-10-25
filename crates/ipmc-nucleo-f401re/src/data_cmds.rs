@@ -173,9 +173,9 @@ fn print_last_save(last_save_ms: Option<u32>) {
     }
 }
 
-/// cmd_fru_store -- the flash log state: active sector, records per sector, newest sequence
-/// number, bytes free, whether a write waits to be saved, the last save, the erase waiting for
-/// the other sector, the save counters.
+/// cmd_fru_store -- the flash log state: records in the sector, newest sequence number, bytes
+/// free, whether a write waits to be saved, the last save, whether the next save erases the
+/// sector first, the save counters.
 pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     let Some(status) = ctx.ipmb.fru_log_status() else {
         out!(
@@ -190,11 +190,9 @@ pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     };
     let dirty = ctx.ipmb.dispatch().fru.is_dirty();
     out!(
-        "FRU log: {}-byte records, active sector {}, records A={} B={}, newest sequence ",
+        "FRU log: {}-byte records, {} in the sector, newest sequence ",
         RECORD_LEN,
-        status.active.name(),
-        status.records[0],
-        status.records[1]
+        status.records
     );
     match status.newest_seq {
         Some(seq) => out!("{}", seq),
@@ -208,12 +206,8 @@ pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     );
     print_last_save(status.last_save_ms);
     out!(
-        ", erase pending {}, saves {}, failures {}",
-        if status.erase_pending {
-            status.active.other().name()
-        } else {
-            "no"
-        },
+        ", next save erases {}, saves {}, failures {}",
+        if status.erase_pending { "yes" } else { "no" },
         status.saves,
         status.failures
     );

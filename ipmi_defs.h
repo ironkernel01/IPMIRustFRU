@@ -54,7 +54,7 @@
 #define IPMB_REQ_TIMEOUT_MS 250                   /* wait for a response to a request this IPMC sent before a retry, 60..=250 ms; VITA 46.11 Rule 4.1.1-9 T3max, and the retry spacing T6 (Table 4.1.1-1) */
 #define IPMB_REQ_RETRIES 10                       /* retries of a request after its first transmission (3..=10); VITA 46.11 Rule 4.1.1-10 retries up to C1max = 10: 11 transmissions x 250 ms = 2.75 s, inside the T9 sequence expiry of 5 s */
 #define IPMB_REQ_GAP_MS 5                         /* least time from one new request to the next (>= 5); VITA 46.11 Table 4.1.1-1 T4 */
-#define IPMC_RESET_WAIT_MS 3000                   /* longest wait before a pending Cold Reset is applied anyway (1..=5000): normally the processor resets once the response has left the egress queue and no accepted FRU write is unsaved; a flash sector erase takes up to 2 s (DS10086 Table 45), so the wait covers the response, one erase and the write */
+#define IPMC_RESET_WAIT_MS 3000                   /* longest wait before a pending Cold Reset is applied anyway (1..=5000): normally the processor resets once the response has left the egress queue and no accepted FRU write is unsaved; the flash sector erase of the FRU store takes up to 500 ms (16 KB sector, DS10086 Table 45), so the wait covers the response, one erase and the write */
 #define IPMC_PAYLOAD_RESET_PULSE_MS 100           /* time the payload reset output PAYLOAD_RST_OUT_N (PA9, open drain, active low) is held low by a Cold Reset of the payload (1..=1000); VITA 46.11 Rule 4.1.2-9 */
 #define IPMC_PAYLOAD_MODES 3                      /* payload operational modes this payload supports, bit n = mode n (modes 0..=14; bit 0, the normal mode, must be set; bit 15 is reserved): 3 = modes 0 and 1. The Payload Mode sensor SDR record (sensor 7, Tier-3) carries it as its reading and assertion masks and Get Payload Mode Capabilities answers it; VITA 46.11 Table 10.2.8-1 */
 #define IPMB_INGRESS_DEPTH 8                      /* received requests the link layer holds between the bus driver and the main loop (1..=32); a full FIFO drops and counts */
@@ -69,7 +69,7 @@
 #define IPMB_FAULT_STREAK 8                       /* consecutive bus-fault errors on one IPMB (stretch timeout, SCL or SDA stuck low, bus busy, slave BERR or TIMEOUT) before the bus is marked faulted in the IPMB Link sensor (2..=64); address and data NACKs are not bus faults; a good write or frame resets the count (VITA 46.11 Rule 9.3-10) */
 #define IPMB_FAULT_CLEAR_MS 1000                  /* both lines must read idle-high continuously this long before a faulted bus is cleared (100..=60000), milliseconds */
 #define IPMC_IPMI_TRACE 1                         /* 1 = trace every dispatched request on the console; 0 = silent */
-#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536): whole IPMB frames in and out and the trace lines, oldest overwritten first */
+#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536, a power of two; usable size IPMC_LOG_SIZE - 1 because the ring keeps one slot empty): whole IPMB frames in and out and the trace lines, oldest overwritten first */
 #define IPMC_LOG_TEXT_MAX 160                     /* longest trace line kept in the log, bytes (32..=200); a longer line is cut and ends in ... */
 
 #define IPMB_STRAP_FROM_PINS 0                    /* strap value is read from the pins */
@@ -80,8 +80,14 @@
 #define IPMB_NVMRO_FORCED 0                       /* 0 = deasserted, FRU writes allowed; 1 = asserted */
 
 #define IPMC_CONSOLE_BAUD 115200                  /* console UART baud rate, 8N1; gen.ps1 reads this line for COM3 */
-#define IPMC_CONSOLE_BYTES_PER_POLL 16            /* most console bytes one main-loop pass handles; a pass also runs at most one command line, so sensor sampling and the IPMB link are serviced every iteration (1..IPMC_UART_RX_BUF); blocking console output is a known cost the Phase 6 link scheduler accounts for (227 ms response deadline, VITA Rule 4.1.1-11) */
-#define IPMC_UART_RX_BUF 256                      /* console RX ring bytes; power of two, one slot stays empty; usable bytes (size - 1) must cover IPMC_MENU_LINE_MAX; the rest (127 bytes = 11 ms at 115200 baud) absorbs bytes that arrive during a blocking transmit */
+#define IPMC_CONSOLE_BYTES_PER_POLL 16            /* most console bytes one main-loop pass handles; a pass also runs at most one command line, so sensor sampling and the IPMB link are serviced every iteration (1..IPMC_UART_RX_BUF); console output is interrupt driven (IPMC_UART_TX_BUF), so it does not hold the main loop for the wire time */
+#define IPMC_UART_RX_BUF 256                      /* console RX ring bytes; power of two, one slot stays empty; usable bytes (size - 1) must cover IPMC_MENU_LINE_MAX; the rest absorbs bytes that arrive while the main loop is busy (127 bytes = 11 ms at 115200 baud) */
+#define IPMC_UART_TX_BUF 4096                     /* console TX ring, bytes; power of two; interrupt-driven, so console output does not hold the main loop until the ring is full (4096 bytes = 356 ms at 115200 baud) */
+#define IPMC_APP_UART_ENABLE 1                    /* 1 = the application port APP_UART (USART1: TX PB6, RX PB7, CTS PA11, RTS PA12) runs; 0 = USART1 off, its pins parked */
+#define IPMC_APP_UART_BAUD 115200                 /* application port baud rate, 8N1 */
+#define IPMC_APP_UART_FLOW 0                      /* 1 = RTS/CTS hardware handshake on PA12/PA11; 0 = TX/RX only */
+#define IPMC_APP_UART_RX_BUF 256                  /* application port RX ring, bytes; power of two; at least one application line (IPMC_APP_LINE_MAX, next brief) */
+#define IPMC_APP_UART_TX_BUF 1024                 /* application port TX ring, bytes; power of two */
 #define IPMC_MENU_LINE_MAX 128                    /* longest accepted console line in bytes; a longer line is rejected */
 #define IPMC_MENU_TOKENS_MAX 40                   /* most whitespace-separated tokens in one console line or one command syntax */
 #define IPMC_FRU_DUMP_BYTES_PER_LINE 16           /* bytes on one line of the console FRU DUMP (1..16; 16 x 3 characters plus a 6-character offset fit an 80-column console) */
@@ -127,7 +133,7 @@
 #define IPMC_FRU_ASSET_TAG ""                     /* FRU product area: asset tag, empty */
 #define IPMC_FRU_MFG_MINUTES 16204320             /* FRU board area manufacturing date, minutes since 1996-01-01 00:00 (FRU spec section 11, 3 bytes little endian, 000000h = unspecified); 2026-10-23 00:00 = (30 years x 365 + 8 leap days + 295 days) = 11253 days x 1440 = 16204320; at most 16777215 */
 #define IPMC_FRU_SIZE 256                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info); a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru persist.rs) is 16 bytes longer than this */
-#define IPMC_FRU_PERSIST 1                        /* 1 = Write FRU Data survives reset (FRU image kept in the flash log of sectors 6 and 7); 0 = RAM only, a reset restores the built image */
+#define IPMC_FRU_PERSIST 1                        /* 1 = Write FRU Data survives reset (FRU image kept in the flash store, sector 1 alone, 16 KB); 0 = RAM only, a reset restores the built image */
 #define IPMC_FRU_PERSIST_DELAY_MS 1000            /* quiet time after the last Write FRU Data before the image is saved to flash, milliseconds (100..=10000); coalesces a Chassis Manager writing an area in chunks into one record */
 #define IPMC_FRU_SCAN_CHUNK 64                    /* bytes read at a time when the flash log checks a range for erased flash (ipmc-fru persist.rs); a multiple of 4, 16..=272; the buffer lives on the stack */
 #define IPMC_FRU_ERASE_QUIET_MS 500               /* a run-time sector erase starts only after the egress queue is empty and no IPMB frame arrived for this many milliseconds (100..=5000); the save stays pending in RAM meanwhile */
@@ -195,7 +201,7 @@
 #define IPMC_INPUT_PGOOD_NAME "PGOOD"             /* input name: supplies good (PB10), active high */
 #define IPMC_INPUT_FAULT_NAME "FAULT_N"           /* input name: supply fault (PA10), active low */
 #define IPMC_INPUT_OVERTEMP_NAME "OVERTEMP_N"     /* input name: board over-temperature (PC7), active low */
-#define IPMC_INPUT_RESET_NAME "PAYLOAD_RESET_N"   /* input name: payload held in reset (PB6), active low */
+#define IPMC_INPUT_RESET_NAME "PAYLOAD_RESET_N"   /* input name: payload held in reset (PA6), active low */
 
 #define IPMC_EMU_TX_DONE_DELAY_MS 1               /* x86 emulator: time from a request to the end of its response transmission, milliseconds (1..=227, the VITA 46.11 T5 response limit) */
 #define IPMC_EMU_VECTOR_LINE_MAX 512              /* x86 emulator: longest accepted vector file line, characters; must hold a time, a bus tag and IPMB_MSG_MAX three-character hex tokens */

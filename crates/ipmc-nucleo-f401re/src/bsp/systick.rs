@@ -56,7 +56,7 @@ pub fn millis() -> u32 {
 
 /// catch_up -- advances the clock over a stall the SysTick exception could not count. The caller
 /// is the flash erase (bsp/flash.rs): while it runs the core waits on flash, the counter keeps
-/// wrapping but only one exception stays pending, so up to the 2 s sector erase time is lost
+/// wrapping but only one exception stays pending, so up to the 500 ms sector erase time (16 KB sector, DS10086 Table 45) is lost
 /// from `millis()` and `seconds()`.
 /// `start_ms` is `millis()` and `stall_cycles` the DWT cycle count (core clock, the SysTick
 /// source) taken around the stall. The clock gains the stall less the ticks counted meanwhile,

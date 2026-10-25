@@ -6,7 +6,7 @@
 //! Wireshark. No allocator, no hardware: the firmware owns one `DefaultLog` and the host tests
 //! use small rings.
 //!
-//! Ring layout: one `[u8; N]`. A record is a 6-byte header followed by its payload:
+//! Ring layout: one `ByteRing<N>` (ring.rs; N a power of two, N - 1 bytes usable). A record is a 6-byte header followed by its payload:
 //!
 //! ```text
 //! byte 0   flags: bit 0 kind (0 frame, 1 text), bit 1 bus (0 A, 1 B), bit 2 dir (0 in, 1 out),
@@ -16,9 +16,8 @@
 //! 6..      payload: the IPMB frame as it is on the wire, or the line as ASCII
 //! ```
 //!
-//! The record index is not stored: the i-th held record is `total - records + i`. A record may
-//! wrap the end of the ring (it is copied in two parts). A record that does not fit drops the
-//! oldest whole records first.
+//! The record index is not stored: the i-th held record is `total - records + i`. A record that
+//! does not fit drops the oldest whole records first (`ByteRing::discard`).
 
 use core::fmt::{self, Arguments, Display, Write};
 
@@ -26,6 +25,7 @@ use crate::commands;
 use crate::ext::Extension;
 use crate::ipmb::{self, IPMB_MAX_LEN, NETFN_APP, NETFN_GROUP_EXT, NETFN_SE, NETFN_STORAGE};
 use crate::queue::Bus;
+use crate::ring::ByteRing;
 use crate::trace::Trace;
 
 /// HEADER_LEN -- bytes of a record header (flags, length, time_ms).
@@ -35,21 +35,26 @@ pub const TEXT_MAX: usize = ipmc_defs::IPMC_LOG_TEXT_MAX as usize;
 /// LOG_SIZE -- bytes of the firmware's ring (ipmi_defs.h IPMC_LOG_SIZE).
 pub const LOG_SIZE: usize = ipmc_defs::IPMC_LOG_SIZE as usize;
 /// PAYLOAD_MAX -- the longest payload a record holds: a frame or a text line.
-const PAYLOAD_MAX: usize = if IPMB_MAX_LEN > TEXT_MAX {
+pub const PAYLOAD_MAX: usize = if IPMB_MAX_LEN > TEXT_MAX {
     IPMB_MAX_LEN
 } else {
     TEXT_MAX
 };
 
 // The ring holds a few whole frames and at least one whole text line; ipmc-defs guards the
-// ranges of the two defines. A smaller ring would drop every record it was asked to keep.
+// ranges of the two defines. A smaller ring would drop every record it was asked to keep. The
+// usable size is LOG_SIZE - 1 (a ByteRing keeps one slot empty), and LOG_SIZE is a power of two.
 const _: () = assert!(
-    LOG_SIZE >= 4 * (HEADER_LEN + ipmc_defs::IPMB_MSG_MAX as usize),
-    "IPMC_LOG_SIZE must hold four whole frames"
+    LOG_SIZE.is_power_of_two(),
+    "IPMC_LOG_SIZE must be a power of two"
 );
 const _: () = assert!(
-    LOG_SIZE >= HEADER_LEN + TEXT_MAX,
-    "IPMC_LOG_SIZE must hold one whole text line"
+    ByteRing::<LOG_SIZE>::capacity() >= 4 * (HEADER_LEN + ipmc_defs::IPMB_MSG_MAX as usize),
+    "IPMC_LOG_SIZE - 1 must hold four whole frames"
+);
+const _: () = assert!(
+    ByteRing::<LOG_SIZE>::capacity() >= HEADER_LEN + TEXT_MAX,
+    "IPMC_LOG_SIZE - 1 must hold one whole text line"
 );
 // The length byte of a record holds the payload length.
 const _: () = assert!(
@@ -221,7 +226,7 @@ impl FrameStatus {
 /// Stats -- the state of the ring for the console.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stats {
-    /// Ring size in bytes.
+    /// Usable ring size in bytes (the ring size - 1).
     pub size: usize,
     /// Bytes in use.
     pub used: usize,
@@ -266,11 +271,7 @@ pub struct Record<'a> {
 
 /// CaptureLog -- the ring of N bytes.
 pub struct CaptureLog<const N: usize> {
-    buf: [u8; N],
-    /// Offset of the oldest record.
-    head: usize,
-    /// Bytes in use.
-    used: usize,
+    ring: ByteRing<N>,
     records: u32,
     overwritten: u32,
     total: u32,
@@ -281,16 +282,10 @@ pub struct CaptureLog<const N: usize> {
 pub type DefaultLog = CaptureLog<LOG_SIZE>;
 
 impl<const N: usize> CaptureLog<N> {
-    /// RING_OK -- a ring needs at least one byte (the offsets wrap with `% N`).
-    const RING_OK: () = assert!(N > 0, "a capture ring needs at least one byte");
-
     /// new -- an empty log, recording when `enabled`.
     pub const fn new(enabled: bool) -> Self {
-        let () = Self::RING_OK;
         CaptureLog {
-            buf: [0; N],
-            head: 0,
-            used: 0,
+            ring: ByteRing::new(),
             records: 0,
             overwritten: 0,
             total: 0,
@@ -310,8 +305,7 @@ impl<const N: usize> CaptureLog<N> {
 
     /// clear -- empties the ring and zeroes the counters; the enabled flag stays.
     pub fn clear(&mut self) {
-        self.head = 0;
-        self.used = 0;
+        self.ring.clear();
         self.records = 0;
         self.overwritten = 0;
         self.total = 0;
@@ -320,8 +314,8 @@ impl<const N: usize> CaptureLog<N> {
     /// stats -- the ring state.
     pub fn stats(&self) -> Stats {
         Stats {
-            size: N,
-            used: self.used,
+            size: ByteRing::<N>::capacity(),
+            used: self.ring.len(),
             records: self.records,
             overwritten: self.overwritten,
             total: self.total,
@@ -348,33 +342,62 @@ impl<const N: usize> CaptureLog<N> {
         if !self.enabled {
             return;
         }
-        let mut line = Bounded::<TEXT_MAX>::new();
-        // Bounded never fails; a Display impl that fails leaves the part written so far.
-        let _ = line.write_fmt(args);
-        line.finish();
+        let line = format_cut::<TEXT_MAX>(args);
         self.add(time_ms, FLAG_TEXT, line.bytes());
     }
 
     /// for_each -- calls `f` for every held record, oldest first.
     pub fn for_each(&self, mut f: impl FnMut(&Record<'_>)) {
         let first = self.total.wrapping_sub(self.records);
-        let mut pos = self.head;
+        let mut pos = 0;
         let mut scratch = [0u8; PAYLOAD_MAX];
         for offset in 0..self.records {
-            let Some((flags, len, time_ms)) = self.header_at(pos) else {
+            let Some((record, next)) =
+                self.record_at(pos, first.wrapping_add(offset), &mut scratch)
+            else {
                 return;
             };
-            let Some(payload) = scratch.get_mut(..len) else {
-                return;
-            };
-            self.copy_out((pos + HEADER_LEN) % N, payload);
-            f(&Record {
-                index: first.wrapping_add(offset),
+            f(&record);
+            pos = next;
+        }
+    }
+
+    /// get -- the held record with `index` (the number `Record::index` carries), None when it
+    /// was overwritten or has not been added. `scratch` holds the payload the record borrows.
+    pub fn get<'s>(&self, index: u32, scratch: &'s mut [u8; PAYLOAD_MAX]) -> Option<Record<'s>> {
+        let first = self.total.wrapping_sub(self.records);
+        let wanted = index.wrapping_sub(first);
+        if wanted >= self.records {
+            return None;
+        }
+        let mut pos = 0;
+        for _ in 0..wanted {
+            let (_, len, _) = self.header_at(pos)?;
+            pos += HEADER_LEN + len;
+        }
+        self.record_at(pos, index, scratch)
+            .map(|(record, _)| record)
+    }
+
+    /// record_at -- the record whose header starts at ring offset `pos` (0 is the oldest byte),
+    /// copied into `scratch`, and the offset of the next record.
+    fn record_at<'s>(
+        &self,
+        pos: usize,
+        index: u32,
+        scratch: &'s mut [u8; PAYLOAD_MAX],
+    ) -> Option<(Record<'s>, usize)> {
+        let (flags, len, time_ms) = self.header_at(pos)?;
+        let payload = scratch.get_mut(..len)?;
+        self.copy_out(pos + HEADER_LEN, payload);
+        Some((
+            Record {
+                index,
                 time_ms,
                 kind: decode(flags, payload),
-            });
-            pos = (pos + HEADER_LEN + len) % N;
-        }
+            },
+            pos + HEADER_LEN + len,
+        ))
     }
 
     /// add -- appends one record, dropping the oldest whole records until it fits.
@@ -386,34 +409,33 @@ impl<const N: usize> CaptureLog<N> {
             return;
         };
         let need = HEADER_LEN + payload.len();
-        if need > N {
+        if need > ByteRing::<N>::capacity() {
             return; // a ring smaller than the record (only a test ring)
         }
-        while N - self.used < need && self.records > 0 {
+        while self.ring.free() < need && self.records > 0 {
             self.drop_oldest();
         }
         let [t0, t1, t2, t3] = time_ms.to_le_bytes();
-        let tail = (self.head + self.used) % N;
-        self.copy_in(tail, &[flags, len, t0, t1, t2, t3]);
-        self.copy_in((tail + HEADER_LEN) % N, payload);
-        self.used += need;
+        let stored =
+            self.ring.push_slice(&[flags, len, t0, t1, t2, t3]) && self.ring.push_slice(payload);
+        if !stored {
+            return; // cannot happen: the room was made above
+        }
         self.records = self.records.saturating_add(1);
         self.total = self.total.wrapping_add(1);
     }
 
     /// drop_oldest -- removes the oldest whole record and counts it.
     fn drop_oldest(&mut self) {
-        let Some((_, len, _)) = self.header_at(self.head) else {
+        let Some((_, len, _)) = self.header_at(0) else {
             return;
         };
-        let size = HEADER_LEN + len;
-        self.head = (self.head + size) % N;
-        self.used = self.used.saturating_sub(size);
+        self.ring.discard(HEADER_LEN + len);
         self.records = self.records.saturating_sub(1);
         self.overwritten = self.overwritten.saturating_add(1);
     }
 
-    /// header_at -- (flags, payload length, time_ms) of the record at `pos`.
+    /// header_at -- (flags, payload length, time_ms) of the record at ring offset `pos`.
     fn header_at(&self, pos: usize) -> Option<(u8, usize, u32)> {
         let mut header = [0u8; HEADER_LEN];
         self.copy_out(pos, &mut header);
@@ -425,22 +447,10 @@ impl<const N: usize> CaptureLog<N> {
         ))
     }
 
-    /// copy_in -- writes `data` at ring offset `pos` (< N), wrapping the end in two parts.
-    fn copy_in(&mut self, pos: usize, data: &[u8]) {
-        let first = data.len().min(N.saturating_sub(pos));
-        let (head_part, tail_part) = data.split_at(first);
-        if let Some(dst) = self.buf.get_mut(pos..pos + first) {
-            dst.copy_from_slice(head_part);
-        }
-        if let Some(dst) = self.buf.get_mut(..tail_part.len()) {
-            dst.copy_from_slice(tail_part);
-        }
-    }
-
-    /// copy_out -- reads `out.len()` bytes from ring offset `pos` (< N), wrapping the end.
+    /// copy_out -- reads `out.len()` bytes from ring offset `pos`, the oldest byte being 0.
     fn copy_out(&self, pos: usize, out: &mut [u8]) {
         for (slot, at) in out.iter_mut().zip(pos..) {
-            *slot = self.buf.get(at % N).copied().unwrap_or(0);
+            *slot = self.ring.peek_at(at).unwrap_or(0);
         }
     }
 }
@@ -466,12 +476,23 @@ fn decode(flags: u8, payload: &[u8]) -> Kind<'_> {
     }
 }
 
+/// format_cut -- formats `args` into a stack buffer of N bytes. A line longer than N is cut and
+/// ends in `...`. The log's text records and the console's trace lines (the firmware UART
+/// driver) are formatted by this one function.
+pub fn format_cut<const N: usize>(args: Arguments) -> Bounded<N> {
+    let mut line = Bounded::<N>::new();
+    // Bounded never fails; a Display impl that fails leaves the part written so far.
+    let _ = line.write_fmt(args);
+    line.finish();
+    line
+}
+
 /// CUT_MARK -- the end of a line that did not fit.
 const CUT_MARK: &str = "...";
 
 /// Bounded -- a `fmt::Write` into a stack buffer of N bytes that stops at the limit. The trace
 /// line of the log (IPMC_LOG_TEXT_MAX) and the padded columns of a trace row use it.
-struct Bounded<const N: usize> {
+pub struct Bounded<const N: usize> {
     buf: [u8; N],
     len: usize,
     /// A write did not fit.
@@ -511,7 +532,7 @@ impl<const N: usize> Bounded<N> {
     }
 
     /// bytes -- what was written.
-    fn bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         self.buf.get(..self.len).unwrap_or(&[])
     }
 
@@ -834,6 +855,66 @@ impl Display for TraceRow<'_> {
 /// width on its own, so the column is built in a `Bounded` and padded as a `str`).
 const TAIL_MAX: usize = 48;
 
+// ---- the paced dump ----
+
+/// Step -- what the dump does next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Print the record with this index (`CaptureLog::get`).
+    Row(u32),
+    /// This many records of the dump were overwritten before they were printed; the dump
+    /// continues with the oldest record still held.
+    Overwritten(u32),
+    /// Every record that was held at the start has been printed (or lost).
+    Done,
+}
+
+/// DumpCursor -- the position of a dump that runs a few rows per main-loop pass while the log
+/// keeps recording. It dumps the records held when it started, no later ones: `start` fixes the
+/// end, `next` walks towards it, and a record the ring overwrote meanwhile is skipped once,
+/// with a count. Record indices wrap with `total`, so every comparison is a wrapping distance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DumpCursor {
+    /// Index of the next record to print.
+    next: u32,
+    /// Records of the dump still to print or to count as lost.
+    remaining: u32,
+}
+
+impl DumpCursor {
+    /// start -- a dump of the records held now.
+    pub fn start<const N: usize>(log: &CaptureLog<N>) -> Self {
+        DumpCursor {
+            next: log.total.wrapping_sub(log.records),
+            remaining: log.records,
+        }
+    }
+
+    /// next -- the next step. A cleared log (its indices restart) ends the dump.
+    pub fn next<const N: usize>(&mut self, log: &CaptureLog<N>) -> Step {
+        if self.remaining == 0 {
+            return Step::Done;
+        }
+        let first = log.total.wrapping_sub(log.records);
+        // Signed wrapping distances: positive when the log is ahead of the cursor.
+        let behind = first.wrapping_sub(self.next) as i32;
+        if behind > 0 {
+            let lost = behind.unsigned_abs().min(self.remaining);
+            self.next = self.next.wrapping_add(lost);
+            self.remaining -= lost;
+            return Step::Overwritten(lost);
+        }
+        if (log.total.wrapping_sub(self.next) as i32) <= 0 {
+            self.remaining = 0; // the log was cleared: nothing left to print
+            return Step::Done;
+        }
+        let index = self.next;
+        self.next = self.next.wrapping_add(1);
+        self.remaining -= 1;
+        Step::Row(index)
+    }
+}
+
 // ---- the trace tee ----
 
 /// CaptureTrace -- a `Trace` that records every line in the log and forwards it to `inner` when
@@ -897,14 +978,15 @@ mod tests {
     #[test]
     fn records_come_back_oldest_first() {
         let mut log = Small::new(true);
-        // Each text record is 6 + 10 bytes; four fill 64 exactly, so the fifth drops one.
-        for i in 0..4u32 {
+        // Each text record is 6 + 10 bytes; the ring of 64 holds 63 usable bytes, so three fill
+        // 48 and the fourth drops one.
+        for i in 0..3u32 {
             log.text(i, format_args!("line {i:05}"));
         }
-        assert_eq!(held(&log).len(), 4);
-        assert_eq!(log.stats().used, 64);
-        log.text(4, format_args!("line {:05}", 4));
-        let want: Vec<_> = (1..5u32).map(|i| (i, i, format!("line {i:05}"))).collect();
+        assert_eq!(held(&log).len(), 3);
+        assert_eq!(log.stats().used, 48);
+        log.text(3, format_args!("line {:05}", 3));
+        let want: Vec<_> = (1..4u32).map(|i| (i, i, format!("line {i:05}"))).collect();
         assert_eq!(held(&log), want);
     }
 
@@ -924,7 +1006,7 @@ mod tests {
                 .collect();
             log.text(n, format_args!("{text}"));
             model.push((n, n, text));
-            while model.iter().map(|r| 6 + r.2.len()).sum::<usize>() > 64 {
+            while model.iter().map(|r| 6 + r.2.len()).sum::<usize>() > 63 {
                 model.remove(0);
             }
             assert_eq!(held(&log), model, "after record {n}");
@@ -939,16 +1021,82 @@ mod tests {
     fn one_new_record_overwrites_several_old_ones() {
         let mut log = Small::new(true);
         for i in 0..8u32 {
-            log.text(i, format_args!("{i}")); // 7 bytes each, 9 fit
+            log.text(i, format_args!("{i}")); // 7 bytes each, 9 fit in 63
         }
         assert_eq!(log.stats().records, 8);
-        // A 40-byte payload needs 46 of 64 bytes: 56 are used, so six 7-byte records go.
+        // A 40-byte payload needs 46 of 63 bytes: 56 are used, so six 7-byte records go.
         log.text(99, format_args!("{}", "x".repeat(40)));
         let stats = log.stats();
         assert_eq!((stats.records, stats.overwritten, stats.total), (3, 6, 9));
         let got = held(&log);
         assert_eq!(got.iter().map(|r| r.0).collect::<Vec<_>>(), [6, 7, 8]);
         assert_eq!(got[0].2, "6");
+    }
+
+    #[test]
+    fn a_dump_cursor_walks_the_held_records_and_ignores_later_ones() {
+        let mut log = Small::new(true);
+        for i in 0..3u32 {
+            log.text(i, format_args!("r{i}"));
+        }
+        let mut cursor = DumpCursor::start(&log);
+        assert_eq!(cursor.next(&log), Step::Row(0));
+        log.text(9, format_args!("added during the dump"));
+        assert_eq!(cursor.next(&log), Step::Row(1));
+        assert_eq!(cursor.next(&log), Step::Row(2));
+        assert_eq!(cursor.next(&log), Step::Done);
+        assert_eq!(cursor.next(&log), Step::Done);
+        let mut scratch = [0u8; PAYLOAD_MAX];
+        assert_eq!(log.get(1, &mut scratch).map(|r| r.time_ms), Some(1));
+        assert!(log.get(7, &mut scratch).is_none());
+    }
+
+    #[test]
+    fn a_dump_cursor_counts_records_the_ring_overwrote_and_goes_on() {
+        let mut log = Small::new(true);
+        for i in 0..3u32 {
+            log.text(i, format_args!("line {i:05}")); // 16 bytes each, 3 fit
+        }
+        let mut cursor = DumpCursor::start(&log);
+        assert_eq!(cursor.next(&log), Step::Row(0));
+        // The ring holds three of these: two more records push record 1 out.
+        log.text(3, format_args!("line {:05}", 3));
+        log.text(4, format_args!("line {:05}", 4));
+        let first = log.stats().total - log.stats().records;
+        assert_eq!(first, 2);
+        assert_eq!(cursor.next(&log), Step::Overwritten(1));
+        assert_eq!(cursor.next(&log), Step::Row(2));
+        assert_eq!(
+            cursor.next(&log),
+            Step::Done,
+            "records 3 and 4 came after the start"
+        );
+    }
+
+    #[test]
+    fn a_dump_cursor_whose_records_are_all_gone_reports_them_once_then_ends() {
+        let mut log = Small::new(true);
+        for i in 0..3u32 {
+            log.text(i, format_args!("line {i:05}"));
+        }
+        let mut cursor = DumpCursor::start(&log);
+        for i in 3..9u32 {
+            log.text(i, format_args!("line {i:05}"));
+        }
+        assert_eq!(cursor.next(&log), Step::Overwritten(3));
+        assert_eq!(cursor.next(&log), Step::Done);
+    }
+
+    #[test]
+    fn a_dump_cursor_of_an_empty_or_cleared_log_ends() {
+        let mut log = Small::new(true);
+        assert_eq!(DumpCursor::start(&log).next(&log), Step::Done);
+        log.text(1, format_args!("a"));
+        log.text(2, format_args!("b"));
+        let mut cursor = DumpCursor::start(&log);
+        assert_eq!(cursor.next(&log), Step::Row(0));
+        log.clear();
+        assert_eq!(cursor.next(&log), Step::Done);
     }
 
     #[test]
