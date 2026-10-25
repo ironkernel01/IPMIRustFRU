@@ -756,7 +756,7 @@ impl Display for CsvRow<'_> {
 /// TraceRow -- one record as a Wireshark-style text line (no line ending):
 ///
 /// ```text
-/// #12   123.456  IPMB-A  IN   20h -> 82h  App Req   Get Device ID          seq 01h          | 82 18 66 20 04 01 DB
+/// #12   123.456  IPMB-A  IN   20h -> 82h  App Req       Get Device ID          seq 01h          | 82 18 66 20 04 01 DB
 /// #13   123.460  TEXT    <text>
 /// ```
 pub struct TraceRow<'a>(pub &'a Record<'a>, pub &'a dyn Names);
@@ -804,6 +804,8 @@ impl Display for TraceRow<'_> {
         if matches!(status, FrameStatus::Injected | FrameStatus::Failed(_)) {
             let _ = write!(tail, " {}", status.short());
         }
+        // The NetFn column is 14 wide: the longest name ("NetFn 3Ah Req", "Transport Req",
+        // "Group Ext Req") is 13 characters, so one space always follows it.
         let mut netfn = Bounded::<TAIL_MAX>::new();
         let _ = write!(
             netfn,
@@ -813,7 +815,7 @@ impl Display for TraceRow<'_> {
         );
         write!(
             f,
-            "{:02X}h -> {:02X}h  {:<10}{:<22} {:<16} | {}",
+            "{:02X}h -> {:02X}h  {:<14}{:<22} {:<16} | {}",
             h.src,
             h.dest,
             netfn.as_str(),
@@ -1004,26 +1006,31 @@ mod tests {
     #[test]
     fn rows_print_exactly() {
         let names = CoreNames(&NoExtension);
-        let cases: [(Kind, &str, &str); 6] = [
+        let cases: [(Kind, &str, &str); 7] = [
             (
                 frame_kind(Bus::A, Dir::In, FrameStatus::Received, &REQ_IN),
                 "12,123456,FRAME,A,IN,rx,7,\"20h->82h App Req Get Device ID seq 01h\",82 18 66 20 04 01 DB",
-                "#12   123.456  IPMB-A  IN   20h -> 82h  App Req   Get Device ID          seq 01h          | 82 18 66 20 04 01 DB",
+                "#12   123.456  IPMB-A  IN   20h -> 82h  App Req       Get Device ID          seq 01h          | 82 18 66 20 04 01 DB",
             ),
             (
                 frame_kind(Bus::B, Dir::Out, FrameStatus::Sent, &RSP_OUT),
                 "12,123456,FRAME,B,OUT,ok,8,\"82h->20h App Rsp Get Device ID seq 01h CC 00h\",20 1C C4 82 04 01 00 79",
-                "#12   123.456  IPMB-B  OUT  82h -> 20h  App Rsp   Get Device ID          seq 01h CC 00h   | 20 1C C4 82 04 01 00 79",
+                "#12   123.456  IPMB-B  OUT  82h -> 20h  App Rsp       Get Device ID          seq 01h CC 00h   | 20 1C C4 82 04 01 00 79",
             ),
             (
                 frame_kind(Bus::A, Dir::Out, FrameStatus::Failed(TxFault::AddressNack), &PLATFORM),
                 "12,123456,FRAME,A,OUT,addr-nack,14,\"82h->20h S/E Req Platform Event seq 00h\",20 10 D0 82 00 02 04 F0 00 6F A1 00 00 78",
-                "#12   123.456  IPMB-A  OUT  82h -> 20h  S/E Req   Platform Event         seq 00h addr-nack | 20 10 D0 82 00 02 04 F0 00 6F A1 00 00 78",
+                "#12   123.456  IPMB-A  OUT  82h -> 20h  S/E Req       Platform Event         seq 00h addr-nack | 20 10 D0 82 00 02 04 F0 00 6F A1 00 00 78",
             ),
             (
                 frame_kind(Bus::A, Dir::In, FrameStatus::Injected, &REQ_IN),
                 "12,123456,FRAME,A,IN,inject,7,\"20h->82h App Req Get Device ID seq 01h\",82 18 66 20 04 01 DB",
-                "#12   123.456  IPMB-A  IN   20h -> 82h  App Req   Get Device ID          seq 01h inject   | 82 18 66 20 04 01 DB",
+                "#12   123.456  IPMB-A  IN   20h -> 82h  App Req       Get Device ID          seq 01h inject   | 82 18 66 20 04 01 DB",
+            ),
+            (
+                frame_kind(Bus::A, Dir::In, FrameStatus::Received, &GROUP_REQ),
+                "12,123456,FRAME,A,IN,rx,8,\"20h->82h Group Ext Req Get VSO Capabilities seq 01h\",82 B0 CE 20 04 00 03 D9",
+                "#12   123.456  IPMB-A  IN   20h -> 82h  Group Ext Req Get VSO Capabilities   seq 01h          | 82 B0 CE 20 04 00 03 D9",
             ),
             (
                 frame_kind(Bus::A, Dir::In, FrameStatus::Received, &BAD_CHK),
@@ -1052,6 +1059,8 @@ mod tests {
     }
 
     const REQ_IN: [u8; 7] = [0x82, 0x18, 0x66, 0x20, 0x04, 0x01, 0xDB];
+    /// A Group Extension request: the longest NetFn column name (13 characters) leaves a space.
+    const GROUP_REQ: [u8; 8] = [0x82, 0xB0, 0xCE, 0x20, 0x04, 0x00, 0x03, 0xD9];
     const BAD_CHK: [u8; 7] = [0x82, 0x18, 0x67, 0x20, 0x04, 0x01, 0xDB];
     const RSP_OUT: [u8; 8] = [0x20, 0x1C, 0xC4, 0x82, 0x04, 0x01, 0x00, 0x79];
     const PLATFORM: [u8; 14] = [
