@@ -15,7 +15,7 @@
 //      lines (`app request <line>`, `app answer <line>`), cut as the log cuts any text line.
 //
 // Time. A person reads the output, so nothing is dropped, and the main loop never waits for the
-// UART: an answer of up to ANSWER_MAX (1280) bytes is formatted into `out`, then `drain` copies
+// UART: an answer of up to ANSWER_MAX (1280 with the default table) bytes is formatted into `out`, then `drain` copies
 // what the TX ring takes (`uart::write`, which never waits) and keeps a cursor for the rest. While
 // output is pending the port takes no new bytes, so one request is answered at a time and the
 // output order is the request order. One pass does at most IPMC_APP_BYTES_PER_POLL bytes of
@@ -128,9 +128,13 @@ impl AppPort {
                 break;
             };
             // The UART interrupt can lose a byte while this loop runs. Looking after every byte
-            // taken and before it is served means a line completed by this byte is already
-            // marked damaged: it is answered `ERROR LINE_DAMAGED`, never run.
-            self.check_loss(link);
+            // taken and before it is served: a loss found now discards the byte in hand as well
+            // (it can be the line end of the damaged line, or of a line before it, so it is not
+            // trusted) and ends the pass. The editor stays damaged until a line end that arrives
+            // after the discard, so the suffix of a damaged line never runs as a request.
+            if self.check_loss(link) {
+                break;
+            }
             let served = serve(
                 &mut self.editor,
                 byte,
@@ -158,10 +162,11 @@ impl AppPort {
     }
 
     /// check_loss -- when the port lost bytes since the last look, discards everything in the UART
-    /// RX ring and marks the editor damaged. The loss is not tied to a line: the byte can be
-    /// anywhere in the ring, so every byte waiting is dropped and the line editor resynchronises
-    /// at the next line end.
-    fn check_loss(&mut self, link: &mut IpmbLink) {
+    /// RX ring, marks the editor damaged and returns true. The loss is not tied to a line: the
+    /// byte can be anywhere in the ring, so every byte waiting is dropped and the line editor
+    /// resynchronises at the first line end that arrives afterwards. A caller that holds a byte
+    /// taken before the loss was seen drops it too.
+    fn check_loss(&mut self, link: &mut IpmbLink) -> bool {
         let lost_now = lost_bytes();
         let moved = lost_now.wrapping_sub(self.lost_seen);
         if moved > 0 {
@@ -170,6 +175,7 @@ impl AppPort {
             self.lost_seen = lost_now;
             link.log_text(format_args!("app port lost {moved} bytes, ring discarded"));
         }
+        moved > 0
     }
 
     /// drain -- copies what the TX ring takes of the pending output (never waits); true while

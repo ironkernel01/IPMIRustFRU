@@ -36,6 +36,13 @@ value taken from the clock, so a late answer of an earlier run is not matched. A
 read it) ends the answer of the request in progress and is printed. The client clears the bytes
 waiting in the port when it opens it.
 
+The client keeps in step with the prompt (`IPMC_APP_PROMPT` of `defs.rs`): before its first
+request, and before the next one after a request that timed out or ended in a partial line, it
+sends one CR and reads until the prompt arrives (bounded by the answer timeout). A line is the
+echo of a request only when it starts with the prompt followed by exactly the request text;
+without tags a final line is trusted only after that echo, so `--no-tags` with the request `OK`
+reads the `ERROR UNKNOWN` answer and exits 1, not the echo.
+
 The client follows the parsing rule of the protocol: skip the lines that start with `app> `
 (prompt and echo), collect `KEY: value` lines, end the answer at the first line that is `OK`,
 starts with `OK ` or starts with `ERROR `. It prints the data lines and the final line of each

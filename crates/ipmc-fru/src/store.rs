@@ -30,6 +30,9 @@ pub enum FruError {
     BadPad,
     /// The common header's Chassis Info Area offset is not 00h (VITA 46.11 Rule 8.1-3).
     ChassisAreaPresent,
+    /// The common header, the board area, the product area, the MultiRecord chain or the start of
+    /// an Internal Use Area share a byte.
+    Overlap,
 }
 
 impl FruError {
@@ -44,6 +47,7 @@ impl FruError {
             FruError::NoEndMarker => "NoEndMarker",
             FruError::BadPad => "BadPad",
             FruError::ChassisAreaPresent => "ChassisAreaPresent",
+            FruError::Overlap => "Overlap",
         }
     }
 }

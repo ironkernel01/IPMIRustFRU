@@ -38,29 +38,71 @@ use core::fmt::{self, Write};
 use crate::host::AppHost;
 use crate::line::AnswerBuf;
 
-/// ANSWER_MAX -- the size of the buffer one answer is formatted into, bytes: the echo of a few
-/// typed bytes, the data lines, the final line and the prompt. The longest answers are the `HELP`
-/// table and `FRU FIELDS` (a test checks both against this size, with room left over).
-pub const ANSWER_MAX: usize = 1280;
-
 /// TAG_MAX -- the longest tag, letters or digits after the `#` of a request.
 pub const TAG_MAX: usize = 8;
 
-/// MAX_PARAMS -- the most parameters a row may declare.
-pub const MAX_PARAMS: usize = 4;
+/// params_of -- the parameters of one syntax string: the words that start with `[` or `{`.
+const fn params_of(syntax: &str) -> usize {
+    let bytes = syntax.as_bytes();
+    let (mut count, mut i, mut word_start) = (0, 0, true);
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b' ' || byte == b'\t' {
+            word_start = true;
+        } else {
+            if word_start && (byte == b'[' || byte == b'{') {
+                count += 1;
+            }
+            word_start = false;
+        }
+        i += 1;
+    }
+    count
+}
 
-/// FAIL_TEXT_MAX -- room for the sentence of one failure: a whole request line (an unknown
-/// command, a bad word) and 96 bytes of fixed text around it.
-pub const FAIL_TEXT_MAX: usize = ipmc_defs::IPMC_APP_LINE_MAX + 96;
-// The longest fixed sentence is the BAD_DATE range text (66 bytes); a bad word of a whole request
-// line goes into the sentence of UNKNOWN or ARGS (about 40 bytes of fixed text).
-const _: () = assert!(
-    FAIL_TEXT_MAX >= ipmc_defs::IPMC_APP_LINE_MAX + 66,
-    "FAIL_TEXT_MAX must hold a whole request line and the fixed text around it"
-);
+/// max_params -- the largest parameter count of any row of `rows`.
+pub const fn max_params(rows: &[Row]) -> usize {
+    let (mut most, mut i) = (0, 0);
+    while i < rows.len() {
+        let count = params_of(rows[i].syntax);
+        if count > most {
+            most = count;
+        }
+        i += 1;
+    }
+    most
+}
 
-/// PROMPT -- the prompt, written after the start-up banner and after every answer.
-pub const PROMPT: &str = "app> ";
+/// MAX_PARAMS -- the most parameters a row may declare: the largest count of any row of
+/// `COMMANDS`, so a row with more parameters raises it (no number to edit). Another table checked
+/// with `Syntax::parse` may not exceed it.
+pub const MAX_PARAMS: usize = max_params(crate::commands::COMMANDS);
+
+/// QUOTE_MAX -- the most bytes of a request an error sentence quotes (UNKNOWN, a bad field name,
+/// a bad hex byte, a HELP filter); a longer text is cut and ends in `...`. The request line can be
+/// as long as `IPMC_APP_LINE_MAX`; the sentence, and so the final line, does not grow with it.
+pub const QUOTE_MAX: usize = 32;
+
+/// FIXED_TEXT_MAX -- room for the fixed words of one failure sentence (the longest, the BAD_DATE
+/// range text, is 66 bytes; the rest are shorter).
+const FIXED_TEXT_MAX: usize = 96;
+
+/// FAIL_TEXT_MAX -- room for the sentence of one failure: the fixed words and one quoted piece of
+/// a request (`QUOTE_MAX` bytes and the three dots of the cut).
+pub const FAIL_TEXT_MAX: usize = FIXED_TEXT_MAX + QUOTE_MAX + 3;
+
+/// CODE_MAX -- room for the code word of an `ERROR` line (the longest today, ANSWER_TOO_LONG, has
+/// 15 letters).
+const CODE_MAX: usize = 24;
+
+/// FINAL_LINE_MAX -- the longest final line of an answer: `ERROR #<tag> <CODE>: <sentence>` and
+/// its line end. `ANSWER_MAX` keeps room for it behind the echo, whatever the request was.
+pub const FINAL_LINE_MAX: usize =
+    "ERROR #".len() + TAG_MAX + " ".len() + CODE_MAX + ": ".len() + FAIL_TEXT_MAX + END.len();
+
+/// PROMPT -- the prompt, written after the start-up banner and after every answer (defs.rs
+/// IPMC_APP_PROMPT).
+pub const PROMPT: &str = ipmc_defs::IPMC_APP_PROMPT;
 
 /// END -- the end of every line the device sends.
 pub const END: &str = "\r\n";
@@ -98,13 +140,42 @@ impl fmt::Debug for Fail {
     }
 }
 
+/// TOO_LONG_CODE -- the code of the failure that a full answer buffer causes.
+const TOO_LONG_CODE: &str = "ANSWER_TOO_LONG";
+
+/// too_long -- the failure for an answer that does not fit a buffer of `N` bytes.
+fn too_long<const N: usize>() -> Fail {
+    Fail::new(
+        TOO_LONG_CODE,
+        format_args!("the answer does not fit {N} bytes"),
+    )
+}
+
 impl From<fmt::Error> for Fail {
-    /// A write that failed means the answer buffer is full.
+    /// A write that failed means the answer buffer is full. The sentence names no size: `finish`,
+    /// which knows the buffer, replaces any failure with this code by `too_long`.
     fn from(_: fmt::Error) -> Fail {
         Fail::new(
-            "ANSWER_TOO_LONG",
-            format_args!("the answer is longer than {ANSWER_MAX} bytes"),
+            TOO_LONG_CODE,
+            format_args!("the answer does not fit the buffer"),
         )
+    }
+}
+
+/// Quoted -- text of a request in an error sentence: at most `QUOTE_MAX` bytes, then `...` when
+/// the text is longer (cut at a character boundary).
+pub(crate) struct Quoted<'a>(pub &'a str);
+
+impl fmt::Display for Quoted<'_> {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.len() <= QUOTE_MAX {
+            return out.write_str(self.0);
+        }
+        let mut cut = QUOTE_MAX;
+        while !self.0.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        write!(out, "{}...", self.0.get(..cut).unwrap_or(""))
     }
 }
 
@@ -423,7 +494,7 @@ fn unknown(rows: &[Row], line: &str) -> Fail {
     };
     Fail::new(
         "UNKNOWN",
-        format_args!("unknown command '{shown}'; type HELP or ?"),
+        format_args!("unknown command '{}'; type HELP or ?", Quoted(shown)),
     )
 }
 
@@ -453,15 +524,29 @@ pub fn write_help(rows: &[Row], filter: Option<&str>, out: &mut dyn Write) -> Re
     match (printed, filter) {
         (0, Some(text)) => Err(Fail::new(
             "UNKNOWN",
-            format_args!("no command '{text}'; type HELP or ?"),
+            format_args!("no command '{}'; type HELP or ?", Quoted(text)),
         )),
         _ => Ok(()),
     }
 }
 
+/// write_error -- the final `ERROR` line of `fail`, with the tag.
+fn write_error(out: &mut dyn Write, tag: Option<&str>, fail: &Fail) -> fmt::Result {
+    write!(
+        out,
+        "ERROR{} {}: {}{END}",
+        Tagged(tag),
+        fail.code(),
+        fail.text()
+    )
+}
+
 /// finish -- ends an answer that starts at byte `mark` of `out`: the final line of `result`. A
-/// failure takes back the data lines after `mark`; a final line that does not fit does the same
-/// and answers `ANSWER_TOO_LONG`.
+/// failure takes back the data lines after `mark`. A write that does not fit (the final line, or
+/// the error line of a failure) goes back to `mark` too and the answer is the short
+/// `ERROR ANSWER_TOO_LONG: the answer does not fit <N> bytes`; a buffer too small even for that
+/// holds nothing of the answer, never half a line. `ANSWER_MAX` keeps room for `FINAL_LINE_MAX`,
+/// so with the real buffer a request cannot reach the last case.
 fn finish<const N: usize>(
     out: &mut AnswerBuf<N>,
     mark: usize,
@@ -471,16 +556,20 @@ fn finish<const N: usize>(
     #[allow(clippy::result_large_err)]
     // Fail holds its sentence inline (no allocator); it is returned on the failure path only
     let result = result.and_then(|()| Ok(write!(out, "OK{}{END}", Tagged(tag))?));
-    if let Err(fail) = result {
+    let Err(fail) = result else {
+        return;
+    };
+    out.truncate(mark);
+    let fail = if fail.code() == TOO_LONG_CODE {
+        too_long::<N>()
+    } else {
+        fail
+    };
+    if write_error(out, tag, &fail).is_err() {
         out.truncate(mark);
-        // The error line is short; it fits the room the data lines had.
-        let _ = write!(
-            out,
-            "ERROR{} {}: {}{END}",
-            Tagged(tag),
-            fail.code(),
-            fail.text()
-        );
+        if write_error(out, tag, &too_long::<N>()).is_err() {
+            out.truncate(mark);
+        }
     }
 }
 

@@ -14,6 +14,13 @@ The parsing rule this client follows (the rule a payload CPU follows): skip line
     python app_cli.py --port COM5            # interactive: type a request, Enter sends it
     python app_cli.py --port COM5 --raw      # a terminal: every key goes to the port
 
+The client keeps in step with the IPMC's prompt. Before its first request, and before the next
+one after a request that timed out (no answer, or a line that did not end), it sends one CR and
+reads until the prompt arrives (`Transport.sync`, bounded by the answer timeout). A line counts as
+the echo of a request only when it starts with the prompt followed by exactly the request text;
+without tags a final line is trusted only after that echo (or when it is one of the untagged
+errors of a lost request), so the echo of a request such as `OK` is never taken for its answer.
+
 By default each request gets a tag (`#t0001 ...`); the IPMC puts it on the final line, and the
 client discards an answer with another tag (a late answer of an earlier request); the tags of
 a run start from the clock, so an answer of an earlier run is not matched either. The client
@@ -31,8 +38,12 @@ import app_settings
 
 # The protocol line end for requests (the IPMC accepts CR, LF or CR LF). Answers end in CR LF.
 REQUEST_END = b"\r\n"
-# The prompt the IPMC prints after the banner and after every answer; it also starts the echo line.
-DEVICE_PROMPT = "app> "
+# The one CR that synchronises the client with the prompt: the IPMC answers an empty line with the
+# prompt alone.
+SYNC_REQUEST = b"\r"
+# The prompt the IPMC prints after the banner and after every answer; it also starts the echo line
+# (defs.rs IPMC_APP_PROMPT, read through app_settings).
+DEVICE_PROMPT = app_settings.prompt()
 # A tag is `#` and 1 to 8 letters or digits, then a space (crates/ipmc-app/src/engine.rs).
 TAG_PATTERN = re.compile(r"^#[A-Za-z0-9]{1,8} ")
 # A data line: KEY in capitals and underscores, a colon, a blank, the value (maybe empty).
@@ -59,6 +70,15 @@ class SerialTransport:
     def write(self, data):
         self._serial.write(data)
         self._serial.flush()
+
+    def sync(self, prompt):
+        """Clears the input, sends one CR and reads until the prompt arrives (the IPMC answers an
+        empty line with the prompt alone). True when the prompt came before the timeout."""
+        self._serial.reset_input_buffer()
+        self.write(SYNC_REQUEST)
+        expected = prompt.encode("ascii")
+        got = self._serial.read_until(expected, app_settings.SYNC_READ_MAX)
+        return got.endswith(expected)
 
     def read_line(self):
         """One line without its CR LF, or None when the timeout passed with no complete line.
@@ -134,6 +154,9 @@ class Client:
         )
         # Requests refused as too long (not sent); the exit status is 2 when any.
         self.refused = 0
+        # The next request first synchronises with the prompt: true before the first request and
+        # after a request that got no complete answer.
+        self._needs_sync = True
 
     def _next_tag(self):
         self._counter = (self._counter + 1) % app_settings.TAG_COUNTER_MODULUS
@@ -160,23 +183,57 @@ class Client:
                 f"a request is longer than {app_settings.line_max()} bytes"
                 f"{' with its tag' if self._use_tags else ''}"
             )
+        # sync reads the prompt, so the echo of the request sent right after it arrives without
+        # the prompt in front.
+        after_sync = self._needs_sync
+        if self._needs_sync:
+            if not self._transport.sync(DEVICE_PROMPT):
+                return None
+            self._needs_sync = False
         tag = self._next_tag() if self._use_tags else None
         text = f"#{tag} {line}" if tag else line
         self._transport.write(text.encode("ascii") + REQUEST_END)
+        answer = self._read_answer(tag, text, after_sync)
+        if answer is None:
+            self._needs_sync = True
+        return answer
+
+    def _read_answer(self, tag, text, after_sync=False):
+        """Reads lines until the final line of the answer to the request `text` (tag `tag`).
+
+        `after_sync`: the prompt before this request was read by `sync`, so the first line is
+        the bare echo of `text`.
+        """
         collected = []
+        echoed = False
+        bare_echo = after_sync
         while True:
             received = self._transport.read_line()
             if received is None:
                 return None
+            if bare_echo and received:
+                # The first line after a sync: the echo of the request when it equals it.
+                bare_echo = False
+                if received == text:
+                    echoed = True
+                    continue
             if received.startswith(DEVICE_PROMPT):
+                # The prompt, alone or with the echo of a request: ours only when the text after
+                # the prompt is exactly the request.
+                echoed = echoed or received[len(DEVICE_PROMPT) :] == text
+                continue
+            if not received:
                 continue
             if not is_final(received):
-                collected.append(received)
+                if echoed or tag is not None:
+                    collected.append(received)
                 continue
             answer = Answer(collected, received)
-            if tag is None or answer.tag == tag:
-                return answer
             if answer.tag is None and answer.code in UNTAGGED_ERROR_CODES:
+                return answer
+            if tag is not None and answer.tag == tag:
+                return answer
+            if tag is None and echoed:
                 return answer
             collected = []
 

@@ -5,21 +5,50 @@ Run from tools/app-port:  python -m unittest test_app_cli -v
 
 import unittest
 
+import sys
+from pathlib import Path
+
 import app_cli
 import app_settings
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import defs  # noqa: E402  (tools/defs.py)
+
 
 class FakeTransport:
-    """Records writes; read_line returns scripted lines, then None (a timeout)."""
+    """Records writes; read_line returns scripted lines, then None (a timeout).
 
-    def __init__(self, answers, available=()):
+    Like the IPMC it echoes each request it is sent: the line `app> ` and the request text comes
+    before the scripted lines (`echo=False` turns that off). As on the serial port, `sync` reads
+    the prompt, so the echo of the request written right after a sync has no prompt in front.
+    `sync` records that the client synchronised and returns `sync_ok`.
+    """
+
+    def __init__(self, answers, available=(), echo=True, sync_ok=True):
         self.written = []
+        self.events = []
+        self.syncs = 0
         self._answers = list(answers)
         self._available = list(available)
+        self._echo = echo
+        self._sync_ok = sync_ok
+        self._prompt_read = False
         self.closed = False
+
+    def sync(self, prompt):
+        assert prompt == app_cli.DEVICE_PROMPT
+        self.syncs += 1
+        self.events.append("sync")
+        self._prompt_read = self._sync_ok
+        return self._sync_ok
 
     def write(self, data):
         self.written.append(data)
+        self.events.append("write")
+        if self._echo:
+            prompt = "" if self._prompt_read else app_cli.DEVICE_PROMPT
+            self._answers.insert(0, prompt + data.decode("ascii").rstrip("\r\n"))
+        self._prompt_read = False
 
     def read_line(self):
         return self._answers.pop(0) if self._answers else None
@@ -109,6 +138,118 @@ class ParsingTests(unittest.TestCase):
             answer = app_cli.Answer([], final)
             self.assertEqual((answer.status, answer.tag, answer.code, answer.sentence),
                              (status, tag, code, sentence), final)
+
+
+class SyncTests(unittest.TestCase):
+    def test_the_client_syncs_with_the_prompt_before_its_first_request_only(self):
+        transport = FakeTransport(["OK", "OK"])
+        client = app_cli.Client(transport, use_tags=False)
+        client.request("A")
+        client.request("B")
+        self.assertEqual(transport.events, ["sync", "write", "write"])
+
+    def test_without_tags_the_echo_of_ok_is_not_its_answer(self):
+        # The request `OK` is echoed as `app> OK`; the answer is the ERROR line behind it.
+        error = "ERROR UNKNOWN: unknown command 'OK'; type HELP or ?"
+        transport = FakeTransport([error])
+        answer = app_cli.Client(transport, use_tags=False).request("OK")
+        self.assertEqual((answer.ok, answer.code), (False, "UNKNOWN"))
+        self.assertEqual(app_cli.main(["--no-tags", "OK"], lambda *_: FakeTransport([error])), 1)
+
+    def test_after_a_sync_the_bare_echo_is_the_echo_and_not_the_answer(self):
+        # sync reads the prompt, so the board echoes `OK` with no prompt in front; that line is
+        # the echo, and the ERROR behind it is the answer.
+        transport = FakeTransport(
+            ["OK", "ERROR UNKNOWN: unknown command 'OK'; type HELP or ?"], echo=False
+        )
+        answer = app_cli.Client(transport, use_tags=False).request("OK")
+        self.assertEqual((answer.ok, answer.code), (False, "UNKNOWN"))
+
+    def test_a_bare_line_after_a_sync_that_is_not_the_request_is_not_the_echo(self):
+        # A stray final line straight after the sync is not trusted without tags.
+        transport = FakeTransport(["OK"], echo=False)
+        self.assertIsNone(app_cli.Client(transport, use_tags=False).request("INFO"))
+
+    def test_a_line_is_the_echo_only_when_the_prompt_is_followed_by_exactly_the_request(self):
+        # The echo of an earlier request (a late answer) does not make the final line trusted.
+        transport = FakeTransport(
+            ["app> STATUS", "GA: 1", "OK", "app> INFO", "FIRMWARE: x", "OK"], echo=False
+        )
+        client = app_cli.Client(transport, use_tags=False)
+        answer = client.request("INFO")
+        self.assertEqual(answer.data, [("FIRMWARE", "x")])
+        # The first answer's lines were not ours: the client skipped them.
+        self.assertEqual(answer.lines, ["FIRMWARE: x"])
+
+    def test_a_timeout_or_a_partial_line_makes_the_next_request_sync_again(self):
+        transport = FakeTransport(["GA: 1"])
+        client = app_cli.Client(transport, use_tags=False)
+        self.assertIsNone(client.request("STATUS"))
+        self.assertEqual(transport.syncs, 1)
+        transport._answers.extend(["OK"])
+        self.assertTrue(client.request("FRU SAVE").ok)
+        self.assertEqual(transport.events, ["sync", "write", "sync", "write"])
+        # An answer does not need a sync.
+        transport._answers.extend(["OK"])
+        client.request("FRU SAVE")
+        self.assertEqual(transport.syncs, 2)
+
+    def test_no_prompt_after_the_cr_is_no_answer_and_nothing_is_sent(self):
+        transport = FakeTransport(["OK"], sync_ok=False)
+        client = app_cli.Client(transport, use_tags=False)
+        self.assertIsNone(client.request("INFO"))
+        self.assertEqual(transport.written, [])
+        # The next request tries again.
+        transport._sync_ok = True
+        self.assertTrue(client.request("INFO").ok)
+
+    def test_the_serial_transport_sends_one_cr_and_reads_until_the_prompt(self):
+        import sys
+        import types
+
+        calls = []
+
+        class FakeSerial:
+            def __init__(self, port, baud, timeout):
+                self.reply = b"\r\napp> "
+
+            def reset_input_buffer(self):
+                calls.append("reset")
+
+            def write(self, data):
+                calls.append(("write", data))
+
+            def flush(self):
+                calls.append("flush")
+
+            def read_until(self, expected, size):
+                calls.append(("read_until", expected, size))
+                return self.reply
+
+        fake = types.ModuleType("serial")
+        fake.Serial = FakeSerial
+        saved = sys.modules.get("serial")
+        sys.modules["serial"] = fake
+        try:
+            transport = app_cli.SerialTransport("COM9", 115200, 1.0)
+            calls.clear()
+            self.assertTrue(transport.sync("app> "))
+            self.assertEqual(
+                calls,
+                [
+                    "reset",
+                    ("write", b"\r"),
+                    "flush",
+                    ("read_until", b"app> ", app_settings.SYNC_READ_MAX),
+                ],
+            )
+            transport._serial.reply = b"garbage"
+            self.assertFalse(transport.sync("app> "))
+        finally:
+            if saved is None:
+                del sys.modules["serial"]
+            else:
+                sys.modules["serial"] = saved
 
 
 class TagTests(unittest.TestCase):
@@ -390,6 +531,12 @@ class SettingsTests(unittest.TestCase):
     def test_the_header_values_are_read(self):
         self.assertGreater(app_settings.baud_default(), 0)
         self.assertGreater(app_settings.line_max(), 16)
+
+    def test_the_prompt_is_the_one_in_defs_rs(self):
+        self.assertEqual(app_settings.prompt(), defs.read()["IPMC_APP_PROMPT"])
+        self.assertEqual(app_cli.DEVICE_PROMPT, app_settings.prompt())
+        self.assertTrue(app_settings.prompt().endswith(" "))
+        self.assertEqual(app_settings.define_from_header("IPMC_APP_PROMPT", "p> ", "no/such"), "p> ")
 
     def test_a_missing_header_gives_the_default(self):
         self.assertEqual(app_settings.define_from_header("X", 7, "no/such/file.h"), 7)

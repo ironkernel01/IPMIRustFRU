@@ -33,8 +33,12 @@
 //! non-zero value). A build from before the byte rejects a record whose settings are not 00h.
 //!
 //! A record from an older image size (another length field and record length) is not valid for
-//! this build: every slot is invalid, the built image loads, and the first save appends or erases.
-//! An SWD flash keeps the sector, so the saved content is dropped; a drive-copy flash erases it.
+//! this build: every slot is invalid and the built image loads. `Persist::boot` then finds no valid
+//! record in a sector that is not blank and, with NVMRO deasserted, erases it at once (the old
+//! content is dropped at that boot, `BootReport::erased`); with NVMRO asserted it erases nothing
+//! (VITA 46.11 Rec 4.1.10-1), the old records stay in the sector and the first save after NVMRO
+//! clears erases them. A drive-copy flash erases the sector as well; an SWD flash keeps it, so
+//! the boot after it is where the old content goes.
 //!
 //! A slot is valid when the commit word, the length, the version, the sequence and the CRC all
 //! check. Erased flash reads FFh. The scan reads every slot of the sector: the next record goes

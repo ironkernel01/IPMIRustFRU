@@ -389,6 +389,84 @@ const _: () = assert!(
     "FRU command table is invalid"
 );
 
+// ---- the size of HELP ----
+//
+// A HELP listing is output too: it goes into the console TX ring whole (see data_cmds.rs, "how
+// much a console command may print"), so the longest one must fit it. The listing prints for
+// each entry two blanks, the syntax padded to the longest syntax of the listing, ` - `, the help
+// sentence and CR LF; a group listing has the group's commands and the four built-in entries
+// (HELP, ?, UP, ..), a title (at most 40 bytes) and a footer (at most 90); the root listing has
+// every group (name and description), the top commands and the two built-in entries. The width
+// used below is the longest syntax of any table or group name, which is at least what any one
+// listing pads to.
+
+/// help_width -- the longest syntax or group name of the tables.
+const fn help_width(top: &[ConsoleCommand], groups: &[Group<Context>]) -> usize {
+    let mut width = 4; // the built-in entries are at most "HELP" / ".." / "UP" / "?"
+    let mut i = 0;
+    while i < top.len() {
+        width = max_of(width, top[i].syntax.len());
+        i += 1;
+    }
+    let mut g = 0;
+    while g < groups.len() {
+        width = max_of(width, groups[g].name.len());
+        let mut c = 0;
+        while c < groups[g].commands.len() {
+            width = max_of(width, groups[g].commands[c].syntax.len());
+            c += 1;
+        }
+        g += 1;
+    }
+    width
+}
+
+/// max_of -- the larger of two sizes.
+const fn max_of(a: usize, b: usize) -> usize {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// help_rows -- the bytes of the rows of `commands` at `width`.
+const fn help_rows(commands: &[ConsoleCommand], width: usize) -> usize {
+    let (mut total, mut i) = (0, 0);
+    while i < commands.len() {
+        total += 2 + width + 3 + commands[i].help.len() + 2;
+        i += 1;
+    }
+    total
+}
+
+/// help_worst -- the bytes of the longest HELP listing: a group's, or the root's.
+const fn help_worst(top: &[ConsoleCommand], groups: &[Group<Context>]) -> usize {
+    let width = help_width(top, groups);
+    // Built-in entries: HELP "List commands", ? "Same as HELP", UP "Leave this group", .. "Same as
+    // UP" (at most 16 bytes of text each).
+    let builtin = 4 * (2 + width + 3 + 16 + 2);
+    let mut worst = 40 + 90 + builtin + help_rows(top, width);
+    let mut g = 0;
+    while g < groups.len() {
+        let group = help_rows(groups[g].commands, width) + 40 + 90 + builtin;
+        worst = max_of(worst, group);
+        g += 1;
+    }
+    let mut root = 40 + 90 + help_rows(top, width) + 2 * (2 + width + 3 + 16 + 2);
+    g = 0;
+    while g < groups.len() {
+        root += 2 + width + 3 + groups[g].description.len() + 2;
+        g += 1;
+    }
+    max_of(worst, root)
+}
+
+const _: () = assert!(
+    help_worst(&TOP_COMMANDS, &GROUPS) + 256 <= uart::CONSOLE_TX_USABLE,
+    "IPMC_UART_TX_BUF is too small for the longest HELP listing (console.rs help_worst)"
+);
+
 /// Console -- the console: line editor, menu and handler context.
 pub struct Console {
     ctx: Context,

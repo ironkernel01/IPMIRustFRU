@@ -78,6 +78,10 @@ const AF_USART: u8 = 7;
 
 const CONSOLE_RX: usize = ipmc_defs::IPMC_UART_RX_BUF;
 const CONSOLE_TX: usize = ipmc_defs::IPMC_UART_TX_BUF;
+/// CONSOLE_TX_USABLE -- bytes the console TX ring holds at once: a ring of N bytes keeps one slot
+/// free. Console output waits while the ring is full, so a command whose whole output is no
+/// longer than this never waits for the wire (the console commands bound their output by it).
+pub const CONSOLE_TX_USABLE: usize = CONSOLE_TX - 1;
 const APP_RX: usize = ipmc_defs::IPMC_APP_UART_RX_BUF;
 const APP_TX: usize = ipmc_defs::IPMC_APP_UART_TX_BUF;
 

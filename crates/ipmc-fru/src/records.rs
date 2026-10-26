@@ -562,6 +562,9 @@ impl<'a> Iterator for MultiRecords<'a> {
 ///    version 2h (BadVersion), a zero header checksum and a zero data checksum (BadChecksum), data
 ///    inside the image (BadLength) and an end-of-list record before the image ends (NoEndMarker).
 ///    The chain walk is bounded by the image length.
+/// 5. The common header, the board area, the product area and the MultiRecord chain share no
+///    byte, and an Internal Use Area does not start inside one of them (Overlap): a local write
+///    to a field of one must not change another.
 ///
 /// The built image has no Internal Use area and one MultiRecord record (the Alternate Mfg
 /// Date/Time record); a Chassis Manager may add an Internal Use area (VITA Permission 8.1-1) or
@@ -577,10 +580,16 @@ pub fn verify(image: &[u8]) -> Result<(), FruError> {
     if head.chassis != 0 {
         return Err(FruError::ChassisAreaPresent);
     }
-    for (units, kind) in [
+    // The byte ranges the header, the two areas and the MultiRecord chain take; an Internal Use
+    // Area counts as its first byte (it has no length of its own).
+    let mut ranges = [(0, COMMON_HEADER_LEN), (0, 0), (0, 0), (0, 0), (0, 0)];
+    for (slot, (units, kind)) in [
         (head.board, AreaKind::Board),
         (head.product, AreaKind::Product),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if units == 0 {
             return Err(FruError::BadLength);
         }
@@ -591,12 +600,34 @@ pub fn verify(image: &[u8]) -> Result<(), FruError> {
         if !found.has_end_marker() {
             return Err(FruError::NoEndMarker);
         }
+        let start = usize::from(units) * AREA_ALIGN;
+        if let Some(range) = ranges.get_mut(slot + 1) {
+            *range = (start, start + found.bytes.len());
+        }
     }
     if head.internal != 0 {
         verify_internal_use(image, head.internal)?;
+        let start = usize::from(head.internal) * AREA_ALIGN;
+        if let Some(range) = ranges.get_mut(3) {
+            *range = (start, start + 1);
+        }
     }
     if head.multirecord != 0 {
-        verify_multirecord(image, head.multirecord)?;
+        let end = verify_multirecord(image, head.multirecord)?;
+        if let Some(range) = ranges.get_mut(4) {
+            *range = (usize::from(head.multirecord) * AREA_ALIGN, end);
+        }
+    }
+    // No two ranges share a byte: an area that sits on another would make a write to one field
+    // change the other.
+    for (index, a) in ranges.iter().enumerate() {
+        if ranges
+            .iter()
+            .skip(index + 1)
+            .any(|b| a.0 < b.1 && b.0 < a.1)
+        {
+            return Err(FruError::Overlap);
+        }
     }
     Ok(())
 }
@@ -612,10 +643,10 @@ fn verify_internal_use(image: &[u8], units: u8) -> Result<(), FruError> {
     Ok(())
 }
 
-/// verify_multirecord -- walks the MultiRecord chain from `units` to its end-of-list record.
-/// Every record takes at least MULTIRECORD_HEADER_LEN bytes, so fewer than `image.len()` records
-/// fit; that bounds the loop.
-fn verify_multirecord(image: &[u8], units: u8) -> Result<(), FruError> {
+/// verify_multirecord -- walks the MultiRecord chain from `units` to its end-of-list record and
+/// returns the offset after it. Every record takes at least MULTIRECORD_HEADER_LEN bytes, so
+/// fewer than `image.len()` records fit; that bounds the loop.
+fn verify_multirecord(image: &[u8], units: u8) -> Result<usize, FruError> {
     let mut offset = usize::from(units) * AREA_ALIGN;
     for _ in 0..image.len() {
         let header_end = offset
@@ -640,7 +671,7 @@ fn verify_multirecord(image: &[u8], units: u8) -> Result<(), FruError> {
             return Err(FruError::BadChecksum);
         }
         if flags & MULTIRECORD_END_OF_LIST != 0 {
-            return Ok(());
+            return Ok(data_end);
         }
         offset = data_end;
     }
@@ -1092,6 +1123,54 @@ mod tests {
             })),
             Err(FruError::BadVersion)
         );
+    }
+
+    #[test]
+    fn areas_that_share_bytes_are_refused() {
+        let at = |units: usize| (units / AREA_ALIGN) as u8;
+        let fix_header = |b: &mut Vec<u8>| b[7] = checksum(&b[..7]);
+        // The product area sits on the board area; both decode and both checksums hold.
+        let same_offset = altered(|b| {
+            b[4] = b[3];
+            fix_header(b);
+        });
+        // The board area is long enough to run into the product area.
+        let board_runs_on = altered(|b| {
+            let last = BOARD_AT + 208 - 1;
+            b[BOARD_AT + 1] = (208 / AREA_ALIGN) as u8;
+            b[last] = checksum(&b[BOARD_AT..last]);
+            // The board checksum byte lies in the product area's reserved room: repair that
+            // area's checksum too, so both areas decode.
+            let product_last = PRODUCT_AT + PRODUCT_LEN - 1;
+            b[product_last] = checksum(&b[PRODUCT_AT..product_last]);
+        });
+        // The MultiRecord chain starts inside the product area's reserved room.
+        let chain_in_product = altered(|b| {
+            let (start, last) = (0xE0, PRODUCT_AT + PRODUCT_LEN - 1);
+            b[5] = at(start);
+            fix_header(b);
+            b[start..start + 7].copy_from_slice(&[0xC0, 0x82, 0x02, 0x01, 0xBB, 0xAA, 0x55]);
+            b[last] = checksum(&b[PRODUCT_AT..last]);
+        });
+        // The Internal Use Area starts on the board area (whose first byte is 01h, a version
+        // byte that passes).
+        let internal_in_board = altered(|b| {
+            b[1] = at(BOARD_AT);
+            fix_header(b);
+        });
+        for (name, bytes, want) in [
+            ("same offset", same_offset, Err(FruError::Overlap)),
+            ("board runs on", board_runs_on, Err(FruError::Overlap)),
+            ("chain in product", chain_in_product, Err(FruError::Overlap)),
+            (
+                "internal in board",
+                internal_in_board,
+                Err(FruError::Overlap),
+            ),
+        ] {
+            assert_eq!(verify(&bytes), want, "{name}");
+        }
+        assert_eq!(FruError::Overlap.name(), "Overlap");
     }
 
     #[test]

@@ -198,6 +198,9 @@ pub const IPMC_APP_UART_TX_BUF: usize = 1024;
 pub const IPMC_APP_LINE_MAX: usize = 128;
 /// most application port bytes one main-loop pass takes (1..=IPMC_APP_UART_RX_BUF)
 pub const IPMC_APP_BYTES_PER_POLL: usize = 32;
+/// application port prompt, printed after the banner and after every answer; the payload CPU skips
+/// every line that starts with it (1..=16 printable ASCII bytes, the last one a space)
+pub const IPMC_APP_PROMPT: &str = "app> ";
 /// true = the console FRU menu sets every FRU field (SET) and restores the built image (RESTORE);
 /// false = the console FRU menu is read only (SHOW, DUMP, STORE, FIELDS, GET) and the SET and
 /// RESTORE commands do not exist

@@ -12,7 +12,8 @@ use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruField};
 
 use crate::engine::{
-    final_line, reject, run, write_help, Args, Fail, Row, ANSWER_MAX, END, PROMPT, TAG_MAX,
+    final_line, reject, run, write_help, Args, Fail, Quoted, Row, END, FINAL_LINE_MAX, PROMPT,
+    TAG_MAX,
 };
 use crate::host::{AppHost, SaveState};
 use crate::line::{AnswerBuf, Fed, LineEditor};
@@ -128,21 +129,46 @@ const fn fields_worst_case() -> usize {
 }
 
 /// ECHO_WORST_CASE -- the echo of one pass of typed bytes (`IPMC_APP_BYTES_PER_POLL`), 3 bytes
-/// each at worst (a backspace echoes BS SP BS), which comes before an answer in the buffer.
-const ECHO_WORST_CASE: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL * 3;
+/// each at worst (a backspace echoes BS SP BS), which comes before an answer in the buffer. The
+/// echo is what one pass takes, not the whole line: the firmware serves at most that many bytes
+/// before the output drains, so `IPMC_APP_LINE_MAX` does not enter the buffer size (a request
+/// is quoted at most `QUOTE_MAX` bytes in an error sentence).
+pub(crate) const ECHO_WORST_CASE: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL * 3;
 
 /// ANSWER_TAIL -- what follows the data lines: `OK`, a blank, `#` and a tag of `TAG_MAX` letters or
 /// digits (the longest final line), the line end, and the prompt.
 const ANSWER_TAIL: usize = "OK #".len() + TAG_MAX + END.len() + PROMPT.len();
 
-// The longest answers (the `HELP` table and `FRU FIELDS` with 63-byte values) with the echo in
-// front and the final line and prompt behind fit the answer buffer. A command added to the table,
-// a longer help sentence or a larger `IPMC_APP_BYTES_PER_POLL` that breaks this fails the build
-// here, not on a payload CPU.
+/// max_of -- the larger of two sizes.
+const fn max_of(a: usize, b: usize) -> usize {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// ANSWER_NEED -- the bytes the worst answer takes behind the echo: the larger of the longest data
+/// answer (the `HELP` table or `FRU FIELDS` with 63-byte values, then `OK`, a tag and the prompt)
+/// and the longest `ERROR` final line with the prompt.
+pub(crate) const ANSWER_NEED: usize = ECHO_WORST_CASE
+    + max_of(
+        ANSWER_TAIL + max_of(help_worst_case(), fields_worst_case()),
+        FINAL_LINE_MAX + PROMPT.len(),
+    );
+
+/// ANSWER_MAX -- the size of the buffer one answer is formatted into, bytes: `ANSWER_NEED` rounded
+/// up to a multiple of 64. It follows from the command table and the field lengths; a longer help
+/// sentence, a new command or a larger `IPMC_APP_BYTES_PER_POLL` grows it with no number to edit.
+pub const ANSWER_MAX: usize = ANSWER_NEED.div_ceil(64) * 64;
+
+// The buffer holds the worst answer and the longest final line behind the echo (true by the
+// definition above; the guard stays so a later edit of the definition cannot lose it).
 const _: () = assert!(
     ECHO_WORST_CASE + ANSWER_TAIL + help_worst_case() <= ANSWER_MAX
-        && ECHO_WORST_CASE + ANSWER_TAIL + fields_worst_case() <= ANSWER_MAX,
-    "ANSWER_MAX is too small for the longest answer (HELP or FRU FIELDS) with the echo, the tag and the prompt"
+        && ECHO_WORST_CASE + ANSWER_TAIL + fields_worst_case() <= ANSWER_MAX
+        && ECHO_WORST_CASE + FINAL_LINE_MAX + PROMPT.len() <= ANSWER_MAX,
+    "ANSWER_MAX is too small for the longest answer (HELP, FRU FIELDS or an ERROR line) with the echo, the tag and the prompt"
 );
 
 // ---- the byte-to-answer step ----
@@ -201,7 +227,7 @@ pub fn respond<const N: usize>(
             ),
         ),
     }
-    // The prompt is short; the buffer keeps room for it (a test checks the longest answers).
+    // The buffer keeps room for the prompt behind the longest answer (`ANSWER_MAX`).
     let _ = out.write_str(PROMPT);
     true
 }
@@ -252,12 +278,13 @@ fn data(out: &mut dyn Write, key: &str, value: fmt::Arguments<'_>) -> Result<(),
 /// field_of -- the field named by `word`.
 #[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn field_of(word: &str) -> Result<FruField, Fail> {
-    FruField::from_name(word).ok_or_else(|| {
-        Fail::new(
+    match FruField::from_name(word) {
+        Some(field) => Ok(field),
+        None => Err(Fail::new(
             "ARGS",
-            format_args!("unknown field '{word}'; FRU FIELDS lists them"),
-        )
-    })
+            format_args!("unknown field '{}'; FRU FIELDS lists them", Quoted(word)),
+        )),
+    }
 }
 
 /// field_error -- the failure of a field access. `field` gives the name and size in the text.
@@ -488,7 +515,7 @@ fn cmd_fru_save(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
 #[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn hex_byte(word: &str) -> Result<u8, Fail> {
     ipmc_wire::hex_word(word)
-        .ok_or_else(|| Fail::new("ARGS", format_args!("'{word}' is not a hex byte")))
+        .ok_or_else(|| Fail::new("ARGS", format_args!("'{}' is not a hex byte", Quoted(word))))
 }
 
 /// cmd_ipmi -- `IPMI <netfn> <cmd> {data...}` runs one request through the IPMI dispatcher as

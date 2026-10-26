@@ -31,7 +31,7 @@
 //! There is one mode. A person at a terminal reads it as it is; a payload CPU parses it with
 //! three rules. The port is plain ASCII at 115200 baud, 8N1 (`IPMC_APP_UART_BAUD`).
 //!
-//! - The IPMC prints a start-up banner, one line, then the prompt `app> ` (`PROMPT`). It prints
+//! - The IPMC prints a start-up banner, one line, then the prompt `app> ` (`PROMPT`, defs.rs `IPMC_APP_PROMPT`). It prints
 //!   the prompt again after every answer.
 //! - It echoes every printable byte it receives, erases with BS SP BS when it receives backspace
 //!   (08h or 7Fh), and takes a request line at CR, LF or CR LF (one line end; no empty second
@@ -44,7 +44,9 @@
 //!     blanks between the colon and the parenthesis. The `HELP` rows are the one exception: the
 //!     aligned table, each row starting with two spaces.
 //!   - The final line is `OK`, or `ERROR <CODE>: <sentence>` with CODE in capitals and
-//!     underscores and the sentence written for a person.
+//!     underscores and the sentence written for a person. A sentence that quotes the request
+//!     quotes at most `QUOTE_MAX` bytes of it and ends the quote in `...` when it cuts, so no
+//!     final line outgrows the answer buffer whatever the length of the request.
 //! - A request may start with a tag, `#` and 1 to 8 letters or digits. The final line carries it
 //!   after the `OK` or `ERROR`: `OK #a7`, `ERROR #a7 TOO_LONG: ...`. Data lines carry no tag. A
 //!   bad tag, or a line that was lost or could not be read (too long, a byte that is not
@@ -77,8 +79,11 @@
 //! the next line end answers `ERROR LINE_DAMAGED: <n> bytes lost on the port; the line was
 //! dropped` (no tag, because the tag may be among the lost bytes), nothing runs for it, and the
 //! lines after it run normally. The firmware looks at the loss counter after every byte it takes,
-//! before it serves that byte, so a line that a byte ends after a loss is a damaged line too and
-//! never runs. Lines that were complete inside the discarded bytes get no
+//! before it serves that byte. A loss found then discards the byte in hand as well (it can be the
+//! line end of the damaged line, or of a line before it, and it is not trusted) and ends the
+//! pass; the editor stays damaged until a line end that arrives after the discard, so a suffix of
+//! the damaged line never runs as a request of its own. Lines that were complete inside the
+//! discarded bytes get no
 //! answer at all: a payload CPU treats an answer that does not arrive within its timeout as a
 //! lost request and sends it again. A payload that writes a field also compares the
 //! `FRU SET` echo with what it sent. With `IPMC_APP_UART_FLOW` true the IPMC deasserts RTS only
@@ -201,9 +206,11 @@ pub mod line;
 #[cfg(test)]
 mod tests;
 
-pub use commands::{answer_final_line, banner, respond, serve, Served, COMMANDS, PROTOCOL_VERSION};
+pub use commands::{
+    answer_final_line, banner, respond, serve, Served, ANSWER_MAX, COMMANDS, PROTOCOL_VERSION,
+};
 pub use engine::{
-    check_table, final_line, run, Args, Fail, Handler, Row, ANSWER_MAX, END, PROMPT, TAG_MAX,
+    check_table, final_line, run, Args, Fail, Handler, Row, END, PROMPT, QUOTE_MAX, TAG_MAX,
 };
 pub use host::{AppError, AppHost, IpmiData, SaveState, Status};
 pub use line::{AnswerBuf, Echo, Edit, Fed, LineEditor};

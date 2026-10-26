@@ -249,6 +249,23 @@ const _: () = assert!(
     IPMC_APP_BYTES_PER_POLL >= 1 && IPMC_APP_BYTES_PER_POLL <= IPMC_APP_UART_RX_BUF,
     "IPMC_APP_BYTES_PER_POLL must be 1..=IPMC_APP_UART_RX_BUF"
 );
+// The prompt: 1..=16 bytes of printable ASCII (20h..=7Eh), ending in a space, so a request echoed
+// after it is one line that starts with the prompt.
+const _: () = {
+    let prompt = IPMC_APP_PROMPT.as_bytes();
+    assert!(
+        !prompt.is_empty() && prompt.len() <= 16 && prompt[prompt.len() - 1] == b' ',
+        "IPMC_APP_PROMPT must be 1..=16 bytes and end in a space"
+    );
+    let mut i = 0;
+    while i < prompt.len() {
+        assert!(
+            prompt[i] >= 0x20 && prompt[i] <= 0x7E,
+            "IPMC_APP_PROMPT must be printable ASCII"
+        );
+        i += 1;
+    }
+};
 const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,
     "IPMC_MENU_LINE_MAX must be 1..IPMC_UART_RX_BUF (usable ring bytes must cover a line)"

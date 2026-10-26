@@ -83,8 +83,20 @@ const fn put_digits(buf: &mut [u8; TEXT_LEN], at: usize, value: i64, width: usiz
     }
 }
 
+/// checked_text_of -- `minutes` as the 16 bytes `YYYY-MM-DD HH:MM`, or None for a value past
+/// `MINUTES_MAX` (a stored count that is not a date this IPMC accepts). A printer that shows what
+/// is stored uses this one, so it never shows a date that is not there.
+pub const fn checked_text_of(minutes: u32) -> Option<[u8; TEXT_LEN]> {
+    if minutes > MINUTES_MAX {
+        None
+    } else {
+        Some(text_of(minutes))
+    }
+}
+
 /// text_of -- `minutes` as the 16 bytes `YYYY-MM-DD HH:MM`; a value past `MINUTES_MAX` prints as
-/// `MINUTES_MAX`. The one formatter of the date: `FieldValue`'s Display uses it.
+/// `MINUTES_MAX` (`checked_text_of` returns None for it). The one formatter of the date:
+/// `FieldValue`'s Display uses it.
 pub const fn text_of(minutes: u32) -> [u8; TEXT_LEN] {
     let minutes = if minutes > MINUTES_MAX {
         MINUTES_MAX
@@ -187,5 +199,22 @@ impl fmt::Display for DateRange {
             core::str::from_utf8(&first).unwrap_or(""),
             core::str::from_utf8(&last).unwrap_or("")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_checked_text_is_none_above_the_range_and_the_text_otherwise() {
+        let text =
+            |minutes| checked_text_of(minutes).map(|t| String::from_utf8(t.to_vec()).unwrap());
+        assert_eq!(text(MINUTES_MIN).as_deref(), Some("1996-01-01 00:01"));
+        assert_eq!(text(MINUTES_MAX).as_deref(), Some("9999-12-31 23:59"));
+        assert_eq!(text(MINUTES_MAX + 1), None);
+        assert_eq!(text(u32::MAX), None);
+        // The clamping formatter keeps its behaviour for the callers that want a value.
+        assert_eq!(text_of(u32::MAX), text_of(MINUTES_MAX));
     }
 }

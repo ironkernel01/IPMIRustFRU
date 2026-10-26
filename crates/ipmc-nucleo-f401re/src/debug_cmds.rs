@@ -481,7 +481,24 @@ pub fn cmd_debug_inject(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     Ok(())
 }
 
-/// cmd_debug_cache -- DEBUG CACHE {ACTION}: the duplicate cache entries, or CLEAR.
+/// CACHE_ROW -- one DEBUG CACHE row, worst case, CR LF counted as 2: `  rqSA FFh seq FFh ` (19),
+/// the NetFn name (9), a blank, the command name (the command tables' names are at most 29 bytes
+/// today; 48 allowed), `: 255 bytes, age 4294967295 ms (expired)` (42) and the line end = 119,
+/// rounded up to 128.
+const CACHE_ROW: usize = 128;
+
+/// CACHE_ROWS_MAX -- rows DEBUG CACHE prints: what the console TX ring holds after 256 bytes for
+/// the header line, the "more" line and what the ring still holds ((4095 - 256) / 128 = 29 with the
+/// default ring). The cache holds up to IPMB_DUP_CACHE (64) entries, written by whatever the bus
+/// sends; the others are counted in the last line.
+const CACHE_ROWS_MAX: usize = uart::CONSOLE_TX_USABLE.saturating_sub(256) / CACHE_ROW;
+const _: () = assert!(
+    CACHE_ROWS_MAX >= 1,
+    "IPMC_UART_TX_BUF is too small for DEBUG CACHE (debug_cmds.rs CACHE_ROW)"
+);
+
+/// cmd_debug_cache -- DEBUG CACHE {ACTION}: the duplicate cache entries (at most
+/// `CACHE_ROWS_MAX`, then a line that counts the rest), or CLEAR.
 pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     match optional(args.text_at(0))? {
         None => {
@@ -491,7 +508,16 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
                 "Duplicate cache: {} entries\n",
                 link.link().duplicate_cache_len()
             );
-            for e in link.link().duplicate_cache_entries(systick::millis()) {
+            let mut left = 0;
+            for (index, e) in link
+                .link()
+                .duplicate_cache_entries(systick::millis())
+                .enumerate()
+            {
+                if index >= CACHE_ROWS_MAX {
+                    left += 1;
+                    continue;
+                }
                 out!(
                     "  rqSA {:02X}h seq {:02X}h {} {}: {} bytes, age {} ms{}\n",
                     e.rq_sa,
@@ -506,6 +532,9 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
                     e.age_ms,
                     if e.live { "" } else { " (expired)" }
                 );
+            }
+            if left > 0 {
+                out!("  ... {} more entries\n", left);
             }
             Ok(())
         }

@@ -12,9 +12,10 @@ use ipmc_core::identity::{additional_support, DEVICE_IDENTITY};
 use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruField, FruStore};
 
-use crate::commands::{ipmi_request, set_field};
+use crate::commands::{ipmi_request, set_field, ANSWER_NEED, ECHO_WORST_CASE};
 use crate::engine::{
     check_table, find, write_help, Fail, Row, Syntax, SyntaxError, TableError, FAIL_TEXT_MAX,
+    FINAL_LINE_MAX, MAX_PARAMS, QUOTE_MAX,
 };
 use crate::{
     answer_final_line, banner, final_line, respond, run, serve, AnswerBuf, AppError, AppHost, Args,
@@ -458,6 +459,14 @@ fn a_malformed_syntax_string_is_rejected_with_its_rule() {
         ("SET {A...} {B}", SyntaxError::RestNotLast),
         ("SET [A] [B] [C] [D] [E]", SyntaxError::TooManyParameters),
     ];
+    // The limit is the largest row of COMMANDS (IPMI: two required and the rest), computed.
+    assert_eq!(MAX_PARAMS, 3);
+    let one_too_many = format!("SET {}", "[A] ".repeat(MAX_PARAMS + 1));
+    assert_eq!(
+        Syntax::parse(&one_too_many),
+        Err(SyntaxError::TooManyParameters)
+    );
+    assert!(Syntax::parse(&format!("SET {}", "[A] ".repeat(MAX_PARAMS))).is_ok());
     for (text, error) in rows {
         assert_eq!(Syntax::parse(text), Err(error), "{text:?}");
     }
@@ -465,7 +474,7 @@ fn a_malformed_syntax_string_is_rejected_with_its_rule() {
     let good = [
         ("?", (1, 0, 0, false)),
         ("FRU SET [FIELD] {VALUE...}", (2, 1, 0, true)),
-        ("A [X] [Y] {Z} {W}", (1, 2, 2, false)),
+        ("A [X] [Y] {Z}", (1, 2, 1, false)),
         ("A {REST...}", (1, 0, 0, true)),
     ];
     for (text, (keywords, required, optional, rest)) in good {
@@ -588,11 +597,126 @@ fn an_answer_that_does_not_fit_is_replaced_by_answer_too_long() {
     run(COMMANDS, "#x HELP", &mut host, &mut small);
     assert_eq!(
         small.as_str(),
-        format!("ERROR #x ANSWER_TOO_LONG: the answer is longer than {ANSWER_MAX} bytes\r\n")
+        "ERROR #x ANSWER_TOO_LONG: the answer does not fit 200 bytes\r\n"
     );
     assert!(!small.overflowed());
     let mut tiny = AnswerBuf::<10>::new();
     assert!(write_help(COMMANDS, None, &mut tiny).is_err());
+}
+
+/// answer_in -- the buffer after `run` of `request` behind the 6 bytes of echo `echo\r\n`, in a
+/// buffer of N bytes, and whether a write overflowed.
+fn answer_in<const N: usize>(request: &str) -> (String, bool) {
+    let mut out = AnswerBuf::<N>::new();
+    out.write_str("echo\r\n").unwrap();
+    run(COMMANDS, request, &mut FakeHost::new(), &mut out);
+    (out.as_str().to_string(), out.overflowed())
+}
+
+#[test]
+fn a_final_line_that_does_not_fit_rolls_back_to_the_start_of_the_answer() {
+    let short = |n: usize| {
+        format!("echo\r\nERROR #t ANSWER_TOO_LONG: the answer does not fit {n} bytes\r\n")
+    };
+    let long_word = "X".repeat(QUOTE_MAX);
+    // The data lines do not fit: the short error line replaces them.
+    assert_eq!(answer_in::<80>("#t STATUS"), (short(80), false));
+    // The error line of the failure does not fit but the short one does.
+    assert_eq!(
+        answer_in::<80>(&format!("#t {long_word}")),
+        (short(80), false)
+    );
+    // The data line fits and the OK line does not, and the short error line has no room either:
+    // nothing of the answer stays, only the echo.
+    assert_eq!(
+        answer_in::<22>("#t FRU GET ASSET_TAG"),
+        ("echo\r\n".to_string(), false)
+    );
+    assert_eq!(answer_in::<8>("#t HELP"), ("echo\r\n".to_string(), false));
+    // Room for everything: the answer is whole.
+    assert_eq!(
+        answer_in::<64>("#t FRU GET ASSET_TAG"),
+        ("echo\r\nASSET_TAG: \r\nOK #t\r\n".to_string(), false)
+    );
+}
+
+#[test]
+fn a_request_is_quoted_at_most_quote_max_bytes() {
+    let mut host = FakeHost::new();
+    let word = "X".repeat(4000);
+    let cut = format!("{}...", "X".repeat(QUOTE_MAX));
+    let cases = [
+        (
+            word.clone(),
+            format!("ERROR UNKNOWN: unknown command '{cut}'; type HELP or ?\n"),
+        ),
+        (
+            format!("FRU BOGUS {word}"),
+            "ERROR UNKNOWN: unknown command 'FRU BOGUS'; type HELP or ?\n".to_string(),
+        ),
+        (
+            format!("FRU GET {word}"),
+            format!("ERROR ARGS: unknown field '{cut}'; FRU FIELDS lists them\n"),
+        ),
+        (
+            format!("IPMI {word} 01"),
+            format!("ERROR ARGS: '{cut}' is not a hex byte\n"),
+        ),
+        (
+            format!("HELP {word}"),
+            format!("ERROR UNKNOWN: no command '{cut}'; type HELP or ?\n"),
+        ),
+        // A text of exactly QUOTE_MAX bytes is quoted whole.
+        (
+            "X".repeat(QUOTE_MAX),
+            format!(
+                "ERROR UNKNOWN: unknown command '{}'; type HELP or ?\n",
+                "X".repeat(QUOTE_MAX)
+            ),
+        ),
+    ];
+    for (request, want) in cases {
+        assert_eq!(reply(&mut host, &request), want, "{request:.20}");
+    }
+}
+
+#[test]
+fn the_longest_final_line_fits_behind_the_longest_echo_at_the_line_limit() {
+    let mut host = FakeHost::new();
+    // A request line as long as the receive ring allows, with the longest tag, to every command
+    // that quotes it; the buffer is exactly the echo of one pass, the longest final line and the
+    // prompt.
+    let long = "X".repeat(ipmc_defs::IPMC_APP_UART_RX_BUF - 3);
+    let requests = [
+        format!("#abcdefgh {long}"),
+        format!("#abcdefgh FRU GET {long}"),
+        format!("#abcdefgh FRU SET {long} v"),
+        format!("#abcdefgh IPMI {long}"),
+        format!("#abcdefgh HELP {long}"),
+        format!("#abcdefgh FRU STATE {long}"),
+    ];
+    for request in requests {
+        let mut out = AnswerBuf::<{ ECHO_WORST_CASE + FINAL_LINE_MAX }>::new();
+        out.write_str(&"e".repeat(ECHO_WORST_CASE)).unwrap();
+        run(COMMANDS, &request, &mut host, &mut out);
+        let answer = out.as_str().get(ECHO_WORST_CASE..).unwrap();
+        assert!(
+            answer.starts_with("ERROR #abcdefgh "),
+            "{request:.30}: {answer}"
+        );
+        assert!(!answer.contains("ANSWER_TOO_LONG"), "{request:.30}");
+        assert!(answer.len() <= FINAL_LINE_MAX);
+        assert_eq!(answer.matches("\r\n").count(), 1);
+        assert!(answer.ends_with("\r\n"));
+    }
+    // The same for every line state `respond` turns into an error line, with the prompt behind.
+    for fed in [Fed::TooLong, Fed::BadChar, Fed::Damaged(u32::MAX)] {
+        let mut out = AnswerBuf::<{ ECHO_WORST_CASE + FINAL_LINE_MAX + PROMPT.len() }>::new();
+        out.write_str(&"e".repeat(ECHO_WORST_CASE)).unwrap();
+        assert!(respond(&fed, &mut host, &mut out));
+        assert!(out.as_str().ends_with("\r\napp> "));
+        assert!(!out.as_str().contains("ANSWER_TOO_LONG"));
+    }
 }
 
 #[test]
@@ -1065,6 +1189,59 @@ fn a_damaged_line_is_answered_without_a_tag_and_not_run() {
     );
 }
 
+/// feed_lossy -- the firmware's intake rule (app_port.rs `poll_pass`) over `(byte, lost)` pairs:
+/// `lost` is the loss the counter shows when the byte is taken. A pair with `lost` above 0 damages
+/// the editor and drops its byte (it may be the line end of the damaged line, or of one before
+/// it); the other bytes are served. Returns the final line of every finished answer.
+fn feed_lossy<const N: usize>(
+    editor: &mut LineEditor<N>,
+    host: &mut FakeHost,
+    pairs: &[(u8, u32)],
+) -> Vec<String> {
+    let mut answers = Vec::new();
+    for &(byte, lost) in pairs {
+        if lost > 0 {
+            editor.damage(lost);
+            continue;
+        }
+        answers.extend(feed_all(editor, host, &[byte]));
+    }
+    answers
+}
+
+#[test]
+fn a_loss_found_with_a_byte_in_hand_drops_that_byte_and_the_next_line_end_answers_damaged() {
+    let mut host = FakeHost::new();
+    let mut editor = LineEditor::<64>::new();
+    let damaged = "ERROR LINE_DAMAGED: 2 bytes lost on the port; the line was dropped";
+    // The loss is found at the start of a pass: the first line end answers damaged, the INFO
+    // line after it runs.
+    editor.damage(2);
+    let answers = feed_all(&mut editor, &mut host, b"\rINFO\r");
+    assert_eq!(answers, [damaged, "OK"]);
+    // The loss is found with the line end of the damaged line in hand: that byte is dropped, and
+    // the suffix that follows ("FO" CR) is the damaged line's end, answered damaged and not run
+    // as UNKNOWN or as INFO. The line after it runs.
+    let mut pairs: Vec<(u8, u32)> = b"IN".iter().map(|b| (*b, 0)).collect();
+    pairs.push((b'\r', 2));
+    pairs.extend(b"FO\r".iter().map(|b| (*b, 0)));
+    pairs.extend(b"INFO\r".iter().map(|b| (*b, 0)));
+    let answers = feed_lossy(&mut editor, &mut host, &pairs);
+    assert_eq!(answers, [damaged, "OK"]);
+    // Without the rule (the byte in hand served after the damage) the suffix would run.
+    let mut editor = LineEditor::<64>::new();
+    feed_all(&mut editor, &mut host, b"IN");
+    editor.damage(2);
+    let answers = feed_all(&mut editor, &mut host, b"\rFO\r");
+    assert_eq!(
+        answers,
+        [
+            damaged,
+            "ERROR UNKNOWN: unknown command 'FO'; type HELP or ?"
+        ]
+    );
+}
+
 #[test]
 fn many_requests_then_a_damaged_set_never_runs_the_set() {
     // A burst of complete requests overran the ring, the firmware discarded the ring (no answer
@@ -1149,10 +1326,10 @@ fn the_longest_answers_fit_the_answer_buffer_with_room_for_the_echo() {
         longest + echo + after <= ANSWER_MAX,
         "{longest} + {echo} + {after} > {ANSWER_MAX}"
     );
-    // An unknown command as long as a request line, tag included: the word is not cut.
+    // An unknown command as long as a request line, tag included: the word is quoted cut.
     let word = "X".repeat(ipmc_defs::IPMC_APP_LINE_MAX - 10);
     let long = reply(&mut host, &format!("#abcdefgh {word}"));
-    assert!(long.contains(&word));
+    assert!(long.contains(&format!("'{}...'", "X".repeat(QUOTE_MAX))));
     assert!(long.len() + echo + after <= ANSWER_MAX);
     // Every text field at 63 bytes (a host with long values): FRU FIELDS and FRU GET still fit,
     // and no line is cut.
@@ -1264,4 +1441,10 @@ fn the_session_in_the_crate_comment_is_what_the_code_prints() {
     );
     let printed: Vec<&str> = printed.lines().map(str::trim_end).collect();
     assert_eq!(doc, printed);
+}
+
+#[test]
+fn the_answer_buffer_is_the_worst_answer_rounded_up_to_64() {
+    assert_eq!(ANSWER_MAX % 64, 0);
+    const { assert!(ANSWER_NEED <= ANSWER_MAX && ANSWER_MAX < ANSWER_NEED + 64) };
 }

@@ -327,6 +327,7 @@ def section_c(report: Report, duration_s: float):
     poll, totals = summary.get("poll", {}), summary.get("totals", {})
     cycles_wanted = max(1, int(duration_s) - 1)
     board = ipmc.get("fru", {}).get("board", {})
+    fru_size = read_defs()["IPMC_FRU_SIZE"]  # the size the IPMC advertises (defs.rs)
     checks = (
         ("Chassis Manager exit status", "exit 0", f"exit {rc}", rc == 0),
         ("Discovery: IPMC found at 82h", "found: 82h", "found: 82h" if "found: 82h" in log else "not found", "found: 82h" in log),
@@ -336,8 +337,8 @@ def section_c(report: Report, duration_s: float):
         ("Get VSO Capabilities", "ok, Layer 1 IPMC, Tier-1, one IPMB interface",
          (re.search(r"Get VSO Capabilities .* -> (ok .*)", log) or [None, "no response"])[1],
          bool(re.search(r"Get VSO Capabilities .* -> ok Layer 1 IPMC, Tier-1, ipmb interfaces 1", log))),
-        ("FRU read", "256 of 256 bytes", (re.search(r"read \d+ of \d+ FRU bytes", log) or ["no read"])[0],
-         "read 256 of 256 FRU bytes" in log),
+        ("FRU read", f"{fru_size} of {fru_size} bytes", (re.search(r"read \d+ of \d+ FRU bytes", log) or ["no read"])[0],
+         f"read {fru_size} of {fru_size} FRU bytes" in log),
         ("FRU board area decoded", "manufacturer and serial from defs.rs",
          f"{board.get('manufacturer')}, {board.get('serial')}",
          bool(board.get("manufacturer")) and bool(board.get("serial"))),

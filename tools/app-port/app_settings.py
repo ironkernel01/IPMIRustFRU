@@ -2,7 +2,7 @@
 10-23-2026: one settings module per tool family; command-line options override the run-level ones).
 
 Values the IPMC and the tool must agree on live in `crates/ipmc-defs/src/defs.rs` (the line
-length IPMC_APP_LINE_MAX, the baud rate IPMC_APP_UART_BAUD); the tool reads them with
+length IPMC_APP_LINE_MAX, the baud rate IPMC_APP_UART_BAUD, the prompt IPMC_APP_PROMPT); the tool reads them with
 `tools/defs.py` when it finds the file, so the two cannot drift. Values fixed by the protocol (the line end, the tag rules)
 sit in `app_cli.py` beside their rule.
 """
@@ -26,6 +26,10 @@ LINE_MAX_FALLBACK = 128
 # Longest wait for one answer line, seconds. The IPMC answers within one main-loop pass; a local
 # IPMI request or a SET adds a few milliseconds, so two seconds only expires when nothing answers.
 ANSWER_TIMEOUT_S = 2.0
+
+# Most bytes the client reads while it waits for the prompt after the CR that synchronises it with
+# the IPMC (the banner or a late answer can come first).
+SYNC_READ_MAX = 4096
 
 # Tag the tool puts in front of each request so an answer is matched to its request (the IPMC
 # echoes it). Disable with --no-tags to see the bare protocol.
@@ -63,3 +67,13 @@ def baud_default(path=DEFS_PATH):
 def line_max(path=DEFS_PATH):
     """IPMC_APP_LINE_MAX of defs.rs (the longest request line), else LINE_MAX_FALLBACK."""
     return define_from_header("IPMC_APP_LINE_MAX", LINE_MAX_FALLBACK, path)
+
+
+# The prompt used when defs.rs is not found.
+PROMPT_FALLBACK = "app> "
+
+
+def prompt(path=DEFS_PATH):
+    """IPMC_APP_PROMPT of defs.rs (the prompt the IPMC prints and starts its echo line with),
+    else PROMPT_FALLBACK."""
+    return define_from_header("IPMC_APP_PROMPT", PROMPT_FALLBACK, path)

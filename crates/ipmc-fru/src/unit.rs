@@ -1076,4 +1076,27 @@ mod tests {
         }
         assert_eq!(mfg_date(store.bytes()).unwrap().standard, 0);
     }
+
+    #[test]
+    fn a_local_edit_of_an_image_whose_areas_overlap_is_refused() {
+        // The product area sits on the board area and every checksum holds: a write to the asset
+        // tag would change the board serial. The edit answers Corrupt and changes nothing.
+        let mut image = *FruStore::new().image();
+        image[4] = image[3];
+        let image = with_header_checksum(image);
+        let mut store = FruStore::from_image(image);
+        for (field, value) in [
+            (FruField::BoardSerial, "SN-1"),
+            (FruField::AssetTag, "TAG-1"),
+            (FruField::MfgDate, "2026-10-24 12:00"),
+        ] {
+            assert_eq!(
+                store.set_unit_field(field, value),
+                Err(FieldError::Corrupt),
+                "{field:?}"
+            );
+        }
+        assert_eq!(store.image(), &image);
+        assert!(!store.is_dirty());
+    }
 }

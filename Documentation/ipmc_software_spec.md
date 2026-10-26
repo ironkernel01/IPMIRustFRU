@@ -544,9 +544,10 @@ decision 24).
 | `IPMC_APP_UART_ENABLE` | `true` | the application port APP_UART (USART1) runs; false leaves USART1 off and parks its pins |
 | `IPMC_APP_UART_BAUD` | 115200 | application port baud rate, 8N1 |
 | `IPMC_APP_UART_FLOW` | `false` | true = RTS/CTS hardware handshake on PA12/PA11; false = TX and RX only, and PA11/PA12 stay unclaimed |
-| `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) one longest answer (`ANSWER_MAX`) plus CR LF, checked at compile time in `app_port.rs` |
+| `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) takes the output in pieces: the output buffer drains into it across main-loop passes (`drain`) and no guard ties the ring to `ANSWER_MAX`; the ring holds `IPMC_APP_UART_TX_BUF` - 1 bytes at once |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
+| `IPMC_APP_PROMPT` | `app> ` | application port prompt, printed after the banner and after every answer and in front of the echo of every request; 1..=16 printable ASCII bytes, the last a space (`tools/app-port/app_cli.py` reads it through `tools/defs.py`) |
 | `IPMC_APP_FRU_WRITE` | `true` | the application port may `FRU SET` the unit fields and run the IPMI Write FRU Data request; false refuses both with `ERROR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `FRU GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
 | `IPMC_MENU_LINE_MAX`, `IPMC_MENU_TOKENS_MAX` | 128, 40 | console line and token limits |
 | `IPMC_FRU_DUMP_BYTES_PER_LINE` | 16 | bytes on one line of `FRU DUMP` (1..=16) |
@@ -665,7 +666,11 @@ at the end of an area is the sum over its fields of `MAX` less the default's len
 the board area, 104 in the product area by default). A string the area cannot hold or an image
 larger than the area fails the build. The decoder (`common_header`, `area`, `Area::fields`,
 `multirecords`) and `verify` check a possibly rewritten image: header version and checksum, area
-versions, lengths, zero checksums, end-of-fields markers and the MultiRecord chain.
+versions, lengths, zero checksums, end-of-fields markers and the MultiRecord chain, and that the
+common header, the board area, the product area, the MultiRecord chain and the first byte of an
+Internal Use Area share no byte (`FruError::Overlap`): an image whose header offsets put one area on
+another fails `verify`, so a local field edit of it answers `Corrupt` (`FRU_IMAGE`) and changes
+nothing, instead of one field aliasing another.
 
 The manufacturing date is the VITA 46.11 Alternate Manufacturing Date/Time record (Table
 10.3.10-1, VITA record 34h), 14 bytes in the MultiRecord area:
@@ -1097,8 +1102,8 @@ crates, PLAN decision 27). A byte travels
 | File | Holds |
 |---|---|
 | `line.rs` | `LineEditor<N>` collects bytes into lines: it echoes printable bytes, erases with BS SP BS on backspace (08h, 7Fh), ends a line at CR, LF or CR LF (one line end), reports an empty line, a line longer than `N`, a byte that is not printable ASCII and lost bytes (`damage`) once, at the line end, and drops the bytes; `AnswerBuf<N>`, the fixed buffer the echo, the answer and the prompt are formatted into |
-| `engine.rs` | the command engine, in the style of the MenuBuilder menu: `Row` (syntax string, one sentence of help, handler), `Syntax::parse` and `check_table` (the table rules), `find` (case-insensitive whole keywords, the longest keyword sequence wins, the match is a value, not a return code), `Args` (the parameters of a row), `Fail` (code and sentence of an `ERROR` line), `write_help` (the aligned table), `run` (the tag, the row, the handler, the final line), `final_line` (the parsing rule of the payload CPU) |
-| `commands.rs` | `COMMANDS`, one `Row` per command; the handlers; `banner`; `respond` (answers what the editor returned, including the `LINE_TOO_LONG`, `BAD_CHAR` and `LINE_DAMAGED` answers for a line that cannot run, and ends every answer with the prompt); `serve` (one received byte: its echo, and at a line end the answer) |
+| `engine.rs` | the command engine, in the style of the MenuBuilder menu: `Row` (syntax string, one sentence of help, handler), `Syntax::parse` and `check_table` (the table rules), `find` (case-insensitive whole keywords, the longest keyword sequence wins, the match is a value, not a return code), `Args` (the parameters of a row), `Fail` (code and sentence of an `ERROR` line), `write_help` (the aligned table), `run` (the tag, the row, the handler, the final line; a final line or error line that does not fit the buffer rolls the answer back to its start and answers `ANSWER_TOO_LONG`), `Quoted` (a request quoted in a sentence: at most `QUOTE_MAX` = 32 bytes, then `...`), `MAX_PARAMS` (the largest parameter count of any row of `COMMANDS`, computed at compile time), `final_line` (the parsing rule of the payload CPU) |
+| `commands.rs` | `COMMANDS`, one `Row` per command; the handlers; `banner`; `respond` (answers what the editor returned, including the `LINE_TOO_LONG`, `BAD_CHAR` and `LINE_DAMAGED` answers for a line that cannot run, and ends every answer with the prompt); `ANSWER_MAX` (the answer buffer size, computed from the table and the field lengths, see section 7.6); `serve` (one received byte: its echo, and at a line end the answer) |
 | `host.rs` | the `AppHost` trait, the one door to the board: `version`, `status`, `fru_state`, `unit_field`, `set_unit_field`, `ipmi`, `command_name`, `save_state`; and the plain types it passes (`Status`, `SaveState`, `AppError`, `IpmiData`) |
 | `tests.rs` | `REQUEST_TABLE`, one row per request line with the answer the test host must produce; `HELP_TABLE`, the exact help text; the engine, editor and session tests; the test host (`FakeHost`) is an `AppHost` over a plain `FruStore` |
 
@@ -1117,7 +1122,7 @@ and answers.
 | `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `Documentation/captured_sdr.md` (local only) |
 | `tools/dupcheck.py` | scores every pair of Rust function bodies with identifiers normalised; fails on a production pair at or above 0.85 or a test pair at or above 0.92 |
 | `tools/capture/` | `capture2pcap.py` turns a saved `DEBUG DUMP` into a pcap file (LINKTYPE 260) and a CSV file (section 10.11); `test_capture2pcap.py` |
-| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests (the tags start from the clock) from the command line, an interactive prompt or a raw terminal (`--raw`) on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form); `test_app_cli.py` with a fake transport |
+| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests (the tags start from the clock) from the command line, an interactive prompt or a raw terminal (`--raw`) on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form, the prompt and the line limit read from `defs.rs`); `test_app_cli.py` with a fake transport |
 | `tools/python-ipmi/` | venv with python-ipmi and pyaardvark; `README.md` is the Tier-1 command-line reference |
 | `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `cm_events.py` (the Chassis Manager as Event Receiver: answers each Platform Event request and records its decoded fields), `test_cm_link.py` |
 | `tools/chassis-manager/` options for events | `--cm-tier 1\|2` (2: Event Receiver, answers a Platform Event with 00h; 1: not an Event Receiver, answers C1h), `--withhold-events N` (the first N Platform Event frames get no answer, retries count, so a run shows the IPMC retrying with the same sequence number), `--set-event-receiver` (sends Set Event Receiver to each IPMC found after discovery; a Tier-1 IPMC answers C1h, which is not an error), `--cold-reset-at-s T` (sends Cold Reset once to each IPMC found, T seconds into the polling) |
@@ -1301,6 +1306,28 @@ decoded (`Alternate Mfg Date/Time (VITA 34h): 2026-10-23 00:00 UTC`) and its che
 missing record or a bad checksum shows as unspecified, not as a failure. `FRU RESTORE` answers
 `busy` and erases nothing while the link holds a request or a response (section 10.8).
 
+Console output waits while the console transmit ring is full, and the IPMB service waits with it,
+so every console command prints at most what the ring holds, `IPMC_UART_TX_BUF` - 1 bytes (4095 by
+default), whatever the FRU image, a define or the bus put in front of it. `data_cmds.rs` works the
+worst row of each listing out in a comment beside its constant and a `const` assertion names the
+define when the ring is too small:
+
+| Command | Bound | Default |
+|---|---|---|
+| `FRU SHOW` | the fixed lines (`SHOW_FIXED` 640), at most `SHOW_FIELDS_MAX` = 12 field rows per area (85 bytes each) and at most `SHOW_RECORDS_MAX` MultiRecord rows (205 bytes each) behind 256 bytes of slack; what is left is one line each (`... <n> more fields (FRU DUMP shows the bytes)`, `... <n> more MultiRecord records (FRU DUMP shows the bytes)`) | (4095 - 640 - 2 x 12 x 85 - 256) / 205 = 5 records |
+| `FRU DUMP` | `DUMP_BYTES_MAX` bytes in whole lines (55 bytes per 16-byte line); a longer range ends in `... <n> more bytes (FRU DUMP <offset> <count> shows them)` | (4095 - 256) / 55 = 69 lines = 1104 bytes |
+| `FRU FIELDS` | 13 rows of at most 90 bytes (`FIELDS_ROW`), checked at compile time | 1170 bytes |
+| `SENSORS SDR` | the header line and at most `RECORD_COUNT_MAX` (9) records of at most 128 bytes (`SDR_ROW`), checked at compile time | 1248 bytes |
+| `DEBUG CACHE` | at most `CACHE_ROWS_MAX` rows of 128 bytes (`CACHE_ROW`), then `... <n> more entries`; the cache holds up to 64 entries that the bus filled | (4095 - 256) / 128 = 29 rows |
+| `HELP` of the root and of every group | `help_worst` in `console.rs` adds the rows of the longest listing, checked at compile time | the longest listing |
+| `DEBUG DUMP` | not bound: a paced job (`DumpJob`) that prints rows while the ring has room for the longest one | |
+
+The other commands print a fixed set of lines of fewer than 128 bytes each. `FRU SHOW` shows the
+Alternate Mfg Date/Time record (VITA 34h) as the date, as `unspecified` for minute 0, and, for a
+count above 9999-12-31 23:59 (a record a Chassis Manager wrote), as
+`out of range (<hex>h minutes), unspecified`: a reader takes such a record as no date, and the
+console does not invent one (`ipmc_fru::date::checked_text_of` returns `None` for it).
+
 The DEBUG group switches and reads the capture log, runs a request locally and injects a frame
 (section 10.11). `DEBUG DUMP` is a job: it prints a header line, then rows on the following
 main-loop passes while the console transmit ring has room for the longest row, then
@@ -1390,6 +1417,10 @@ Every request line gets zero or more data lines and exactly one final line:
   tag and a line that could not run (too long, bad byte, lost bytes) are answered without a tag.
 - A handler that fails after it wrote data lines has them taken back: an `ERROR` answer never
   mixes with data lines.
+- An error sentence that quotes the request (`UNKNOWN`, an unknown field, a bad hex byte, a `HELP`
+  filter that matches nothing) quotes at most `QUOTE_MAX` = 32 bytes of it and ends the quote in
+  `...` when it cuts, so the final line stays within `FINAL_LINE_MAX` (175 bytes) whatever the
+  length of the request.
 
 #### Parsing rule for a payload CPU
 
@@ -1404,7 +1435,11 @@ with `app> ` (the prompt, and the prompt joined with the echo of the request). C
 that look like `KEY: value`. The answer ends at the first line that is `OK`, starts with `OK ` or
 starts with `ERROR `; on `OK` the data lines are complete, on `ERROR` they are to be ignored.
 `ipmc_app::final_line` is this rule in code and the bench client `tools/app-port/app_cli.py`
-follows it.
+follows it. The client also keeps in step with the prompt: before its first request, and after a
+request that timed out or ended in a partial line, it sends one CR and reads until the prompt
+arrives (bounded by the answer timeout); a line is the echo of its request only when it starts with
+the prompt followed by exactly the request text, and without tags a final line is trusted only
+after that echo, so the echo of a request such as `OK` is not taken for its answer.
 
 #### Commands
 
@@ -1469,7 +1504,7 @@ The codes; each has its own sentence:
 
 | Code | Cause |
 |---|---|
-| `UNKNOWN` | no command of that name (`ERROR UNKNOWN: unknown command 'X'; type HELP or ?`); also `HELP X` for a name that is no command |
+| `UNKNOWN` | no command of that name (`ERROR UNKNOWN: unknown command 'X'; type HELP or ?`, the name quoted at most 32 bytes); also `HELP X` for a name that is no command |
 | `ARGS` | missing or extra arguments (`usage: <syntax>`), an unknown field, a bad tag, a bad hex byte, more data than one frame holds, a tag with no command |
 | `LINE_TOO_LONG` | the line is longer than `IPMC_APP_LINE_MAX`; it was dropped |
 | `BAD_CHAR` | the line holds a byte that is not printable ASCII; it was dropped |
@@ -1478,18 +1513,24 @@ The codes; each has its own sentence:
 | `NO_ROOM` | the rewritten fields do not fit the area (an image a Chassis Manager wrote may have no spare room) |
 | `NVMRO` | the NVMRO pin is asserted; nothing is written |
 | `BAD_DATE` | the date text is malformed or out of range (`use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59`) |
-| `FRU_IMAGE` | the area is missing or damaged, or the rewritten image would fail `verify` |
+| `FRU_IMAGE` | the area is missing or damaged, the image's areas overlap, or the rewritten image would fail `verify` |
 | `WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is false and the request is `FRU SET` or an `IPMI` Write FRU Data; nothing runs |
-| `LINE_DAMAGED` | `<n> bytes lost on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring, and the next line end is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
+| `LINE_DAMAGED` | `<n> bytes lost on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring (and the byte it had just taken, when it found the loss with one in hand), and the first line end that arrives after the discard is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
 | `IPMI_FAILED` | the request did not run: the request or its response does not fit one IPMB frame, or the dispatcher gave no response (a NetFn that is odd or above 3Eh) |
 | `LOG_OFF` | `FRU SAVE` with the flash log off (`IPMC_FRU_PERSIST` false or the store did not start) |
-| `ANSWER_TOO_LONG` | the answer did not fit the answer buffer (`ANSWER_MAX` 1280 bytes); the data lines are replaced by this error |
+| `ANSWER_TOO_LONG` | `the answer does not fit <n> bytes`: the answer did not fit the answer buffer (`ANSWER_MAX`, 1280 bytes by default); the engine goes back to the start of the answer and writes this error line, with the tag, in place of the data lines. A buffer too small even for that line holds nothing of the answer, never half a line |
 
 #### Output and time
 
 The firmware formats the echo, the answer and the prompt into one buffer of
 `ANSWER_MAX` bytes and copies it to the transmit ring as the ring has room (`app_port.rs`
-`drain`); the main loop never waits for the UART. While output is pending the port takes no new
+`drain`, called on every pass: the answer drains into the ring across passes, so the ring
+(`IPMC_APP_UART_TX_BUF` - 1 usable bytes) need not hold it whole and no guard ties the two); the
+main loop never waits for the UART. `ANSWER_MAX` is computed at compile time (`commands.rs`): the
+echo of one pass (`IPMC_APP_BYTES_PER_POLL` x 3 = 96 bytes), plus the larger of the longest data
+answer (`HELP` or `FRU FIELDS` at 63-byte values: 1141 bytes, with `OK #<tag>` and the prompt:
+1256 bytes in all) and the longest `ERROR` final line (`FINAL_LINE_MAX` 175 bytes) with the prompt,
+rounded up to a multiple of 64: 1280 bytes with the default table. While output is pending the port takes no new
 byte, so one request is answered at a time, in order. A pass takes at most
 `IPMC_APP_BYTES_PER_POLL` bytes and ends after one answer, so the IPMB service waits at most for
 the formatting of one answer (estimated from the code at up to about 1 ms for `HELP` or `FRU FIELDS`;
@@ -1497,7 +1538,10 @@ the formatting of one answer (estimated from the code at up to about 1 ms for `H
 spent in the UART interrupt. Every request line and the final line of every answer go into the
 capture log as `app request <line>` and `app answer <line>` (section 10.11). The port looks at
 its loss counter before the first byte of a pass and after every byte it takes, before the byte is
-served: a loss that happens during the pass marks the line the byte ends as damaged, so a request
+served. A loss found then discards the byte in hand as well and ends the pass: the byte can be the
+line end of the damaged line, or of a line before it, and it is not trusted. The editor stays
+damaged until a line end that arrives after the discard, so the suffix of a damaged line (`FO` CR
+after a lost `IN`) answers `LINE_DAMAGED` and never runs as a request of its own, and a request
 that lost a byte never runs. A Cold Reset asked for on this port waits for its own answer: the
 output left in the buffer or the transmit ring keeps the reset gate from going (section 8.2).
 
@@ -1938,10 +1982,13 @@ The byte rides in the record with the image, so one dirty mark and one save rule
 Data and a policy-bit change; `FRU RESTORE` keeps the byte as it is.
 
 A record from an older image size (another `IPMC_FRU_SIZE`, so another length field and record
-length) is not valid for this build: every slot reads invalid, the built image loads, and the
-first save appends after the old slots or erases the sector. A flash over SWD keeps the store
-sector, so the content saved before is dropped on the first save that erases; a flash by drive copy
-erases the sector at once.
+length) is not valid for this build: every slot reads invalid and the built image loads. `Persist::boot`
+finds no valid record in a sector that is not blank and, with NVMRO deasserted, erases the sector
+at once, so the old content is dropped at that boot (`BootReport::erased`, the console boot line); a
+flash over SWD, which keeps the store sector, loses it the same way at the first boot. With NVMRO
+asserted the boot erases nothing (VITA 46.11 Rec 4.1.10-1): the old records stay in the sector, the
+built image runs, and the first save after NVMRO clears erases them. A flash by drive copy erases
+the sector before the boot.
 
 ### 9.5 Device SDR repository
 
