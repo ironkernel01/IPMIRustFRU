@@ -43,6 +43,11 @@ Block warning (never fails)
     involves a macro or initialiser block is reported when it contains a statement keyword or a call
     (an identifier directly before `(`). A run of consts, statics, enum variants, struct fields or
     table rows has neither and is skipped. Pairs that already FAIL are not repeated.
+
+Reference crates (owner decision 10-25-2026, PLAN decision 27)
+    crates/ipmc-app is a reference for a customer application: it is self-contained and may repeat
+    code of the other crates (its own menu engine beside ipmc-menu). A pair or block with exactly one
+    side in a reference crate is not compared; a pair inside one reference crate is still compared.
 """
 import difflib
 import os
@@ -57,6 +62,7 @@ TEST_RATIO, TEST_TOK = 0.92, 25
 MIN_BODY = min(PROD_TOK, TEST_TOK)
 BLOCK_RUN = 80
 SHINGLE = 5
+REFERENCE_CRATES = ("crates/ipmc-app/",)  # PLAN decision 27: may repeat code of other crates
 STATEMENT_KW = {"let", "if", "else", "match", "for", "while", "loop", "return"}
 
 PUNCT = re.compile(r"::|->|=>|==|!=|<=|>=|&&|\|\||<<|>>|\.\.=|\.\.|\S")
@@ -287,6 +293,16 @@ class Fn:
         return "%s:%d %s" % (self.path, self.line, self.name)
 
 
+def _reference(f):
+    return next((r for r in REFERENCE_CRATES if f.path.startswith(r)), None)
+
+
+def crosses_reference(fa, fb):
+    """True when exactly one of the two bodies sits in a reference crate (or they sit in different ones)."""
+    ra, rb = _reference(fa), _reference(fb)
+    return (ra or rb) is not None and ra != rb
+
+
 def _has_call(seg):
     return any(seg[k] == "I" and seg[k + 1] == "(" for k in range(len(seg) - 1))
 
@@ -356,7 +372,7 @@ def score_pairs(fns):
         fa = fns[a]
         for b in range(a + 1, len(fns)):
             fb = fns[b]
-            if fa.test != fb.test:
+            if fa.test != fb.test or crosses_reference(fa, fb):
                 continue
             ratio_min, tok_min = (TEST_RATIO, TEST_TOK) if fa.test else (PROD_RATIO, PROD_TOK)
             la, lb = len(fa.toks), len(fb.toks)
@@ -381,7 +397,7 @@ def block_warnings(fns, failing):
         for x in range(len(hits)):
             for y in range(x + 1, len(hits)):
                 (fa, pa), (fb, pb) = hits[x], hits[y]
-                if fa == fb or fns[fa].test != fns[fb].test:
+                if fa == fb or fns[fa].test != fns[fb].test or crosses_reference(fns[fa], fns[fb]):
                     continue
                 if (fns[fa], fns[fb]) in failing or (fns[fb], fns[fa]) in failing:
                     continue
@@ -526,7 +542,13 @@ def self_test():
     callb = cblk[0] + cblk[1]
     bok = len(allb) == 2 and len(callb) == 2 and block_warnings(allb, set()) != [] and block_warnings(callb, set()) != []
     print("self-test: duplicated macro body and const initialiser warned: %s" % ("PASS" if bok else "FAIL"))
-    return 0 if (ok and uok and gok and bok) else 1
+
+    ref = [extract(p, FIXTURE)[0] for p in ("crates/ipmc-app/src/a.rs", "crates/ipmc-menu/src/b.rs", "crates/ipmc-app/src/c.rs")]
+    cross = [f for f in ref[0] + ref[1] if f.name == "copy_one"]
+    inside = [f for f in ref[0] + ref[2] if f.name == "copy_one"]
+    rok = not list(score_pairs(cross)) and len(list(score_pairs(inside))) == 1
+    print("self-test: reference crate pair across crates exempt, inside one still flagged: %s" % ("PASS" if rok else "FAIL"))
+    return 0 if (ok and uok and gok and bok and rok) else 1
 
 
 def main(argv):
