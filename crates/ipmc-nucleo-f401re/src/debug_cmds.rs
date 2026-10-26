@@ -21,7 +21,6 @@ use ipmc_core::link::{LocalError, CM_ADDR8};
 use ipmc_core::queue::Bus;
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
-use crate::app_port;
 use crate::bsp::systick;
 use crate::bsp::uart::{self, Port};
 use crate::console::Context;
@@ -231,12 +230,6 @@ fn print_switches(link: &IpmbLink) {
 pub fn cmd_debug_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_log(ctx.ipmb);
     print_switches(ctx.ipmb);
-    if app_port::ENABLED {
-        out!(
-            "App port:        answers dropped {}\n",
-            app_port::answers_dropped()
-        );
-    }
     let receiver = receiver_state(ctx.ipmb);
     out!("Event receiver:  {}\n", receiver);
     out!(

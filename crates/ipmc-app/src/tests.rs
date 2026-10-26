@@ -2,7 +2,8 @@
 //!
 //! `FakeHost` implements `AppHost` over a real `FruStore`, so the field editor's own answers
 //! (too long, one byte, not ASCII) come from the real code. `REQUEST_TABLE` is the one table of
-//! request and answer pairs: a new command adds a row.
+//! request and answer pairs: a new command adds a row. An answer is written here as the lines a
+//! person sees, ended by `\n` (the wire has CR LF), without the prompt.
 
 use core::fmt::Write;
 
@@ -11,9 +12,12 @@ use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruField, FruStore};
 
 use crate::commands::{ipmi_request, set_field};
+use crate::engine::{
+    check_table, find, write_help, Fail, Row, Syntax, SyntaxError, TableError, FAIL_TEXT_MAX,
+};
 use crate::{
-    answer, respond, AnswerBuf, AppError, AppHost, Fed, IpmiData, LineAssembler, Request,
-    SaveState, Status, ANSWER_MAX, COMMANDS,
+    answer_final_line, banner, final_line, respond, run, serve, AnswerBuf, AppError, AppHost, Args,
+    Echo, Fed, IpmiData, LineEditor, SaveState, Status, ANSWER_MAX, COMMANDS, PROMPT,
 };
 
 /// FakeHost -- the board for the tests.
@@ -30,6 +34,8 @@ struct FakeHost {
     ipmi_result: Result<(u8, Vec<u8>), AppError>,
     /// The requests `ipmi` received: (netfn, cmd, data).
     ipmi_calls: Vec<(u8, u8, Vec<u8>)>,
+    /// The name `command_name` gives.
+    name: Option<&'static str>,
 }
 
 impl FakeHost {
@@ -44,13 +50,14 @@ impl FakeHost {
             forced_set_error: None,
             ipmi_result: Ok((0, vec![0x20, 0x01, 0x02])),
             ipmi_calls: Vec::new(),
+            name: Some("App Get Device ID"),
         }
     }
 }
 
 impl AppHost for FakeHost {
     fn version(&self) -> &'static str {
-        "9.9.9"
+        "0.1.0"
     }
 
     fn status(&self) -> Status {
@@ -60,7 +67,7 @@ impl AppHost for FakeHost {
             power: self.power,
             health: self.health,
             nvmro: self.nvmro,
-            uptime_s: 77,
+            uptime_s: 1068,
         }
     }
 
@@ -90,172 +97,254 @@ impl AppHost for FakeHost {
         }
     }
 
+    fn command_name(&self, _netfn: u8, _cmd: u8) -> Option<&'static str> {
+        self.name
+    }
+
     fn save_state(&self) -> SaveState {
         self.save
     }
 }
 
-/// reply -- the answer to one request line.
+/// reply -- the answer to one request line as the lines a person sees: LF line ends, no prompt.
 fn reply(host: &mut FakeHost, line: &str) -> String {
     let mut out = AnswerBuf::<ANSWER_MAX>::new();
-    answer(line, host, &mut out);
+    run(COMMANDS, line, host, &mut out);
     assert!(!out.overflowed(), "{line:?} overflowed the answer buffer");
-    out.as_str().to_string()
+    assert!(out.as_str().ends_with("\r\n"), "{line:?}");
+    out.as_str().replace("\r\n", "\n")
 }
 
-/// expected -- the answer text of a table row: `{fw}` and `{tier}` stand for the build values.
+/// expected -- the answer text of a table row: `{fw}` and `{tier}` stand for the build values,
+/// `{help}` for the HELP table and `{fields}` for the FRU FIELDS lines.
 fn expected(text: &str) -> String {
     text.replace("{fw}", ipmc_defs::IPMC_FW_NAME)
         .replace("{tier}", &ipmc_defs::IPMC_TIER.to_string())
+        .replace("{help}", HELP_TABLE)
+        .replace("{fields}", FIELD_LINES)
 }
 
-/// REQUEST_TABLE -- (request line, answer line) on a fresh `FakeHost`: FRU state M4, power on,
-/// the built FRU image, IPMI answering CC 00h with data 20h 01h 02h, save state Saved.
+/// FIELD_LINES -- the data lines of `FRU FIELDS` on the built FRU image.
+const FIELD_LINES: &str = "BOARD_MFR: IronKernel (max 24)
+BOARD_PRODUCT: VPX Tier-1 IPMC (max 32)
+BOARD_SERIAL: IK-T1-000001 (max 24)
+BOARD_PART: IK-IPMC-T1-NUC (max 24)
+BOARD_FILE_ID: ipmc-fru-v1 (max 16)
+MFG_DATE: 2026-10-23 00:00 (max 16)
+PRODUCT_MFR: IronKernel (max 24)
+PRODUCT_NAME: Tier-1 IPMC Reference (max 32)
+PRODUCT_PART: IK-IPMC-T1 (max 24)
+PRODUCT_VERSION: 0.1 (max 16)
+PRODUCT_SERIAL: IK-T1-000001 (max 24)
+ASSET_TAG:  (max 24)
+PRODUCT_FILE_ID:  (max 16)
+";
+
+/// HELP_TABLE -- the aligned rows of `HELP`: the syntax column is the longest syntax (28) plus
+/// two wide, then ` - `; every dash is in the same column.
+const HELP_TABLE: &str = "  HELP {COMMAND...}              - List the commands, or describe one
+  ?                              - Same as HELP
+  INFO                           - Firmware name, version, Tier and protocol version
+  STATUS                         - IPMB address, GA, FRU state, payload power, health, NVMRO, uptime
+  FRU STATE                      - Operational state of FRU 0 (M0, M1, M4, M5 or M6)
+  FRU FIELDS                     - Every FRU field: current value and maximum length
+  FRU GET [FIELD]                - One FRU field
+  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
+  FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
+  IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
+";
+
+/// REQUEST_TABLE -- (request line, answer) on a fresh `FakeHost`: FRU state M4, power on, the
+/// built FRU image, IPMI answering CC 00h with data 20h 01h 02h and the name `App Get Device
+/// ID`, save state Saved, uptime 1068 s.
 const REQUEST_TABLE: &[(&str, &str)] = &[
-    // HELP and HELLO
+    // INFO, STATUS, FRU STATE
     (
-        "HELP",
-        "OK HELP HELP HELLO STATUS FRU GET SET FIELDS IPMI SAVE",
+        "INFO",
+        "FIRMWARE: {fw}\nVERSION: 0.1.0\nTIER: {tier}\nPROTOCOL: 2\nOK\n",
     ),
-    (
-        "help set",
-        "OK HELP SET <field> [value] - write a FRU field; no value clears it",
-    ),
-    (
-        "HELP STATUS",
-        "OK HELP STATUS - IPMB address, GA, FRU state, power, health, NVMRO, uptime",
-    ),
-    ("HELP NOPE", "ERR UNKNOWN NOPE"),
-    ("HELLO", "OK IPMC-APP 1 {fw} v9.9.9 tier={tier}"),
-    ("hello", "OK IPMC-APP 1 {fw} v9.9.9 tier={tier}"),
-    ("  \tHELLO", "OK IPMC-APP 1 {fw} v9.9.9 tier={tier}"),
-    // tags
-    ("#a1 HELLO", "#a1 OK IPMC-APP 1 {fw} v9.9.9 tier={tier}"),
-    (
-        "#ABCDEFGH status",
-        "#ABCDEFGH OK STATUS ipmb=82h ga=1 fru=M4 power=on health=ok nvmro=0 uptime_s=77",
-    ),
-    ("#a1", "#a1 ERR ARGS empty request"),
-    ("#a1 BOGUS", "#a1 ERR UNKNOWN BOGUS"),
-    (
-        "#abcdefghi HELLO",
-        "ERR ARGS a tag is # and 1 to 8 letters or digits",
-    ),
-    (
-        "#a-1 HELLO",
-        "ERR ARGS a tag is # and 1 to 8 letters or digits",
-    ),
-    (
-        "# HELLO",
-        "ERR ARGS a tag is # and 1 to 8 letters or digits",
-    ),
-    // STATUS and FRU STATE
     (
         "STATUS",
-        "OK STATUS ipmb=82h ga=1 fru=M4 power=on health=ok nvmro=0 uptime_s=77",
+        "IPMB_ADDRESS: 82h\nGA: 1\nFRU_STATE: M4 FRU Active\nPAYLOAD_POWER: on\nHEALTH: ok\nNVMRO: deasserted\nUPTIME: 0d 00:17:48\nOK\n",
     ),
-    ("FRU STATE", "OK FRU M4 FRU Active"),
-    ("fru state", "OK FRU M4 FRU Active"),
-    ("FRU", "ERR ARGS usage: FRU STATE"),
-    ("FRU BOGUS", "ERR ARGS usage: FRU STATE"),
-    ("FRU STATE X", "ERR ARGS usage: FRU STATE"),
-    // GET
-    ("GET BOARD_SERIAL", "OK BOARD_SERIAL IK-T1-000001"),
-    ("get board_part", "OK BOARD_PART IK-IPMC-T1-NUC"),
-    ("GET PRODUCT_PART", "OK PRODUCT_PART IK-IPMC-T1"),
-    ("GET PRODUCT_SERIAL", "OK PRODUCT_SERIAL IK-T1-000001"),
-    ("GET ASSET_TAG", "OK ASSET_TAG"),
-    ("GET MFG_DATE", "OK MFG_DATE 2026-10-23 00:00"),
-    ("GET BOARD_MFR", "OK BOARD_MFR IronKernel"),
-    ("GET BOARD_PRODUCT", "OK BOARD_PRODUCT VPX Tier-1 IPMC"),
-    ("GET BOARD_FILE_ID", "OK BOARD_FILE_ID ipmc-fru-v1"),
-    ("GET PRODUCT_MFR", "OK PRODUCT_MFR IronKernel"),
-    ("GET PRODUCT_NAME", "OK PRODUCT_NAME Tier-1 IPMC Reference"),
-    ("GET PRODUCT_VERSION", "OK PRODUCT_VERSION 0.1"),
-    ("GET PRODUCT_FILE_ID", "OK PRODUCT_FILE_ID"),
+    ("FRU STATE", "FRU_STATE: M4 FRU Active\nOK\n"),
+    ("fru   state", "FRU_STATE: M4 FRU Active\nOK\n"),
+    // FRU GET
+    ("FRU GET BOARD_SERIAL", "BOARD_SERIAL: IK-T1-000001\nOK\n"),
+    ("fru get board_part", "BOARD_PART: IK-IPMC-T1-NUC\nOK\n"),
+    ("FRU GET ASSET_TAG", "ASSET_TAG: \nOK\n"),
+    ("FRU GET MFG_DATE", "MFG_DATE: 2026-10-23 00:00\nOK\n"),
     (
-        "GET NOPE",
-        "ERR ARGS unknown field NOPE (FIELDS lists them)",
-    ),
-    ("GET", "ERR ARGS usage: GET <field>"),
-    ("GET BOARD_PART X", "ERR ARGS usage: GET <field>"),
-    // SET
-    (
-        "SET BOARD_SERIAL 00:11:22:33:44:55",
-        "OK BOARD_SERIAL 00:11:22:33:44:55",
+        "FRU GET PRODUCT_NAME",
+        "PRODUCT_NAME: Tier-1 IPMC Reference\nOK\n",
     ),
     (
-        "set product_serial 00:11:22:33:44:55",
-        "OK PRODUCT_SERIAL 00:11:22:33:44:55",
+        "FRU GET NOPE",
+        "ERROR ARGS: unknown field 'NOPE'; FRU FIELDS lists them\n",
+    ),
+    ("FRU GET", "ERROR ARGS: usage: FRU GET [FIELD]\n"),
+    (
+        "FRU GET BOARD_PART X",
+        "ERROR ARGS: usage: FRU GET [FIELD]\n",
+    ),
+    // FRU SET
+    (
+        "FRU SET BOARD_SERIAL 00:11:22:33:44:55",
+        "BOARD_SERIAL: 00:11:22:33:44:55\nOK\n",
     ),
     (
-        "SET BOARD_PART PN-0001 rev B",
-        "OK BOARD_PART PN-0001 rev B",
-    ),
-    ("SET PRODUCT_PART MODEL-X", "OK PRODUCT_PART MODEL-X"),
-    (
-        "SET ASSET_TAG rack 7  slot 3",
-        "OK ASSET_TAG rack 7  slot 3",
-    ),
-    ("SET\tASSET_TAG\tabc", "OK ASSET_TAG abc"),
-    (
-        "SET MFG_DATE 2026-10-25 08:30",
-        "OK MFG_DATE 2026-10-25 08:30",
-    ),
-    ("SET BOARD_MFR Other Maker", "OK BOARD_MFR Other Maker"),
-    ("SET PRODUCT_NAME New name", "OK PRODUCT_NAME New name"),
-    ("SET PRODUCT_VERSION 2.1", "OK PRODUCT_VERSION 2.1"),
-    ("SET BOARD_FILE_ID fid-9", "OK BOARD_FILE_ID fid-9"),
-    ("SET PRODUCT_FILE_ID pfid-3", "OK PRODUCT_FILE_ID pfid-3"),
-    (
-        "SET MFG_DATE 2100-03-01 00:00",
-        "OK MFG_DATE 2100-03-01 00:00",
+        "fru set product_serial 00:11:22:33:44:55",
+        "PRODUCT_SERIAL: 00:11:22:33:44:55\nOK\n",
     ),
     (
-        "SET MFG_DATE 9999-12-31 23:59",
-        "OK MFG_DATE 9999-12-31 23:59",
-    ),
-    ("SET BOARD_PART", "OK BOARD_PART"),
-    ("SET BOARD_PART ", "OK BOARD_PART"),
-    (
-        "SET ASSET_TAG X",
-        "ERR BAD_LENGTH a text of one byte is not allowed",
+        "FRU SET BOARD_PART PN-0001 rev B",
+        "BOARD_PART: PN-0001 rev B\nOK\n",
     ),
     (
-        "SET ASSET_TAG 1234567890123456789012345",
-        "ERR TOO_LONG max=24",
+        "FRU SET ASSET_TAG rack 7  slot 3  ",
+        "ASSET_TAG: rack 7  slot 3\nOK\n",
+    ),
+    ("FRU SET\tASSET_TAG\tabc", "ASSET_TAG: abc\nOK\n"),
+    (
+        "FRU SET MFG_DATE 2026-10-25 08:30",
+        "MFG_DATE: 2026-10-25 08:30\nOK\n",
     ),
     (
-        "SET ASSET_TAG caf\u{e9}",
-        "ERR NOT_ASCII printable ASCII only",
+        "FRU SET MFG_DATE 9999-12-31 23:59",
+        "MFG_DATE: 9999-12-31 23:59\nOK\n",
+    ),
+    ("FRU SET BOARD_FILE_ID fid-9", "BOARD_FILE_ID: fid-9\nOK\n"),
+    ("FRU SET BOARD_PART", "BOARD_PART: \nOK\n"),
+    ("FRU SET BOARD_PART   ", "BOARD_PART: \nOK\n"),
+    (
+        "FRU SET ASSET_TAG X",
+        "ERROR BAD_LENGTH: ASSET_TAG is empty or at least 2 characters\n",
     ),
     (
-        "SET MFG_DATE yesterday",
-        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
+        "FRU SET BOARD_SERIAL 1234567890123456789012345",
+        "ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n",
     ),
     (
-        "SET MFG_DATE 2026-02-30 00:00",
-        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
+        "FRU SET ASSET_TAG caf\u{e9}",
+        "ERROR NOT_ASCII: ASSET_TAG takes printable ASCII only\n",
     ),
-    ("SET", "ERR ARGS usage: SET <field> [value]"),
     (
-        "SET NOPE x",
-        "ERR ARGS unknown field NOPE (FIELDS lists them)",
+        "FRU SET MFG_DATE yesterday",
+        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
     ),
+    (
+        "FRU SET MFG_DATE 2026-02-30 00:00",
+        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
+    ),
+    ("FRU SET", "ERROR ARGS: usage: FRU SET [FIELD] {VALUE...}\n"),
+    (
+        "FRU SET NOPE x",
+        "ERROR ARGS: unknown field 'NOPE'; FRU FIELDS lists them\n",
+    ),
+    // FRU FIELDS and FRU SAVE
+    ("FRU FIELDS", "{fields}OK\n"),
+    ("FRU FIELDS X", "ERROR ARGS: usage: FRU FIELDS\n"),
+    ("FRU SAVE", "SAVE: done\nOK\n"),
     // IPMI
-    ("IPMI 06 01", "OK IPMI CC=00 DATA=20 01 02"),
-    ("ipmi 0x06 0x01 ff", "OK IPMI CC=00 DATA=20 01 02"),
-    ("IPMI 6 1", "OK IPMI CC=00 DATA=20 01 02"),
-    ("IPMI 06", "ERR ARGS usage: IPMI <netfn> <cmd> [data...]"),
-    ("IPMI", "ERR ARGS usage: IPMI <netfn> <cmd> [data...]"),
-    ("IPMI 06 zz", "ERR ARGS 'zz' is not a hex byte"),
-    ("IPMI 06 100", "ERR ARGS '100' is not a hex byte"),
-    // SAVE, and the rest
-    ("SAVE", "OK SAVED"),
-    ("BOGUS x y", "ERR UNKNOWN BOGUS"),
-    ("bogus", "ERR UNKNOWN bogus"),
-    ("", "ERR ARGS empty request"),
-    ("   ", "ERR ARGS empty request"),
+    (
+        "IPMI 06 01",
+        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+    ),
+    (
+        "ipmi 0x06 0x01 ff",
+        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+    ),
+    (
+        "IPMI 6 1",
+        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+    ),
+    (
+        "IPMI 06",
+        "ERROR ARGS: usage: IPMI [NETFN] [CMD] {DATA...}\n",
+    ),
+    ("IPMI", "ERROR ARGS: usage: IPMI [NETFN] [CMD] {DATA...}\n"),
+    ("IPMI 06 zz", "ERROR ARGS: 'zz' is not a hex byte\n"),
+    ("IPMI 06 01 100", "ERROR ARGS: '100' is not a hex byte\n"),
+    // HELP, ?
+    ("HELP", "{help}OK\n"),
+    ("help", "{help}OK\n"),
+    ("?", "{help}OK\n"),
+    (
+        "HELP INFO",
+        "  INFO                           - Firmware name, version, Tier and protocol version\nOK\n",
+    ),
+    (
+        "help fru set",
+        "  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM\nOK\n",
+    ),
+    (
+        "HELP FRU SET BOARD_SERIAL",
+        "  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM\nOK\n",
+    ),
+    ("HELP ?", "  ?                              - Same as HELP\nOK\n"),
+    (
+        "HELP NOPE",
+        "ERROR UNKNOWN: no command 'NOPE'; type HELP or ?\n",
+    ),
+    ("? X", "ERROR ARGS: usage: ?\n"),
+    // unknown commands and empty requests
+    (
+        "BOGUS x y",
+        "ERROR UNKNOWN: unknown command 'BOGUS'; type HELP or ?\n",
+    ),
+    (
+        "bogus",
+        "ERROR UNKNOWN: unknown command 'bogus'; type HELP or ?\n",
+    ),
+    (
+        "FRU",
+        "ERROR UNKNOWN: unknown command 'FRU'; type HELP or ?\n",
+    ),
+    (
+        "  FRU  BOGUS x",
+        "ERROR UNKNOWN: unknown command 'FRU  BOGUS'; type HELP or ?\n",
+    ),
+    (
+        "FRUSET BOARD_PART",
+        "ERROR UNKNOWN: unknown command 'FRUSET'; type HELP or ?\n",
+    ),
+    (
+        "INFOX",
+        "ERROR UNKNOWN: unknown command 'INFOX'; type HELP or ?\n",
+    ),
+    ("INFO X", "ERROR ARGS: usage: INFO\n"),
+    ("", "ERROR ARGS: empty request; type HELP or ?\n"),
+    // tags
+    (
+        "#a1 INFO",
+        "FIRMWARE: {fw}\nVERSION: 0.1.0\nTIER: {tier}\nPROTOCOL: 2\nOK #a1\n",
+    ),
+    (
+        "#ABCDEFGH fru state",
+        "FRU_STATE: M4 FRU Active\nOK #ABCDEFGH\n",
+    ),
+    ("#a7 FRU SAVE", "SAVE: done\nOK #a7\n"),
+    (
+        "#a1 BOGUS",
+        "ERROR #a1 UNKNOWN: unknown command 'BOGUS'; type HELP or ?\n",
+    ),
+    ("#a1", "ERROR #a1 ARGS: empty request; type HELP or ?\n"),
+    (
+        "#a7 FRU SET BOARD_SERIAL 1234567890123456789012345",
+        "ERROR #a7 TOO_LONG: BOARD_SERIAL is at most 24 characters\n",
+    ),
+    (
+        "#abcdefghi INFO",
+        "ERROR ARGS: a tag is # and 1 to 8 letters or digits\n",
+    ),
+    (
+        "#a-1 INFO",
+        "ERROR ARGS: a tag is # and 1 to 8 letters or digits\n",
+    ),
+    (
+        "# INFO",
+        "ERROR ARGS: a tag is # and 1 to 8 letters or digits\n",
+    ),
 ];
 
 #[test]
@@ -271,6 +360,208 @@ fn every_request_row_gets_its_answer() {
 }
 
 #[test]
+fn the_help_table_text_is_exact_and_aligned() {
+    // Every dash is in the same column: 2 + the longest syntax (28) + 2.
+    let width = COMMANDS.iter().map(|r| r.syntax.len()).max().unwrap();
+    assert_eq!(width, 28);
+    for line in HELP_TABLE.lines() {
+        assert_eq!(line.find(" - "), Some(2 + width + 2), "{line}");
+    }
+    assert_eq!(HELP_TABLE.lines().count(), COMMANDS.len());
+    // The text is generated from the table: a row's syntax and help sentence are in its line.
+    for (line, command) in HELP_TABLE.lines().zip(COMMANDS) {
+        assert_eq!(line, format!("  {:<30} - {}", command.syntax, command.help));
+    }
+}
+
+// ---- the engine ----
+
+fn no_op(_: &Args<'_>, _: &mut dyn AppHost, _: &mut dyn Write) -> Result<(), Fail> {
+    Ok(())
+}
+
+fn row(syntax: &'static str) -> Row {
+    Row {
+        syntax,
+        help: "h",
+        handler: no_op,
+    }
+}
+
+#[test]
+fn the_command_table_is_well_formed() {
+    assert_eq!(check_table(COMMANDS), Ok(()));
+}
+
+#[test]
+fn a_malformed_syntax_string_is_rejected_with_its_rule() {
+    let rows = [
+        ("", SyntaxError::Empty),
+        ("   ", SyntaxError::Empty),
+        ("[NAME]", SyntaxError::NoKeyword),
+        ("{NAME}", SyntaxError::NoKeyword),
+        ("fru set", SyntaxError::BadKeyword),
+        ("SET-MODE", SyntaxError::BadKeyword),
+        ("SET [name]", SyntaxError::BadParameter),
+        ("SET []", SyntaxError::BadParameter),
+        ("SET [NAME", SyntaxError::BadParameter),
+        ("SET NAME]", SyntaxError::BadParameter),
+        ("SET {NAME", SyntaxError::BadParameter),
+        ("SET [NAME...]", SyntaxError::BadParameter),
+        ("SET {...}", SyntaxError::BadParameter),
+        ("SET [A] KEY", SyntaxError::KeywordAfterParameter),
+        ("SET {A} [B]", SyntaxError::RequiredAfterOptional),
+        ("SET {A...} [B]", SyntaxError::RestNotLast),
+        ("SET {A...} {B}", SyntaxError::RestNotLast),
+        ("SET [A] [B] [C] [D] [E]", SyntaxError::TooManyParameters),
+    ];
+    for (text, error) in rows {
+        assert_eq!(Syntax::parse(text), Err(error), "{text:?}");
+    }
+    // Well formed strings and their shapes: (keywords, required, optional, rest).
+    let good = [
+        ("?", (1, 0, 0, false)),
+        ("FRU SET [FIELD] {VALUE...}", (2, 1, 0, true)),
+        ("A [X] [Y] {Z} {W}", (1, 2, 2, false)),
+        ("A {REST...}", (1, 0, 0, true)),
+    ];
+    for (text, (keywords, required, optional, rest)) in good {
+        let want = Syntax {
+            keywords,
+            required,
+            optional,
+            rest,
+        };
+        assert_eq!(Syntax::parse(text), Ok(want), "{text:?}");
+    }
+}
+
+#[test]
+fn a_bad_table_is_rejected_for_a_bad_row_a_missing_help_and_a_collision() {
+    assert_eq!(
+        check_table(&[row("A"), row("b")]),
+        Err(TableError::Syntax(1, SyntaxError::BadKeyword))
+    );
+    let mut silent = row("A");
+    silent.help = "";
+    assert_eq!(check_table(&[silent]), Err(TableError::NoHelp(0)));
+    // Same keyword sequence: parameters do not tell rows apart.
+    assert_eq!(
+        check_table(&[row("A B"), row("C"), row("A B [X]")]),
+        Err(TableError::Collision(0, 2))
+    );
+    // A shorter keyword sequence is not a collision: the longest one wins.
+    assert_eq!(check_table(&[row("A"), row("A B"), row("A B C")]), Ok(()));
+}
+
+#[test]
+fn the_longest_keyword_sequence_wins_and_keywords_are_whole_words() {
+    let rows = [row("A"), row("A B"), row("A B C [X]"), row("D")];
+    let cases = [
+        ("a", Some("A")),
+        ("A x", Some("A")),
+        ("A b", Some("A B")),
+        ("a B c 1", Some("A B C [X]")),
+        ("A BC", Some("A")),
+        ("AB", None),
+        ("A  \t B", Some("A B")),
+        ("", None),
+        ("E", None),
+    ];
+    for (line, want) in cases {
+        let found = find(&rows, line).map(|m| m.row.syntax);
+        assert_eq!(found, want, "{line:?}");
+    }
+    // The tail is what follows the keywords.
+    assert_eq!(find(&rows, "A B  rest of it").unwrap().tail, " rest of it");
+}
+
+#[test]
+fn arguments_split_into_words_and_a_rest_value() {
+    let shape = Syntax::parse("K [A] {B} {C...}").unwrap();
+    let cases: [(&str, Option<[Option<&str>; 3]>); 7] = [
+        ("1", Some([Some("1"), None, None])),
+        ("1 2", Some([Some("1"), Some("2"), None])),
+        ("1 2 3", Some([Some("1"), Some("2"), Some("3")])),
+        (
+            "  1  2   3  4 \t 5  ",
+            Some([Some("1"), Some("2"), Some("3  4 \t 5")]),
+        ),
+        ("", None),
+        ("   ", None),
+        ("1 2 3 4", Some([Some("1"), Some("2"), Some("3 4")])),
+    ];
+    for (tail, want) in cases {
+        let args = Args::parse(&shape, tail);
+        match want {
+            Some(values) => {
+                let args = args.unwrap_or_else(|| panic!("{tail:?}"));
+                let got: Vec<Option<&str>> = (0..3).map(|i| args.get(i)).collect();
+                assert_eq!(got, values, "{tail:?}");
+            }
+            None => assert!(args.is_none(), "{tail:?}"),
+        }
+    }
+    // Without a rest parameter a surplus word is refused; blanks at the end are not a word.
+    let plain = Syntax::parse("K [A] {B}").unwrap();
+    let counts = [
+        ("1 2", true),
+        ("1 2   ", true),
+        ("1 2 3", false),
+        ("", false),
+    ];
+    for (tail, fits) in counts {
+        assert_eq!(Args::parse(&plain, tail).is_some(), fits, "{tail:?}");
+    }
+    // The index past the parameters, and a missing optional one, are values and not panics.
+    let args = Args::parse(&plain, "1").unwrap();
+    assert_eq!(args.get(7), None);
+    assert!(args.required(1).is_err());
+}
+
+#[test]
+fn a_failing_handler_takes_back_its_data_lines() {
+    fn partial(_: &Args<'_>, _: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
+        write!(out, "KEY: value\r\n")?;
+        Err(Fail::new("BROKEN", format_args!("it stopped")))
+    }
+    let rows = [Row {
+        syntax: "GO",
+        help: "h",
+        handler: partial,
+    }];
+    let mut out = AnswerBuf::<ANSWER_MAX>::new();
+    out.write_str("echo\r\n").unwrap();
+    run(&rows, "#t1 GO", &mut FakeHost::new(), &mut out);
+    assert_eq!(out.as_str(), "echo\r\nERROR #t1 BROKEN: it stopped\r\n");
+}
+
+#[test]
+fn an_answer_that_does_not_fit_is_replaced_by_answer_too_long() {
+    let mut host = FakeHost::new();
+    // The HELP table needs about 1 KB; a 200 byte buffer cannot hold it.
+    let mut small = AnswerBuf::<200>::new();
+    run(COMMANDS, "#x HELP", &mut host, &mut small);
+    assert_eq!(
+        small.as_str(),
+        format!("ERROR #x ANSWER_TOO_LONG: the answer is longer than {ANSWER_MAX} bytes\r\n")
+    );
+    assert!(!small.overflowed());
+    let mut tiny = AnswerBuf::<10>::new();
+    assert!(write_help(COMMANDS, None, &mut tiny).is_err());
+}
+
+#[test]
+fn a_failure_sentence_keeps_the_pieces_written_before_it_ran_out_of_room() {
+    let long = "X".repeat(FAIL_TEXT_MAX);
+    let fail = Fail::new("CODE", format_args!("before {long}"));
+    assert_eq!(fail.text(), "before ");
+    assert_eq!(fail.code(), "CODE");
+}
+
+// ---- the commands ----
+
+#[test]
 fn ipmi_passes_the_bytes_to_the_host() {
     let mut host = FakeHost::new();
     reply(&mut host, "IPMI 0x06 0x01 ff 7 00");
@@ -278,105 +569,160 @@ fn ipmi_passes_the_bytes_to_the_host() {
 }
 
 #[test]
-fn ipmi_reports_a_completion_code_without_data_and_a_failed_request() {
+fn ipmi_reports_a_completion_code_without_data_without_a_name_and_a_failed_request() {
     let mut host = FakeHost::new();
     host.ipmi_result = Ok((0xC1, vec![]));
-    assert_eq!(reply(&mut host, "IPMI 06 99"), "OK IPMI CC=C1 DATA=");
+    host.name = None;
+    assert_eq!(reply(&mut host, "IPMI 06 99"), "CC: C1h\nDATA: \nOK\n");
     host.ipmi_result = Err(AppError::Dispatch);
-    assert_eq!(reply(&mut host, "IPMI 07 01"), "ERR IPMI_FAILED DISPATCH");
+    assert_eq!(
+        reply(&mut host, "IPMI 07 01"),
+        "ERROR IPMI_FAILED: the dispatcher gave no response (a NetFn that is odd or above 3Eh)\n"
+    );
     host.ipmi_result = Err(AppError::TooLong);
-    assert_eq!(reply(&mut host, "IPMI 06 01"), "ERR IPMI_FAILED TOO_LONG");
+    assert_eq!(
+        reply(&mut host, "IPMI 06 01"),
+        "ERROR IPMI_FAILED: the request or its response does not fit one IPMB frame\n"
+    );
     // More bytes than one IPMB frame holds are refused before the host runs.
-    let long = format!("IPMI 06 01{}", " 00".repeat(ipmc_core::ipmb::IPMB_MAX_LEN));
+    let long = format!(
+        "IPMI 06 01{}",
+        " 00".repeat(ipmc_core::ipmb::IPMB_MAX_LEN + 1)
+    );
     host.ipmi_calls.clear();
     assert_eq!(
         reply(&mut host, &long),
-        format!("ERR ARGS more than {} bytes", ipmc_core::ipmb::IPMB_MAX_LEN)
+        format!(
+            "ERROR ARGS: more than {} data bytes\n",
+            ipmc_core::ipmb::IPMB_MAX_LEN
+        )
     );
     assert!(host.ipmi_calls.is_empty());
 }
 
 #[test]
 fn status_words_follow_the_power_and_health_states() {
-    struct Case(PowerState, Summary, &'static str);
+    struct Case(PowerState, Summary, &'static str, &'static str);
     let cases = [
-        Case(PowerState::Off, Summary::Good, "power=off health=ok"),
-        Case(
-            PowerState::PowerOnRequested,
-            Summary::Good,
-            "power=off health=ok",
-        ),
-        Case(PowerState::On, Summary::Bad, "power=on health=fault"),
-        Case(
-            PowerState::Fault,
-            Summary::Unavailable,
-            "power=fault health=fault",
-        ),
+        Case(PowerState::Off, Summary::Good, "off", "ok"),
+        Case(PowerState::PowerOnRequested, Summary::Good, "off", "ok"),
+        Case(PowerState::On, Summary::Bad, "on", "fault"),
+        Case(PowerState::Fault, Summary::Unavailable, "fault", "fault"),
     ];
-    for Case(power, health, words) in cases {
+    for Case(power, health, power_word, health_word) in cases {
         let mut host = FakeHost::new();
         (host.power, host.health, host.nvmro, host.state) = (power, health, true, State::M0);
         assert_eq!(
             reply(&mut host, "STATUS"),
-            format!("OK STATUS ipmb=82h ga=1 fru=M0 {words} nvmro=1 uptime_s=77")
+            format!(
+                "IPMB_ADDRESS: 82h\nGA: 1\nFRU_STATE: M0 IPMC Inactive\nPAYLOAD_POWER: {power_word}\nHEALTH: {health_word}\nNVMRO: asserted\nUPTIME: 0d 00:17:48\nOK\n"
+            )
         );
     }
 }
 
 #[test]
-fn fields_lists_every_field_with_its_longest_value() {
-    let mut host = FakeHost::new();
-    let want: Vec<String> = FruField::ALL
-        .iter()
-        .map(|f| format!("{}={}", f.name(), f.max_len()))
-        .collect();
-    assert_eq!(
-        reply(&mut host, "FIELDS"),
-        format!("OK FIELDS {}", want.join(" "))
-    );
-    assert!(reply(&mut host, "FIELDS").contains("MFG_DATE=16"));
-}
-
-#[test]
-fn save_answers_each_state() {
-    let rows = [
-        (SaveState::Saved, "OK SAVED"),
-        (SaveState::Pending, "ERR PENDING a save is waiting"),
-        (SaveState::LogOff, "ERR LOG_OFF the flash log is off"),
-    ];
-    for (state, want) in rows {
-        let mut host = FakeHost::new();
-        host.save = state;
-        assert_eq!(reply(&mut host, "SAVE"), want);
+fn the_uptime_has_days_hours_minutes_and_seconds() {
+    // (seconds, text): 1 d 1 h 1 min 1 s, and 100 days.
+    for (seconds, text) in [(90_061_u32, "1d 01:01:01"), (8_640_000, "100d 00:00:00")] {
+        struct Clock(u32);
+        impl AppHost for Clock {
+            fn version(&self) -> &'static str {
+                ""
+            }
+            fn status(&self) -> Status {
+                Status {
+                    uptime_s: self.0,
+                    ..FakeHost::new().status()
+                }
+            }
+            fn fru_state(&self) -> State {
+                State::M4
+            }
+            fn unit_field(
+                &self,
+                _: FruField,
+                _: &mut dyn core::fmt::Write,
+            ) -> Result<(), FieldError> {
+                Ok(())
+            }
+            fn set_unit_field(&mut self, _: FruField, _: &str) -> Result<(), FieldError> {
+                Ok(())
+            }
+            fn ipmi(&mut self, _: u8, _: u8, _: &[u8]) -> Result<(u8, IpmiData), AppError> {
+                Err(AppError::Dispatch)
+            }
+            fn command_name(&self, _: u8, _: u8) -> Option<&'static str> {
+                None
+            }
+            fn save_state(&self) -> SaveState {
+                SaveState::Saved
+            }
+        }
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        run(COMMANDS, "STATUS", &mut Clock(seconds), &mut out);
+        assert!(out.as_str().contains(&format!("UPTIME: {text}\r\n")));
     }
 }
 
 #[test]
-fn every_field_error_has_its_error_code() {
+fn fru_save_answers_each_state() {
     let rows = [
-        (FieldError::TooLong, "ERR TOO_LONG max=24"),
+        (SaveState::Saved, "SAVE: done\nOK\n"),
+        (SaveState::Pending, "SAVE: pending\nOK\n"),
+        (
+            SaveState::LogOff,
+            "ERROR LOG_OFF: the flash log is off; the FRU image lives in RAM only\n",
+        ),
+    ];
+    for (state, want) in rows {
+        let mut host = FakeHost::new();
+        host.save = state;
+        assert_eq!(reply(&mut host, "FRU SAVE"), want);
+    }
+}
+
+#[test]
+fn every_field_error_has_its_error_code_and_sentence() {
+    let rows = [
+        (
+            FieldError::TooLong,
+            "ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n",
+        ),
         (
             FieldError::BadLength,
-            "ERR BAD_LENGTH a text of one byte is not allowed",
+            "ERROR BAD_LENGTH: BOARD_SERIAL is empty or at least 2 characters\n",
         ),
-        (FieldError::NotAscii, "ERR NOT_ASCII printable ASCII only"),
+        (
+            FieldError::NotAscii,
+            "ERROR NOT_ASCII: BOARD_SERIAL takes printable ASCII only\n",
+        ),
         (
             FieldError::NoRoom,
-            "ERR NO_ROOM the FRU area has no room for it",
+            "ERROR NO_ROOM: the FRU area has no room for that BOARD_SERIAL\n",
         ),
-        (FieldError::Nvmro, "ERR NVMRO the FRU is write protected"),
+        (
+            FieldError::Nvmro,
+            "ERROR NVMRO: the FRU is write protected (NVMRO is asserted)\n",
+        ),
         (
             FieldError::BadDate,
-            "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
+            "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
         ),
-        (FieldError::Corrupt, "ERR FRU_IMAGE Corrupt"),
-        (FieldError::AreaMissing, "ERR FRU_IMAGE AreaMissing"),
+        (
+            FieldError::Corrupt,
+            "ERROR FRU_IMAGE: the FRU image is damaged (Corrupt)\n",
+        ),
+        (
+            FieldError::AreaMissing,
+            "ERROR FRU_IMAGE: the FRU image is damaged (AreaMissing)\n",
+        ),
     ];
     for (error, want) in rows {
         let mut host = FakeHost::new();
         host.forced_set_error = Some(error);
         assert_eq!(
-            reply(&mut host, "SET BOARD_SERIAL ABCDEF"),
+            reply(&mut host, "FRU SET BOARD_SERIAL ABCDEF"),
             want,
             "{error:?}"
         );
@@ -388,27 +734,30 @@ fn set_while_nvmro_is_asserted_is_refused_and_changes_nothing() {
     let mut host = FakeHost::new();
     host.nvmro = true;
     assert_eq!(
-        reply(&mut host, "SET BOARD_SERIAL ABCDEF"),
-        "ERR NVMRO the FRU is write protected"
+        reply(&mut host, "FRU SET BOARD_SERIAL ABCDEF"),
+        "ERROR NVMRO: the FRU is write protected (NVMRO is asserted)\n"
     );
     host.nvmro = false;
     assert_eq!(
-        reply(&mut host, "GET BOARD_SERIAL"),
-        "OK BOARD_SERIAL IK-T1-000001"
+        reply(&mut host, "FRU GET BOARD_SERIAL"),
+        "BOARD_SERIAL: IK-T1-000001\nOK\n"
     );
 }
 
 #[test]
 fn set_is_refused_when_writing_is_disabled() {
     let mut host = FakeHost::new();
-    let request = Request {
-        word: "SET",
-        rest: "ASSET_TAG abc",
-    };
+    let shape = Syntax::parse("FRU SET [FIELD] {VALUE...}").unwrap();
+    let args = Args::parse(&shape, "ASSET_TAG abc").unwrap();
     let mut out = AnswerBuf::<ANSWER_MAX>::new();
-    set_field(&request, &mut host, &mut out, false).unwrap();
-    assert_eq!(out.as_str(), "ERR WRITE_DISABLED IPMC_APP_FRU_WRITE is 0");
-    assert_eq!(reply(&mut host, "GET ASSET_TAG"), "OK ASSET_TAG");
+    let fail = set_field(&args, &mut host, &mut out, false).unwrap_err();
+    assert_eq!(fail.code(), "WRITE_DISABLED");
+    assert_eq!(
+        fail.text(),
+        "FRU writes are turned off in this build (IPMC_APP_FRU_WRITE is false)"
+    );
+    assert!(out.is_empty());
+    assert_eq!(reply(&mut host, "FRU GET ASSET_TAG"), "ASSET_TAG: \nOK\n");
 }
 
 #[test]
@@ -416,88 +765,20 @@ fn a_set_value_is_stored_and_marks_the_store_dirty() {
     let mut host = FakeHost::new();
     assert!(!host.store.is_dirty());
     assert_eq!(
-        reply(&mut host, "SET BOARD_SERIAL 00:11:22:33:44:55"),
-        "OK BOARD_SERIAL 00:11:22:33:44:55"
+        reply(&mut host, "FRU SET BOARD_SERIAL 00:11:22:33:44:55"),
+        "BOARD_SERIAL: 00:11:22:33:44:55\nOK\n"
     );
     assert!(host.store.is_dirty());
     assert_eq!(
-        reply(&mut host, "GET BOARD_SERIAL"),
-        "OK BOARD_SERIAL 00:11:22:33:44:55"
+        reply(&mut host, "FRU GET BOARD_SERIAL"),
+        "BOARD_SERIAL: 00:11:22:33:44:55\nOK\n"
     );
     // The other serial is untouched.
     assert_eq!(
-        reply(&mut host, "GET PRODUCT_SERIAL"),
-        "OK PRODUCT_SERIAL IK-T1-000001"
+        reply(&mut host, "FRU GET PRODUCT_SERIAL"),
+        "PRODUCT_SERIAL: IK-T1-000001\nOK\n"
     );
     assert_eq!(ipmc_fru::verify(host.store.bytes()), Ok(()));
-}
-
-#[test]
-fn the_command_table_is_well_formed() {
-    let mut host = FakeHost::new();
-    for (index, command) in COMMANDS.iter().enumerate() {
-        assert_eq!(command.keyword, command.keyword.to_ascii_uppercase());
-        assert!(!command.keyword.contains(' '));
-        assert!(!command.help.is_empty(), "{}", command.keyword);
-        assert!(
-            COMMANDS[index + 1..]
-                .iter()
-                .all(|c| c.keyword != command.keyword),
-            "{} twice",
-            command.keyword
-        );
-        // HELP lists it and describes it.
-        assert!(reply(&mut host, "HELP").contains(&format!(" {}", command.keyword)));
-        let described = reply(&mut host, &format!("HELP {}", command.keyword));
-        assert!(
-            described.starts_with(&format!("OK HELP {}", command.keyword)),
-            "{described}"
-        );
-        assert!(described.ends_with(command.help), "{described}");
-    }
-}
-
-// ---- LineAssembler and respond ----
-
-/// lines -- feeds `chunks` to an assembler of `N` bytes and answers each request on a fresh
-/// host; the answers in order.
-fn run<const N: usize>(chunks: &[&[u8]]) -> Vec<String> {
-    let mut assembler = LineAssembler::<N>::new();
-    let mut host = FakeHost::new();
-    let mut answers = Vec::new();
-    for chunk in chunks {
-        for byte in *chunk {
-            let mut out = AnswerBuf::<ANSWER_MAX>::new();
-            if respond(assembler.push(*byte), &mut host, &mut out) {
-                answers.push(out.as_str().to_string());
-            }
-        }
-    }
-    answers
-}
-
-#[test]
-fn the_assembler_gives_the_same_lines_for_split_and_joined_chunks() {
-    let whole: &[u8] = b"HELLO\r\nFRU STATE\nSAVE\r\n";
-    let joined = run::<32>(&[whole]);
-    assert_eq!(joined.len(), 3);
-    assert_eq!(joined[1], "OK FRU M4 FRU Active");
-    // Every split point of the stream, and one byte at a time.
-    for cut in 0..=whole.len() {
-        assert_eq!(
-            run::<32>(&[&whole[..cut], &whole[cut..]]),
-            joined,
-            "cut {cut}"
-        );
-    }
-    let singles: Vec<&[u8]> = whole.chunks(1).collect();
-    assert_eq!(run::<32>(&singles), joined);
-}
-
-#[test]
-fn cr_lf_cr_and_lf_each_end_a_line_and_empty_lines_are_not_requests() {
-    assert_eq!(run::<32>(&[b"SAVE\r\n\r\n\n\rSAVE\rSAVE\n"]).len(), 3);
-    assert!(run::<32>(&[b"\r\n\r\n"]).is_empty());
 }
 
 #[test]
@@ -512,34 +793,189 @@ fn ipmi_write_fru_data_is_refused_when_writing_is_disabled() {
         ("0A 10 00", true),
         ("00 08 00", true),
     ];
-    for (rest, runs) in cases {
+    let shape = Syntax::parse("IPMI [NETFN] [CMD] {DATA...}").unwrap();
+    for (tail, runs) in cases {
+        let args = Args::parse(&shape, tail).unwrap();
         host.ipmi_calls.clear();
-        let request = Request { word: "IPMI", rest };
         let mut out = AnswerBuf::<ANSWER_MAX>::new();
-        ipmi_request(&request, &mut host, &mut out, false).unwrap();
-        assert_eq!(host.ipmi_calls.len(), usize::from(runs), "{rest}");
+        let result = ipmi_request(&args, &mut host, &mut out, false);
+        assert_eq!(host.ipmi_calls.len(), usize::from(runs), "{tail}");
         if !runs {
-            assert_eq!(out.as_str(), "ERR WRITE_DISABLED IPMC_APP_FRU_WRITE is 0");
+            assert_eq!(result.unwrap_err().code(), "WRITE_DISABLED");
         }
         // With the permission every request runs.
         host.ipmi_calls.clear();
-        let mut out = AnswerBuf::<ANSWER_MAX>::new();
-        ipmi_request(&request, &mut host, &mut out, true).unwrap();
-        assert_eq!(host.ipmi_calls.len(), 1, "{rest}");
+        ipmi_request(&args, &mut host, &mut out, true).unwrap();
+        assert_eq!(host.ipmi_calls.len(), 1, "{tail}");
     }
 }
 
-/// feed_all -- pushes every byte of `bytes` and collects the answers (fresh answer buffer each).
+// ---- the line editor ----
+
+/// typed -- feeds `bytes` to an editor of `N` bytes, answers each finished line on a fresh host
+/// and returns everything the device sends back, banner and prompts included.
+fn typed<const N: usize>(bytes: &[u8]) -> String {
+    let mut editor = LineEditor::<N>::new();
+    let mut host = FakeHost::new();
+    let mut out = AnswerBuf::<{ ANSWER_MAX * 4 }>::new();
+    banner(&host, &mut out).unwrap();
+    for byte in bytes {
+        serve(&mut editor, *byte, &mut host, &mut out);
+    }
+    assert!(!out.overflowed());
+    out.as_str().to_string()
+}
+
+/// BAD_CHAR_LINE -- the final line of a line with a byte that is not printable ASCII.
+const BAD_CHAR_LINE: &str =
+    "ERROR BAD_CHAR: the line holds a byte that is not printable ASCII; it was dropped";
+
+#[test]
+fn the_editor_echoes_erases_and_ends_lines() {
+    // (bytes sent, what the device sends back after the banner and the first prompt). BS is 08h
+    // and the device answers BS SP BS.
+    let echoes: [(&[u8], String); 15] = [
+        (b"IN", "IN".into()),
+        (b"\t", "\t".into()),
+        (b"INFO\x08", "INFO\x08 \x08".into()),
+        (b"INFO\x7f\x7f", "INFO\x08 \x08\x08 \x08".into()),
+        (b"\x08\x7f", "".into()),
+        (b"\r", "\r\napp> ".into()),
+        (b"\n", "\r\napp> ".into()),
+        (b"\r\n", "\r\napp> ".into()),
+        (b"\n\r", "\r\napp> ".into()),
+        (b"\r\r", "\r\napp> \r\napp> ".into()),
+        (b"\n\n", "\r\napp> \r\napp> ".into()),
+        (b"A\x00B\r", format!("AB\r\n{BAD_CHAR_LINE}\r\napp> ")),
+        (b"\xc3\xa9\n", format!("\r\n{BAD_CHAR_LINE}\r\napp> ")),
+        (b"\x1b[A\n", format!("[A\r\n{BAD_CHAR_LINE}\r\napp> ")),
+        (
+            b"x\r\n",
+            "x\r\nERROR UNKNOWN: unknown command 'x'; type HELP or ?\r\napp> ".into(),
+        ),
+    ];
+    let banner_text = {
+        let host = FakeHost::new();
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        banner(&host, &mut out).unwrap();
+        out.as_str().to_string()
+    };
+    for (bytes, want) in echoes {
+        assert_eq!(
+            typed::<32>(bytes),
+            format!("{banner_text}{want}"),
+            "{bytes:?}"
+        );
+    }
+}
+
+#[test]
+fn backspace_edits_the_line_before_it_runs() {
+    // "INFX" BS "O" is "INFO"; the answer is INFO's.
+    let text = typed::<32>(b"INFX\x08O\r\n");
+    assert!(text.contains("INFX\x08 \x08O\r\n"), "{text:?}");
+    assert!(text.contains("PROTOCOL: 2\r\nOK\r\napp> "), "{text:?}");
+    // Erasing everything and typing again.
+    let text = typed::<32>(b"AB\x08\x08STATUS\r");
+    assert!(text.contains("IPMB_ADDRESS: 82h"), "{text:?}");
+}
+
+#[test]
+fn every_line_end_form_is_one_line() {
+    // (bytes, prompts printed): the banner's prompt, the one after the answer, and one more for
+    // each empty line. A CR LF pair adds no empty line; CR LF CR LF is a line and an empty line.
+    let forms: [(&[u8], usize); 5] = [
+        (b"FRU STATE\r\n", 2),
+        (b"FRU STATE\n\r", 2),
+        (b"FRU STATE\r", 2),
+        (b"FRU STATE\n", 2),
+        (b"FRU STATE\r\n\r\n", 3),
+    ];
+    for (bytes, prompts) in forms {
+        let text = typed::<32>(bytes);
+        assert_eq!(
+            text.matches("FRU_STATE: M4 FRU Active").count(),
+            1,
+            "{bytes:?}"
+        );
+        assert_eq!(text.matches(PROMPT).count(), prompts, "{bytes:?}");
+    }
+}
+
+#[test]
+fn the_editor_gives_the_same_output_for_any_split_of_the_bytes() {
+    let whole: &[u8] = b"INFO\r\nFRU STATE\nFRU SAVE\r\n";
+    let joined = typed::<32>(whole);
+    assert_eq!(joined.matches("OK\r\n").count(), 3);
+    for cut in 0..=whole.len() {
+        let mut editor = LineEditor::<32>::new();
+        let mut host = FakeHost::new();
+        let mut out = AnswerBuf::<{ ANSWER_MAX * 4 }>::new();
+        banner(&host, &mut out).unwrap();
+        for chunk in [&whole[..cut], &whole[cut..]] {
+            for byte in chunk {
+                serve(&mut editor, *byte, &mut host, &mut out);
+            }
+        }
+        assert_eq!(out.as_str(), joined, "cut {cut}");
+    }
+}
+
+#[test]
+fn an_overlong_line_is_answered_once_when_its_end_arrives() {
+    // N = 8: a line of 8 bytes passes, 9 do not; the bytes past 8 are not echoed.
+    let text = typed::<8>(b"STATUS\r\n");
+    assert!(text.contains("IPMB_ADDRESS: 82h"), "{text:?}");
+    let text = typed::<8>(b"HELP     \nINFO\n");
+    let error = format!(
+        "ERROR LINE_TOO_LONG: the line is longer than {} bytes; it was dropped\r\n",
+        ipmc_defs::IPMC_APP_LINE_MAX
+    );
+    assert!(
+        text.contains(&format!("HELP    \r\n{error}app> ")),
+        "{text:?}"
+    );
+    assert!(text.contains("PROTOCOL: 2\r\nOK\r\napp> "), "{text:?}");
+    // Nothing is answered before the end of the overlong line arrives; backspace does nothing on
+    // it; the editor reports TooLong once.
+    let mut editor = LineEditor::<4>::new();
+    for byte in b"0123456789\x08\x08" {
+        assert_eq!(editor.push(*byte).fed, Fed::Nothing);
+    }
+    assert_eq!(editor.push(b'\n').fed, Fed::TooLong);
+    // A second line end alike is an empty line (only CR LF and LF CR are one line end).
+    assert_eq!(editor.push(b'\n').fed, Fed::Empty);
+}
+
+#[test]
+fn the_editor_returns_the_text_of_the_line() {
+    let mut editor = LineEditor::<32>::new();
+    for byte in b"FRU GET ASSET_TAG" {
+        assert_eq!(editor.push(*byte).fed, Fed::Nothing);
+    }
+    assert_eq!(editor.push(b'\r').fed, Fed::Line("FRU GET ASSET_TAG"));
+    assert_eq!(editor.push(b'\n').fed, Fed::Nothing);
+    for byte in b"INFO" {
+        editor.push(*byte);
+    }
+    let edit = editor.push(b'\n');
+    assert_eq!((edit.echo, edit.fed), (Echo::Newline, Fed::Line("INFO")));
+}
+
+/// feed_all -- pushes every byte of `bytes` through `serve` and collects the final line of each
+/// finished answer.
 fn feed_all<const N: usize>(
-    assembler: &mut LineAssembler<N>,
+    editor: &mut LineEditor<N>,
     host: &mut FakeHost,
     bytes: &[u8],
 ) -> Vec<String> {
     let mut answers = Vec::new();
     for byte in bytes {
         let mut out = AnswerBuf::<ANSWER_MAX>::new();
-        if respond(assembler.push(*byte), host, &mut out) {
-            answers.push(out.as_str().to_string());
+        let served = serve(editor, *byte, host, &mut out);
+        if served.fed != Fed::Nothing {
+            let line = answer_final_line(&out, served.answer_at).unwrap_or("(none)");
+            answers.push(line.to_string());
         }
     }
     answers
@@ -548,121 +984,122 @@ fn feed_all<const N: usize>(
 #[test]
 fn a_damaged_line_is_answered_without_a_tag_and_not_run() {
     let mut host = FakeHost::new();
-    let mut assembler = LineAssembler::<64>::new();
+    let mut editor = LineEditor::<64>::new();
     // Bytes of a request arrived, then the port lost 3 and the ring was discarded.
-    assert!(feed_all(&mut assembler, &mut host, b"#a7 SET ASSET_").is_empty());
-    assembler.damage(3);
+    assert!(feed_all(&mut editor, &mut host, b"#a7 FRU SET ASSET_").is_empty());
+    editor.damage(3);
     // The rest of the line ends: answered once, no tag, not run; the CR LF pair adds nothing.
-    let answers = feed_all(
-        &mut assembler,
-        &mut host,
-        b"TAG abc
-",
+    let answers = feed_all(&mut editor, &mut host, b"TAG abc\r\n");
+    assert_eq!(
+        answers,
+        ["ERROR LINE_DAMAGED: 3 bytes lost on the port; the line was dropped"]
     );
-    assert_eq!(answers, ["ERR LINE_DAMAGED 3 bytes lost on the port"]);
-    assert_eq!(reply(&mut host, "GET ASSET_TAG"), "OK ASSET_TAG");
+    assert_eq!(reply(&mut host, "FRU GET ASSET_TAG"), "ASSET_TAG: \nOK\n");
     // The line after it runs normally.
-    let answers = feed_all(
-        &mut assembler,
-        &mut host,
-        b"SAVE
-",
-    );
-    assert_eq!(answers, ["OK SAVED"]);
+    assert_eq!(feed_all(&mut editor, &mut host, b"FRU SAVE\r\n"), ["OK"]);
     // A loss that arrives before the line end adds up; a bare line end answers too.
-    assembler.damage(2);
-    assembler.damage(5);
-    let answers = feed_all(
-        &mut assembler,
-        &mut host,
-        b"
-",
+    editor.damage(2);
+    editor.damage(5);
+    let answers = feed_all(&mut editor, &mut host, b"\n");
+    assert_eq!(
+        answers,
+        ["ERROR LINE_DAMAGED: 7 bytes lost on the port; the line was dropped"]
     );
-    assert_eq!(answers, ["ERR LINE_DAMAGED 7 bytes lost on the port"]);
-    // Nothing is answered before a line end.
-    let mut out = AnswerBuf::<ANSWER_MAX>::new();
-    assert!(!respond(Fed::Nothing, &mut host, &mut out));
-    assert!(out.is_empty());
 }
 
 #[test]
 fn many_requests_then_a_damaged_set_never_runs_the_set() {
-    // The Codex scenario: a burst of complete requests overran the ring, the firmware discarded
-    // the ring (no answer for the lines inside it), and the SET that follows lost bytes.
+    // A burst of complete requests overran the ring, the firmware discarded the ring (no answer
+    // for the lines inside it), and the SET that follows lost bytes.
     let mut host = FakeHost::new();
-    let mut assembler = LineAssembler::<64>::new();
-    assembler.damage(40);
-    let answers = feed_all(
-        &mut assembler,
-        &mut host,
-        b"ASSET_TAG ABCD
-",
-    );
-    assert_eq!(answers, ["ERR LINE_DAMAGED 40 bytes lost on the port"]);
-    let answers = feed_all(
-        &mut assembler,
-        &mut host,
-        b"SET ASSET_TAG ABCD
-GET ASSET_TAG
-",
-    );
-    assert_eq!(answers.len(), 2);
-    assert_eq!(answers[0], "OK ASSET_TAG ABCD");
-    assert_eq!(answers[1], "OK ASSET_TAG ABCD");
-}
-
-#[test]
-fn an_overlong_line_is_answered_once_when_its_end_arrives() {
-    // N = 8: a line of 8 bytes passes, 9 do not.
-    let answers = run::<8>(&[b"STATUS\r\n"]);
+    let mut editor = LineEditor::<64>::new();
+    editor.damage(40);
+    let answers = feed_all(&mut editor, &mut host, b"ASSET_TAG ABCD\r\n");
     assert_eq!(
         answers,
-        ["OK STATUS ipmb=82h ga=1 fru=M4 power=on health=ok nvmro=0 uptime_s=77"]
+        ["ERROR LINE_DAMAGED: 40 bytes lost on the port; the line was dropped"]
     );
-    let answers = run::<8>(&[b"HELP    \n", b"HELP     \n", b"SAVE\n"]);
-    assert_eq!(answers.len(), 3);
-    assert!(answers[0].starts_with("OK HELP"));
+    let answers = feed_all(
+        &mut editor,
+        &mut host,
+        b"FRU SET ASSET_TAG ABCD\r\nFRU GET ASSET_TAG\r\n",
+    );
+    assert_eq!(answers, ["OK", "OK"]);
     assert_eq!(
-        answers[1],
-        format!("ERR LINE_TOO_LONG max={}", ipmc_defs::IPMC_APP_LINE_MAX)
+        reply(&mut host, "FRU GET ASSET_TAG"),
+        "ASSET_TAG: ABCD\nOK\n"
     );
-    assert_eq!(answers[2], "OK SAVED");
-    // Nothing is answered before the end of the overlong line arrives.
-    let mut assembler = LineAssembler::<4>::new();
-    for byte in b"0123456789" {
-        assert_eq!(assembler.push(*byte), Fed::Nothing);
-    }
-    assert_eq!(assembler.push(b'\n'), Fed::TooLong);
-    assert_eq!(assembler.push(b'\n'), Fed::Nothing);
 }
 
 #[test]
-fn a_line_with_a_byte_that_is_not_printable_ascii_gets_one_error() {
-    let answers = run::<32>(&[b"HEL\x00LO\nSAVE\n", b"SA\xC3\xA9VE\n"]);
-    assert_eq!(
-        answers,
-        [
-            "ERR ARGS only printable ASCII is accepted",
-            "OK SAVED",
-            "ERR ARGS only printable ASCII is accepted"
-        ]
-    );
-    // A tab inside a line is fine.
-    assert_eq!(run::<32>(&[b"FRU\tSTATE\n"]), ["OK FRU M4 FRU Active"]);
+fn every_line_state_and_host_failure_has_its_error_line() {
+    let mut host = FakeHost::new();
+    let states = [
+        (Fed::TooLong, "ERROR LINE_TOO_LONG: "),
+        (Fed::BadChar, "ERROR BAD_CHAR: "),
+        (Fed::Damaged(2), "ERROR LINE_DAMAGED: 2 bytes"),
+    ];
+    for (fed, start) in states {
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        assert!(respond(&fed, &mut host, &mut out));
+        assert!(out.as_str().starts_with(start), "{}", out.as_str());
+        assert!(out.as_str().ends_with("\r\napp> "));
+    }
+    let forced = [
+        (FieldError::NoRoom, "NO_ROOM"),
+        (FieldError::Nvmro, "NVMRO"),
+        (FieldError::Corrupt, "FRU_IMAGE"),
+        (FieldError::BadDate, "BAD_DATE"),
+    ];
+    for (error, code) in forced {
+        let mut host = FakeHost::new();
+        host.forced_set_error = Some(error);
+        let text = reply(&mut host, "FRU SET BOARD_PART ab");
+        assert!(text.starts_with(&format!("ERROR {code}: ")), "{text}");
+    }
+    host.ipmi_result = Err(AppError::TooLong);
+    assert!(reply(&mut host, "IPMI 06 01").starts_with("ERROR IPMI_FAILED: "));
+    host.save = SaveState::LogOff;
+    assert!(reply(&mut host, "FRU SAVE").starts_with("ERROR LOG_OFF: "));
 }
 
 #[test]
-fn the_assembler_returns_the_text_of_the_line() {
-    let mut assembler = LineAssembler::<16>::new();
-    for byte in b"GET ASSET_TAG" {
-        assert_eq!(assembler.push(*byte), Fed::Nothing);
-    }
-    assert_eq!(assembler.push(b'\r'), Fed::Line("GET ASSET_TAG"));
-    assert_eq!(assembler.push(b'\n'), Fed::Nothing);
-    for byte in b"HELLO" {
-        assembler.push(*byte);
-    }
-    assert_eq!(assembler.push(b'\n'), Fed::Line("HELLO"));
+fn respond_writes_nothing_for_nothing_and_the_prompt_for_an_empty_line() {
+    let mut host = FakeHost::new();
+    let mut out = AnswerBuf::<ANSWER_MAX>::new();
+    assert!(!respond(&Fed::Nothing, &mut host, &mut out));
+    assert!(out.is_empty());
+    assert!(respond(&Fed::Empty, &mut host, &mut out));
+    assert_eq!(out.as_str(), PROMPT);
+}
+
+// ---- sizes and the parsing rule ----
+
+#[test]
+fn the_longest_answers_fit_the_answer_buffer_with_room_for_the_echo() {
+    let mut host = FakeHost::new();
+    // The echo of a full pass of typed bytes (3 bytes each at worst) comes before an answer, the
+    // prompt and the line end after it.
+    let echo = ipmc_defs::IPMC_APP_BYTES_PER_POLL * 3;
+    let after = PROMPT.len() + 2;
+    let longest = ["HELP", "FRU FIELDS", "#abcdefgh IPMI 06 01", "STATUS"]
+        .iter()
+        .map(|request| reply(&mut host, request).len())
+        .max()
+        .unwrap();
+    assert!(
+        longest + echo + after <= ANSWER_MAX,
+        "{longest} + {echo} + {after} > {ANSWER_MAX}"
+    );
+    // An unknown command as long as a request line, tag included: the word is not cut.
+    let word = "X".repeat(ipmc_defs::IPMC_APP_LINE_MAX - 10);
+    let long = reply(&mut host, &format!("#abcdefgh {word}"));
+    assert!(long.contains(&word));
+    assert!(long.len() + echo + after <= ANSWER_MAX);
+    // A full frame of response data.
+    host.ipmi_result = Ok((0, vec![0xAB; ipmc_core::ipmb::IPMB_RESPONSE_DATA_MAX]));
+    let full = reply(&mut host, "#abcdefgh IPMI 06 01");
+    assert!(full.len() + echo + after <= ANSWER_MAX);
 }
 
 #[test]
@@ -675,19 +1112,77 @@ fn the_answer_buffer_stores_whole_writes_only() {
     assert_eq!(buf.as_str(), "abcd");
     write!(buf, "efgh").unwrap();
     assert_eq!(buf.as_str(), "abcdefgh");
+    assert_eq!(buf.as_bytes(), b"abcdefgh");
+    buf.truncate(3);
+    assert_eq!((buf.as_str(), buf.len()), ("abc", 3));
+    buf.truncate(9);
+    assert_eq!(buf.len(), 3);
     buf.clear();
     assert!(buf.is_empty() && !buf.overflowed());
 }
 
 #[test]
-fn the_longest_answers_fit_the_answer_buffer() {
-    let mut host = FakeHost::new();
-    // An unknown word as long as a request line.
-    let word = "X".repeat(ipmc_defs::IPMC_APP_LINE_MAX - 10);
-    let long = reply(&mut host, &format!("#abcdefgh {word}"));
-    assert!(long.len() < ANSWER_MAX);
-    // A full frame of response data.
-    host.ipmi_result = Ok((0, vec![0xAB; ipmc_core::ipmb::IPMB_RESPONSE_DATA_MAX]));
-    let full = reply(&mut host, "#abcdefgh IPMI 06 01");
-    assert!(full.len() < ANSWER_MAX, "{}", full.len());
+fn the_payload_parsing_rule_finds_the_data_lines_and_the_final_line() {
+    // Skip lines that start with the prompt (prompt and echo), collect KEY: value lines, the
+    // answer ends at the first line that is OK / starts with OK or ERROR.
+    let session = "app> STATUS\nGA: 1\nHEALTH: ok\nOK #t1\napp> FRU GET X\nERROR ARGS: bad\napp> ";
+    let mut data = Vec::new();
+    let mut last = None;
+    for line in session.lines().filter(|l| !l.starts_with(PROMPT)) {
+        if final_line(line).is_some() {
+            last = Some(line);
+            break;
+        }
+        data.push(line);
+    }
+    assert_eq!(data, ["GA: 1", "HEALTH: ok"]);
+    assert_eq!(last, Some("OK #t1"));
+    assert_eq!(
+        final_line("GA: 1\nOKAY: 1\nERROR ARGS: x\n"),
+        Some("ERROR ARGS: x")
+    );
+    assert_eq!(final_line("OK\n"), Some("OK"));
+    assert_eq!(final_line("app> OK\n"), None);
+}
+
+// ---- a whole session ----
+
+/// SESSION_INPUT -- what a person types for the session test: HELP, STATUS, FRU FIELDS, a FRU SET
+/// that fails, an IPMI request, a request that works.
+const SESSION_INPUT: &[u8] = b"HELP\rSTATUS\rFRU FIELDS\rFRU SET BOARD_SERIAL 1234567890123456789012345\rIPMI 06 01\rFRU SAVE\r";
+
+#[test]
+fn a_session_prints_as_the_documents_show_it() {
+    let text = typed::<{ ipmc_defs::IPMC_APP_LINE_MAX }>(SESSION_INPUT).replace("\r\n", "\n");
+    println!("{text}");
+    let (fw, tier) = (ipmc_defs::IPMC_FW_NAME, ipmc_defs::IPMC_TIER);
+    let want = format!(
+        "IPMC application port, {fw} v0.1.0, Tier {tier}, protocol 2. Type HELP or ?.\n\
+         app> HELP\n{HELP_TABLE}OK\n\
+         app> STATUS\n{}\
+         app> FRU FIELDS\n{FIELD_LINES}OK\n\
+         app> FRU SET BOARD_SERIAL 1234567890123456789012345\n\
+         ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n\
+         app> IPMI 06 01\nCC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n\
+         app> FRU SAVE\nSAVE: done\nOK\napp> ",
+        "IPMB_ADDRESS: 82h\nGA: 1\nFRU_STATE: M4 FRU Active\nPAYLOAD_POWER: on\nHEALTH: ok\nNVMRO: deasserted\nUPTIME: 0d 00:17:48\nOK\n"
+    );
+    assert_eq!(text, want);
+}
+
+#[test]
+fn the_session_in_the_crate_comment_is_what_the_code_prints() {
+    let source = include_str!("lib.rs");
+    let doc: Vec<&str> = source
+        .lines()
+        .skip_while(|line| !line.starts_with("//! IPMC application port"))
+        .take_while(|line| *line != "//! ```")
+        .map(|line| line.trim_start_matches("//! ").trim_end())
+        .collect();
+    let input = b"STATUS\r#a7 FRU SET BOARD_SERIAL 1234567890123456789012345\rFRU SET BOARD_SERIAL 00:11:22:33:44:55\rIPMI 06 01\r";
+    let printed = typed::<{ ipmc_defs::IPMC_APP_LINE_MAX }>(input).replace("\r\n", "\n");
+    // The comment shows the Tier-1 build; the banner of another build names its own Tier.
+    let printed = printed.replace(&format!("Tier {},", ipmc_defs::IPMC_TIER), "Tier 1,");
+    let printed: Vec<&str> = printed.lines().map(str::trim_end).collect();
+    assert_eq!(doc, printed);
 }

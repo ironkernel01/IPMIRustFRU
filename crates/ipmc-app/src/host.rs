@@ -52,11 +52,13 @@ pub enum AppError {
 }
 
 impl AppError {
-    /// name -- the word that follows `ERR IPMI_FAILED` in the answer.
-    pub const fn name(self) -> &'static str {
+    /// sentence -- the sentence of the `ERROR IPMI_FAILED` line.
+    pub const fn sentence(self) -> &'static str {
         match self {
-            AppError::TooLong => "TOO_LONG",
-            AppError::Dispatch => "DISPATCH",
+            AppError::TooLong => "the request or its response does not fit one IPMB frame",
+            AppError::Dispatch => {
+                "the dispatcher gave no response (a NetFn that is odd or above 3Eh)"
+            }
         }
     }
 }
@@ -94,7 +96,7 @@ impl IpmiData {
 /// AppHost -- the board, as the application protocol sees it. Every method runs in the main
 /// loop, never in an interrupt, and returns without waiting for hardware.
 pub trait AppHost {
-    /// version -- the firmware version text for `HELLO` (the firmware crate's package version).
+    /// version -- the firmware version text for `INFO` and the banner (the firmware crate's package version).
     fn version(&self) -> &'static str;
 
     /// status -- the board values of the `STATUS` answer. The firmware reads the geographic
@@ -121,6 +123,11 @@ pub trait AppHost {
     /// the completion code with the response data. Nothing goes on the IPMB. The firmware uses
     /// `IpmbLink::local_request`, the function behind the console command `DEBUG IPMI`.
     fn ipmi(&mut self, netfn: u8, cmd: u8, data: &[u8]) -> Result<(u8, IpmiData), AppError>;
+
+    /// command_name -- the name of the IPMI command (request NetFn, command code) as the capture
+    /// log prints it, None when the build has no name for it. The firmware asks the same name
+    /// source as the capture printers (`IpmbLink::names`).
+    fn command_name(&self, netfn: u8, cmd: u8) -> Option<&'static str>;
 
     /// save_state -- whether the FRU image in RAM is in the flash log. The firmware reads the
     /// store's dirty mark and the flash log's pending flag.

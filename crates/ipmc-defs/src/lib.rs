@@ -239,7 +239,7 @@ const _: () = assert!(
     IPMC_APP_UART_TX_BUF.is_power_of_two()
         && IPMC_APP_UART_TX_BUF >= 512
         && IPMC_APP_UART_TX_BUF <= 16384,
-    "IPMC_APP_UART_TX_BUF must be a power of two, 512..=16384 (one answer, ipmc_app::ANSWER_MAX 256, plus CR LF must fit; the firmware checks the exact sum)"
+    "IPMC_APP_UART_TX_BUF must be a power of two, 512..=16384"
 );
 const _: () = assert!(
     IPMC_APP_LINE_MAX >= 16 && IPMC_APP_LINE_MAX + 2 < IPMC_APP_UART_RX_BUF,

@@ -35,9 +35,6 @@ TAGS_DEFAULT = True
 TAG_PREFIX = "t"
 TAG_COUNTER_MODULUS = 0x1_0000
 
-# Prompt of the interactive mode.
-PROMPT = "app> "
-
 DEFS_PATH = defs.DEFAULT_PATH
 
 

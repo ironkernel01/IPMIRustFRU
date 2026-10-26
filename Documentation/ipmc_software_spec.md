@@ -43,7 +43,7 @@
    (section 10.11); `python -I tools\capture\capture2pcap.py dump.txt -o dump` turns a saved dump
    into a file Wireshark opens. A USB-serial adapter on PB6/PB7 (COM5 on the bench) reaches the
    application port (section 7.6):
-   `tools\python-ipmi\.venv\Scripts\python.exe tools\app-port\app_cli.py --port COM5 HELLO STATUS`.
+   `tools\python-ipmi\.venv\Scripts\python.exe tools\app-port\app_cli.py --port COM5 INFO STATUS`.
 
 ## Table of Contents
 
@@ -195,7 +195,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-010 | Report sensors 0..6 with the layouts of Tables 10.2.1-1 to 10.2.7-1, and sensor 7 (Payload Mode, Table 10.2.8-1) at Tier-3 | Table 10.2-1 | `sensor.rs`, `dispatch.rs` `read_sensor` |
 | FR-011 | FRU 0 holds Common Header, Board Info and Product Info areas; Chassis Info offset 00h | Rules 8.1-2, 8.1-3 | `ipmc-fru/src/records.rs` |
 | FR-012 | FRU data readable whatever the payload power | Rule 8-1 | `cmd/storage.rs` |
-| FR-013 | Write FRU Data while NVMRO is asserted answers 80h and changes nothing; an application port `SET` answers `ERR NVMRO` and changes nothing; no flash write while NVMRO is asserted | Rules 8-3, 8-5, Rec 4.1.10-1 | `cmd/storage.rs`, `app_port.rs`, `persist.rs`, `bsp/flash.rs` |
+| FR-013 | Write FRU Data while NVMRO is asserted answers 80h and changes nothing; an application port `FRU SET` answers `ERROR NVMRO` and changes nothing; no flash write while NVMRO is asserted | Rules 8-3, 8-5, Rec 4.1.10-1 | `cmd/storage.rs`, `app_port.rs`, `persist.rs`, `bsp/flash.rs` |
 | FR-014 | FRU 0 state machine M0 to M1 on the initial checks, M1 to M4 on valid payload power, M4 to M6 on power loss, M6 to M1 on a complete shutdown; at Tier-3 also M4 to M5 on a deactivation request, M5 to M4 when it is cleared and M5 to M6 on power loss | Section 4.1.5, Rules 4.1.5.4.1-2, 4.1.5.4.2-3, 4.1.5.4.3-2, 4.1.5.4.4-2, 4.1.5.4.4-5, 4.1.5.4.5-1 | `fru_state.rs` |
 | FR-015 | A payload power-on request in M6 is refused; in the commercial release build it is also refused while the FRU is activation-locked; one check serves the boot power-on, the handler hand-off and the console | Rules 4.1.5.4.5-2, 4.1.5.4.2-1 | `fru_state.rs` `check_power_on`, `ext.rs` `check_power_on` |
 | FR-016 | An invalid hardware address (even parity or GA = 0) isolates both buses and keeps the FRU in M0 | Rules 4.1.5.4.1-4, 4.1.5.4.1-5 | `addr.rs`, `link.rs` |
@@ -209,7 +209,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-024 | A Warm Reset request (commercial release build) restarts the link state and the requester without a processor reset, once its response has left and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.3 | `reset_gate.rs`, `ipmb_link.rs`, `link.rs` `restarted` |
 | FR-025 | A Cold Reset of the payload (commercial release build) holds PAYLOAD_RST_OUT_N (PA9, open drain) low for `IPMC_PAYLOAD_RESET_PULSE_MS` without blocking the main loop; the FRU state does not change | Rule 4.1.2-9 | `reset_pulse.rs`, `sensing.rs` |
 | FR-026 | Every whole IPMB frame the IPMC receives (before the parser) or sends (with its outcome) and every trace line goes into a RAM ring of `IPMC_LOG_SIZE` bytes, oldest overwritten first; the console dumps it as CSV or as trace rows | owner, Phase 11 (PLAN, 10-25-2026) | `capture.rs`, `debug_cmds.rs`, `ipmb_link.rs` |
-| FR-027 | A payload CPU on APP_UART gets exactly one answer line (`OK ...` or `ERR <CODE> ...`) per request line, with the optional tag echoed; a `SET` of a unit field rewrites that field in place, moves no area and goes to the flash through the Write FRU Data save path | owner, Phase 11 (PLAN, 10-25-2026) | `ipmc-app`, `app_port.rs`, `ipmc-fru/src/unit.rs` |
+| FR-027 | A payload CPU on APP_UART gets, per request line, zero or more `KEY: value` data lines and exactly one final line (`OK` or `ERROR <CODE>: <sentence>`), with the optional tag on the final line, in text a person reads and a parser splits; a `FRU SET` of a unit field rewrites that field in place, moves no area and goes to the flash through the Write FRU Data save path | owner, Phase 11 (PLAN, 10-25-2026) | `ipmc-app`, `app_port.rs`, `ipmc-fru/src/unit.rs` |
 
 ### Performance requirements
 
@@ -546,10 +546,10 @@ decision 24).
 | `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) one longest answer (`ANSWER_MAX`) plus CR LF, checked at compile time in `app_port.rs` |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
-| `IPMC_APP_FRU_WRITE` | `true` | the application port may `SET` the unit fields and run the IPMI Write FRU Data request; false refuses both with `ERR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
+| `IPMC_APP_FRU_WRITE` | `true` | the application port may `FRU SET` the unit fields and run the IPMI Write FRU Data request; false refuses both with `ERROR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `FRU GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
 | `IPMC_MENU_LINE_MAX`, `IPMC_MENU_TOKENS_MAX` | 128, 40 | console line and token limits |
 | `IPMC_FRU_DUMP_BYTES_PER_LINE` | 16 | bytes on one line of `FRU DUMP` (1..=16) |
-| `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `ipmc` | firmware name of the banner, `SYS VERSION` and the application `HELLO` answer; root prompt text |
+| `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `ipmc` | firmware name of the banner, `SYS VERSION`, the application port banner and its `INFO` answer; root prompt text |
 | `IPMC_HSE_HZ`, `IPMC_SYSCLK_HZ` | 8000000, 84000000 | clock input and system clock (PLL values checked at compile time) |
 | `IPMC_LED_*`, `IPMC_FAULT_BLINK_CHZ` | 1 Hz heartbeat, 10 Hz activity, 5 Hz fault | LD2 patterns (centihertz) |
 | `IPMC_ADC_INTERNAL_SOURCE` | `Source::Hw` | VDDA and die temperature from ADC1 |
@@ -1002,7 +1002,7 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/sensing.rs` | builds the sensor backends from the source switches, owns the `Monitor` and the `PayloadResetPulse`; `serve_hand_offs` (power requests through `apply_power_request`, the payload reset pulse and its release, every main-loop pass); `start` requests payload power at boot when the power-on check allows; `SENSORS`, `POWER`, `SIM` commands |
 | `src/console.rs` | command tables (eight groups, section 7.3) and the `SYS`, `LED`, `IPMB` handlers on the `ipmc-menu` engine; banner; `SYS STATUS` with the failure counters of both UARTs; `poll_dump`, which continues a running `DEBUG DUMP` one main-loop pass at a time; `service_app` |
 | `src/debug_cmds.rs` | the `DEBUG` group (section 10.11): `STATUS`, `LOG`, `DUMP` (the `DumpJob` that prints rows while the console transmit ring has room for the longest one), `CLEAR`, `TRACE`, `EVENTS`, `IPMI`, `INJECT`, `CACHE`; `events_off_at_boot`; `local`, the function behind `DEBUG IPMI` and the application port `IPMI` command |
-| `src/app_port.rs` | the transport of the application port (section 7.6): `AppPort::poll` takes bytes from the APP_UART receive ring, feeds the `ipmc-app` line assembler and writes the answer; `LinkHost`, the `AppHost` implementation over the link layer; the count of dropped answers |
+| `src/app_port.rs` | the transport of the application port (section 7.6): `AppPort::poll` takes bytes from the APP_UART receive ring, feeds the `ipmc-app` line editor, queues the echo, the answer and the prompt in one output buffer and drains it into the transmit ring without waiting; `LinkHost`, the `AppHost` implementation over the link layer |
 | `src/data_cmds.rs` | `FRU SHOW`, `FRU DUMP`, `FRU STORE`, `FRU FIELDS`, `FRU GET`, `FRU SET`, `FRU RESTORE`, `SENSORS SDR` |
 | `src/bsp/clock.rs` | HSE bypass (HSI fallback) to 84 MHz, PLL M 8 / N 336 / P 4 / Q 7, compile-time check of the PLL against `IPMC_SYSCLK_HZ` |
 | `src/bsp/i2c_hw.rs` | I2C1 and I2C3: slave interrupts (EV and ER), the per-bus frame queues, `suspend`/`resume` for the bit-bang master, `set_speed` (CCR, TRISE and F/S for 100 or 400 kHz while the slave is idle), `HwMaster`, `clear_stuck_busy`, driver counters |
@@ -1039,7 +1039,7 @@ it, a few microseconds. With `IPMC_APP_UART_FLOW` 1 the driver enables RTS/CTS i
 peripheral (CTSE and RTSE, RM0368 19.3.14) and leaves a byte in the data register when the
 receive ring is full, so RTS stays deasserted until `getc` makes room. RTS deasserts only when the
 data register holds an unread byte, so a sender with a byte in flight can still overrun by one byte;
-the overrun counter counts it and the application port answers the next line end `ERR LINE_DAMAGED` after discarding the receive ring (`discard_rx`); PA11 reads "not clear to send" when it is open.
+the overrun counter counts it and the application port answers the next line end `ERROR LINE_DAMAGED` after discarding the receive ring (`discard_rx`); PA11 reads "not clear to send" when it is open.
 
 ### 6.7 `ipmc-emu`: x86 emulator
 
@@ -1076,23 +1076,27 @@ driver) and simulates every sensor group.
 
 ### 6.8 `ipmc-app`: application port protocol
 
-`crates/ipmc-app/src/` (`lib.rs`, `commands.rs`, `host.rs`, `line.rs`, `tests.rs`; the module
-comment of `lib.rs` is the protocol description and the recipe for a new command)
+`crates/ipmc-app/src/` (`lib.rs`, `commands.rs`, `engine.rs`, `host.rs`, `line.rs`, `tests.rs`; the
+module comment of `lib.rs` is the protocol description and the recipe for a new command)
 
-The crate is `no_std` and `forbid(unsafe_code)`; it never touches hardware. A request line travels
-`UART byte -> LineAssembler::push -> respond -> answer -> COMMANDS row -> handler -> AppHost`:
+The crate is `no_std` and `forbid(unsafe_code)`; it never touches hardware, and it does not depend
+on `ipmc-menu` (it is a reference for a customer application and may repeat code of the other
+crates, PLAN decision 27). A byte travels
+`UART byte -> serve -> LineEditor::push -> respond -> engine::run -> COMMANDS row -> handler -> AppHost`:
 
 | File | Holds |
 |---|---|
-| `line.rs` | `LineAssembler<N>` collects bytes into lines at CR or LF (an empty line is not a request; a CR LF pair yields one line) and reports a line longer than `N` or holding a byte other than printable ASCII once, at its end, and drops the bytes; `AnswerBuf<N>`, the fixed buffer an answer is formatted into |
-| `commands.rs` | `COMMANDS`, one `AppCommand` row (keyword, argument summary, one sentence of help, handler) per command; `answer` (strips the optional tag, matches the keyword ignoring case, calls the handler); `respond` (answers what `push` returned, including the `LINE_TOO_LONG` and `ARGS` answers for a lost line); the handlers, each of which writes nothing until it knows whether the answer is `OK` or `ERR` |
-| `host.rs` | the `AppHost` trait, the one door to the board: `version`, `status`, `fru_state`, `unit_field`, `set_unit_field`, `ipmi`, `save_state`; and the plain types it passes (`Status`, `SaveState`, `AppError`, `IpmiData`) |
-| `tests.rs` | `REQUEST_TABLE`, one row per request line with the answer line the test host must produce; the test host (`FakeHost`) is an `AppHost` over a plain `FruStore` |
+| `line.rs` | `LineEditor<N>` collects bytes into lines: it echoes printable bytes, erases with BS SP BS on backspace (08h, 7Fh), ends a line at CR, LF or CR LF (one line end), reports an empty line, a line longer than `N`, a byte that is not printable ASCII and lost bytes (`damage`) once, at the line end, and drops the bytes; `AnswerBuf<N>`, the fixed buffer the echo, the answer and the prompt are formatted into |
+| `engine.rs` | the command engine, in the style of the MenuBuilder menu: `Row` (syntax string, one sentence of help, handler), `Syntax::parse` and `check_table` (the table rules), `find` (case-insensitive whole keywords, the longest keyword sequence wins, the match is a value, not a return code), `Args` (the parameters of a row), `Fail` (code and sentence of an `ERROR` line), `write_help` (the aligned table), `run` (the tag, the row, the handler, the final line), `final_line` (the parsing rule of the payload CPU) |
+| `commands.rs` | `COMMANDS`, one `Row` per command; the handlers; `banner`; `respond` (answers what the editor returned, including the `LINE_TOO_LONG`, `BAD_CHAR` and `LINE_DAMAGED` answers for a line that cannot run, and ends every answer with the prompt); `serve` (one received byte: its echo, and at a line end the answer) |
+| `host.rs` | the `AppHost` trait, the one door to the board: `version`, `status`, `fru_state`, `unit_field`, `set_unit_field`, `ipmi`, `command_name`, `save_state`; and the plain types it passes (`Status`, `SaveState`, `AppError`, `IpmiData`) |
+| `tests.rs` | `REQUEST_TABLE`, one row per request line with the answer the test host must produce; `HELP_TABLE`, the exact help text; the engine, editor and session tests; the test host (`FakeHost`) is an `AppHost` over a plain `FruStore` |
 
 The firmware implements `AppHost` as `LinkHost` in `app_port.rs`, over the IPMB link layer: the
 dispatch `Context` (addresses, FRU image, FRU state, latest sensor snapshot), the flash log status,
-the live NVMRO pin and the SysTick time. A handler returns without waiting for hardware and never
-runs in an interrupt. Section 7.6 gives the lines the port accepts and answers.
+the live NVMRO pin, the capture log's command names and the SysTick time. A handler returns without
+waiting for hardware and never runs in an interrupt. Section 7.6 gives the lines the port accepts
+and answers.
 
 ### 6.9 Tools
 
@@ -1103,7 +1107,7 @@ runs in an interrupt. Section 7.6 gives the lines the port accepts and answers.
 | `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `Documentation/captured_sdr.md` (local only) |
 | `tools/dupcheck.py` | scores every pair of Rust function bodies with identifiers normalised; fails on a production pair at or above 0.85 or a test pair at or above 0.92 |
 | `tools/capture/` | `capture2pcap.py` turns a saved `DEBUG DUMP` into a pcap file (LINKTYPE 260) and a CSV file (section 10.11); `test_capture2pcap.py` |
-| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests from the command line or an interactive prompt on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form); `test_app_cli.py` with a fake transport |
+| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests from the command line, an interactive prompt or a raw terminal (`--raw`) on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form); `test_app_cli.py` with a fake transport |
 | `tools/python-ipmi/` | venv with python-ipmi and pyaardvark; `README.md` is the Tier-1 command-line reference |
 | `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `cm_events.py` (the Chassis Manager as Event Receiver: answers each Platform Event request and records its decoded fields), `test_cm_link.py` |
 | `tools/chassis-manager/` options for events | `--cm-tier 1\|2` (2: Event Receiver, answers a Platform Event with 00h; 1: not an Event Receiver, answers C1h), `--withhold-events N` (the first N Platform Event frames get no answer, retries count, so a run shows the IPMC retrying with the same sequence number), `--set-event-receiver` (sends Set Event Receiver to each IPMC found after discovery; a Tier-1 IPMC answers C1h, which is not an error), `--cold-reset-at-s T` (sends Cold Reset once to each IPMC found, T seconds into the polling) |
@@ -1295,7 +1299,7 @@ USART1 115200 8N1, RTS/CTS off`, or `App port:     off`), the `BOOTLOADER pin:` 
 self-test result (`Self test:    55h 00h (passed)`). With `IPMC_EVENTS_AT_BOOT` 0 in a build that
 sends events, the line `Events: off from start-up` follows. `SYS STATUS` adds the failure counters
 of both UARTs (receive overflow, transmit timeout, overrun, trace lines dropped, free transmit
-bytes) and the count of application port answers dropped.
+bytes).
 
 ### 7.4 Emulator TCP line protocol (`ipmc-emu serve`)
 
@@ -1340,44 +1344,80 @@ owning module and that table together.
 
 The application port connects the payload CPU on the same board to the IPMC over APP_UART
 (USART1, PB6 TX, PB7 RX, `IPMC_APP_UART_BAUD` 115200, 8N1; RTS/CTS on PA12/PA11 with
-`IPMC_APP_UART_FLOW` 1). The protocol is plain ASCII text:
+`IPMC_APP_UART_FLOW` 1). There is one mode: the output is text a person reads at a terminal and a
+payload CPU splits with three rules. `PROTOCOL` is 2 (`PROTOCOL_VERSION`); a change that breaks an
+existing request or answer raises it, a new command does not.
 
-- One request per line, ended by CR LF or LF, at most `IPMC_APP_LINE_MAX` (128) bytes. A byte
-  other than printable ASCII (20h..7Eh) or a tab makes the line a `BadChar` line.
-- Every request line gets exactly one answer line, ended by CR LF, that starts with `OK` or
-  `ERR <CODE>`. A line that cannot be a request still gets its answer: `ERR LINE_TOO_LONG max=128`
-  for a long line, `ERR ARGS only printable ASCII is accepted` for a bad byte.
-- Commands are not case sensitive. A request may start with a tag, `#` and 1 to 8 letters or
-  digits; the answer starts with the same tag and a space, so a payload CPU with several requests
-  in flight can match answers to requests. A bad tag is answered `ERR ARGS` without a tag.
-- The IPMC answers at most one request line per main-loop pass, so a payload CPU that sends many
-  requests cannot hold the IPMB service off. An answer that does not fit the transmit ring is
-  dropped whole and counted (`SYS STATUS`, `DEBUG STATUS`); the payload CPU asks again.
-- Every request line and every answer line goes into the capture log as `app request <line>` and
-  `app answer <line>` (section 10.11).
+#### Terminal behaviour
 
-| Command | Arguments | Answer | Help text |
-|---|---|---|---|
-| `HELP` | `[keyword]` | `OK HELP HELP HELLO STATUS FRU GET SET FIELDS IPMI SAVE`; with a keyword, `OK HELP <keyword> <args> - <help>` | list the commands, or describe one |
-| `HELLO` | none | `OK IPMC-APP <protocol version> <firmware name> v<version> tier=<n>` | firmware name, version, Tier and protocol version |
-| `STATUS` | none | `OK STATUS ipmb=<addr>h ga=<n> fru=M<n> power=<state> health=<state> nvmro=<0 or 1> uptime_s=<n>` | IPMB address, GA, FRU state, power, health, NVMRO, uptime |
-| `FRU` | `STATE` | `OK FRU M<n> <state name>` | the Operational State of FRU 0 (M0, M1, M4, M5, M6) |
-| `GET` | `<field>` | `OK <FIELD> <value>`; an empty field prints nothing after the name | read a FRU field as stored |
-| `SET` | `<field> [value]` | `OK <FIELD> <value>` with the value as stored now; no value clears a text field | write a FRU field; no value clears it |
-| `FIELDS` | none | `OK FIELDS <FIELD>=<max> ...` | the FRU fields and the longest value of each |
-| `IPMI` | `<netfn> <cmd> [data...]` | `OK IPMI CC=<cc> DATA=<hex bytes>` | run an IPMI request locally; hex bytes; nothing goes on the IPMB |
-| `SAVE` | none | `OK SAVED` | OK once the FRU image is in the flash log |
+- After reset the IPMC prints the banner, one line, and the prompt `app> `:
+  `IPMC application port, <firmware name> v<version>, Tier <n>, protocol <n>. Type HELP or ?.`
+  The banner is not an answer, so it has no final line. The prompt comes again after every answer.
+- The IPMC echoes every printable byte it receives. Backspace (08h or 7Fh) erases the last
+  character and is answered BS SP BS; with nothing typed it does nothing.
+- A line ends at CR, LF or CR LF (one line end: no empty second line; two alike, CR CR, are two).
+  It is at most `IPMC_APP_LINE_MAX` (128) bytes. An empty line prints only the prompt again. A
+  line that is too long ends in `ERROR LINE_TOO_LONG: ...`; a byte other than printable ASCII
+  (20h..7Eh) or a tab, in `ERROR BAD_CHAR: ...`; the bytes past the limit are not echoed.
+- Commands and keywords are not case sensitive.
 
-`HELP` lists the table `COMMANDS`, so the table is the one description of what the port accepts.
-`HELLO` reports protocol version 1 (`PROTOCOL_VERSION`); a change that breaks an existing request
-or answer raises it, a new command does not. In `STATUS`, power is `on`, `off` or `fault`, health is `ok` or `fault`, and `power=off` also covers a power-on that
-still waits for PGOOD; `health=fault` covers a bad reading and a missing one (before the first
-sample). `IPMI` takes every number as a hex byte (`06`, `0x06` and `6` are the same) and runs the
-request through the dispatcher as if the Chassis Manager had sent it, the same function as
-`DEBUG IPMI`; a completion code other than 00h is still an `OK` answer, because the request ran.
+#### The answer
 
-The FRU fields (`FIELDS`; `max` is the room `IPMC_FRU_*_MAX` reserves; the console uses the same
-table):
+Every request line gets zero or more data lines and exactly one final line:
+
+- A data line is `KEY: value`: KEY in capitals and underscores, one space after the colon, the
+  value as the rest of the line (empty after the colon and space when there is none, as in
+  `DATA: `). The rows of `HELP` are the one exception: the aligned table, each row starting with
+  two spaces.
+- The final line is `OK`, or `ERROR <CODE>: <sentence>`, CODE in capitals and underscores and the
+  sentence written for a person (`ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters`).
+- A request may start with a tag, `#` and 1 to 8 letters or digits. The final line carries it
+  after the `OK` or `ERROR`: `OK #a7`, `ERROR #a7 TOO_LONG: ...`. Data lines carry no tag. A bad
+  tag and a line that could not run (too long, bad byte, lost bytes) are answered without a tag.
+- A handler that fails after it wrote data lines has them taken back: an `ERROR` answer never
+  mixes with data lines.
+
+#### Parsing rule for a payload CPU
+
+Send the request with CR LF. Skip every line that starts
+with `app> ` (the prompt, and the prompt joined with the echo of the request). Collect the lines
+that look like `KEY: value`. The answer ends at the first line that is `OK`, starts with `OK ` or
+starts with `ERROR `; on `OK` the data lines are complete, on `ERROR` they are to be ignored.
+`ipmc_app::final_line` is this rule in code and the bench client `tools/app-port/app_cli.py`
+follows it.
+
+#### Commands
+
+(`COMMANDS`; `HELP` prints this table from the code, aligned):
+
+| Syntax | Help text | Answer (data lines, then `OK`) |
+|---|---|---|
+| `HELP {COMMAND...}` | List the commands, or describe one | the aligned table of every command, or of the rows that start with the words given |
+| `?` | Same as HELP | the same |
+| `INFO` | Firmware name, version, Tier and protocol version | `FIRMWARE`, `VERSION`, `TIER`, `PROTOCOL` |
+| `STATUS` | IPMB address, GA, FRU state, payload power, health, NVMRO, uptime | `IPMB_ADDRESS: 82h`, `GA`, `FRU_STATE: M4 FRU Active`, `PAYLOAD_POWER: on`, `HEALTH: ok`, `NVMRO: deasserted`, `UPTIME: 0d 00:17:48` |
+| `FRU STATE` | Operational state of FRU 0 (M0, M1, M4, M5 or M6) | `FRU_STATE: M4 FRU Active` |
+| `FRU FIELDS` | Every FRU field: current value and maximum length | one line per field, `<FIELD>: <value> (max <n>)`; an empty text field is `<FIELD>:  (max <n>)` (two blanks between the colon and the parenthesis); `MFG_DATE` is `YYYY-MM-DD HH:MM` (UTC) |
+| `FRU GET [FIELD]` | One FRU field | `<FIELD>: <value>` |
+| `FRU SET [FIELD] {VALUE...}` | Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM | `<FIELD>: <value as stored>` |
+| `FRU SAVE` | Whether the FRU image is in flash (a change saves itself after the save delay) | `SAVE: done`, or `SAVE: pending` while a change waits (not an error) |
+| `IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally (hex bytes); nothing goes on the IPMB | `CC: 00h`, `DATA: 20 01 02` (empty after the colon-space when there is none), `COMMAND: App Get Device ID` (no line when the build has no name for it) |
+
+Syntax strings: leading keywords in capitals, then `[NAME]` for a required parameter, `{NAME}` for
+an optional one and `{NAME...}` for the rest of the line as one value (last only). The
+longest keyword sequence the line starts with wins; then the argument count is checked and a
+mismatch is `ERROR ARGS: usage: <syntax>`. An unknown command is
+`ERROR UNKNOWN: unknown command '<word>'; type HELP or ?`.
+
+`STATUS` words: `PAYLOAD_POWER` is `on`, `off` or `fault` (`off` also covers a power-on that
+still waits for PGOOD); `HEALTH` is `ok` or `fault` (`fault` covers a bad reading and a missing one,
+before the first sample); `NVMRO` is `asserted` or `deasserted`. `IPMI` takes every number as a hex
+byte (`06`, `0x06` and `6` are the same) and runs the request through the dispatcher as if the
+Chassis Manager had sent it, the same function as `DEBUG IPMI`; a completion code other than 00h is
+still an `OK` answer, because the request ran; `COMMAND` is the name the capture log prints.
+
+The FRU fields (`FRU FIELDS`; `max` is the room `IPMC_FRU_*_MAX` reserves; the console uses the
+same table):
 
 | Field | FRU area | Longest value |
 |---|---|---:|
@@ -1395,56 +1435,102 @@ table):
 | `ASSET_TAG` | Product Info, asset tag | 24 |
 | `PRODUCT_FILE_ID` | Product Info, FRU file ID | 16 |
 
-`SET` writes the RAM image through `IpmbLink::set_unit_field`, the editor of section 6.2, then
+`FRU SET` writes the RAM image through `IpmbLink::set_unit_field`, the editor of section 6.2, then
 reruns the self test; the dirty mark and the quiet time of `IPMC_FRU_PERSIST_DELAY_MS` carry the
-change to the flash, as for a Write FRU Data from the Chassis Manager. The text of a field is the
-rest of the line after the one space that follows the field name, so spaces inside the value stay.
-Error answers:
+change to the flash, as for a Write FRU Data from the Chassis Manager, so a payload CPU that wrote
+fields repeats `FRU SAVE` until it reads `SAVE: done` before it removes power. The text of a field
+is the rest of the line with the blanks at both ends removed, so blanks inside the value stay.
+`FRU SET` with no value clears a text field.
 
-| Answer | Cause |
+#### Error answers
+
+The codes; each has its own sentence:
+
+| Code | Cause |
 |---|---|
-| `ERR UNKNOWN <word>` | no command of that name |
-| `ERR ARGS <text>` | missing or extra arguments, an unknown field, a bad tag, a bad hex byte, an empty request, a bad byte in the line |
-| `ERR LINE_TOO_LONG max=<n>` | the line is longer than `IPMC_APP_LINE_MAX` |
-| `ERR TOO_LONG max=<n>` | the value is longer than the field holds |
-| `ERR BAD_LENGTH`, `ERR NOT_ASCII` | a text of one byte (a type/length field holds 0 or at least 2 bytes); a value that is not printable ASCII |
-| `ERR NO_ROOM` | the rewritten fields do not fit the area (an image a Chassis Manager wrote may have no spare room) |
-| `ERR NVMRO` | the NVMRO pin is asserted; nothing is written |
-| `ERR BAD_DATE` | the date text is malformed or out of range |
-| `ERR FRU_IMAGE <name>` | the area is missing or damaged, or the rewritten image would fail `verify` |
-| `ERR WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is 0 and the request is `SET` or an `IPMI` Write FRU Data; nothing runs |
-| `ERR LINE_DAMAGED <n> bytes lost on the port` | the UART lost `<n>` bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring, and the next line end is answered with this error, without a tag (the tag may be among the lost bytes), and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
-| `ERR IPMI_FAILED <why>` | the request did not run: `TOO_LONG` (more data than one frame holds) or `DISPATCH` (a NetFn that is odd or above 3Eh) |
-| `ERR PENDING a save is waiting` | `SAVE` while a change waits for its flash save |
-| `ERR LOG_OFF` | `SAVE` with the flash log off (`IPMC_FRU_PERSIST` 0 or the store did not start) |
-| `ERR ANSWER_TOO_LONG` | the answer did not fit the answer buffer (`ANSWER_MAX` 256 bytes) |
+| `UNKNOWN` | no command of that name (`ERROR UNKNOWN: unknown command 'X'; type HELP or ?`); also `HELP X` for a name that is no command |
+| `ARGS` | missing or extra arguments (`usage: <syntax>`), an unknown field, a bad tag, a bad hex byte, more data than one frame holds, a tag with no command |
+| `LINE_TOO_LONG` | the line is longer than `IPMC_APP_LINE_MAX`; it was dropped |
+| `BAD_CHAR` | the line holds a byte that is not printable ASCII; it was dropped |
+| `TOO_LONG` | the value is longer than the field holds (`BOARD_SERIAL is at most 24 characters`) |
+| `BAD_LENGTH`, `NOT_ASCII` | a text of one byte (a type/length field holds 0 or at least 2 bytes); a value that is not printable ASCII |
+| `NO_ROOM` | the rewritten fields do not fit the area (an image a Chassis Manager wrote may have no spare room) |
+| `NVMRO` | the NVMRO pin is asserted; nothing is written |
+| `BAD_DATE` | the date text is malformed or out of range (`use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59`) |
+| `FRU_IMAGE` | the area is missing or damaged, or the rewritten image would fail `verify` |
+| `WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is false and the request is `FRU SET` or an `IPMI` Write FRU Data; nothing runs |
+| `LINE_DAMAGED` | `<n> bytes lost on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring, and the next line end is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
+| `IPMI_FAILED` | the request did not run: the request or its response does not fit one IPMB frame, or the dispatcher gave no response (a NetFn that is odd or above 3Eh) |
+| `LOG_OFF` | `FRU SAVE` with the flash log off (`IPMC_FRU_PERSIST` false or the store did not start) |
+| `ANSWER_TOO_LONG` | the answer did not fit the answer buffer (`ANSWER_MAX` 1280 bytes); the data lines are replaced by this error |
 
-A refused `SET` leaves the FRU image as it was. A payload CPU that wrote unit data repeats `SAVE`
-until it reads `OK SAVED` before it removes power.
+#### Output and time
 
-A worked exchange (`>` is the request, `<` the answer; public Tier-1 build, GA 1):
+The firmware formats the echo, the answer and the prompt into one buffer of
+`ANSWER_MAX` bytes and copies it to the transmit ring as the ring has room (`app_port.rs`
+`drain`); the main loop never waits for the UART. While output is pending the port takes no new
+byte, so one request is answered at a time, in order. A pass takes at most
+`IPMC_APP_BYTES_PER_POLL` bytes and ends after one answer, so the IPMB service waits at most for
+the formatting of one answer (a few hundred microseconds for the longest, `HELP` and `FRU FIELDS`;
+an estimate, not a bench measurement); the 1280 bytes need 111 ms on the wire at 115200 baud,
+spent in the UART interrupt. Every request line and the final line of every answer go into the
+capture log as `app request <line>` and `app answer <line>` (section 10.11).
+
+#### A session
+
+The text is the output of the unit test `a_session_prints_as_the_documents_show_it`
+for the Tier-1 build and the test host's FRU image; typed text follows `app> `:
 
 ```text
-> HELLO
-< OK IPMC-APP 1 ipmc-nucleo-f401re v0.1.0 tier=1
-> STATUS
-< OK STATUS ipmb=82h ga=1 fru=M4 power=on health=ok nvmro=0 uptime_s=342
-> #a7 SET BOARD_SERIAL 00:11:22:33:44:55
-< #a7 OK BOARD_SERIAL 00:11:22:33:44:55
-> SET MFG_DATE 2026-10-25 14:30
-< OK MFG_DATE 2026-10-25 14:30
-> SET BOARD_SERIAL 0123456789012345678901234
-< ERR TOO_LONG max=24
-> SAVE
-< ERR PENDING a save is waiting
-> SAVE
-< OK SAVED
-> IPMI 06 01
-< OK IPMI CC=00 DATA=01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00
+IPMC application port, ipmc-nucleo-f401re v0.1.0, Tier 1, protocol 2. Type HELP or ?.
+app> HELP
+  HELP {COMMAND...}              - List the commands, or describe one
+  ?                              - Same as HELP
+  INFO                           - Firmware name, version, Tier and protocol version
+  STATUS                         - IPMB address, GA, FRU state, payload power, health, NVMRO, uptime
+  FRU STATE                      - Operational state of FRU 0 (M0, M1, M4, M5 or M6)
+  FRU FIELDS                     - Every FRU field: current value and maximum length
+  FRU GET [FIELD]                - One FRU field
+  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
+  FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
+  IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
+OK
+app> STATUS
+IPMB_ADDRESS: 82h
+GA: 1
+FRU_STATE: M4 FRU Active
+PAYLOAD_POWER: on
+HEALTH: ok
+NVMRO: deasserted
+UPTIME: 0d 00:17:48
+OK
+app> FRU FIELDS
+BOARD_MFR: IronKernel (max 24)
+BOARD_PRODUCT: VPX Tier-1 IPMC (max 32)
+BOARD_SERIAL: IK-T1-000001 (max 24)
+BOARD_PART: IK-IPMC-T1-NUC (max 24)
+BOARD_FILE_ID: ipmc-fru-v1 (max 16)
+MFG_DATE: 2026-10-23 00:00 (max 16)
+PRODUCT_MFR: IronKernel (max 24)
+PRODUCT_NAME: Tier-1 IPMC Reference (max 32)
+PRODUCT_PART: IK-IPMC-T1 (max 24)
+PRODUCT_VERSION: 0.1 (max 16)
+PRODUCT_SERIAL: IK-T1-000001 (max 24)
+ASSET_TAG:  (max 24)
+PRODUCT_FILE_ID:  (max 16)
+OK
+app> FRU SET BOARD_SERIAL 1234567890123456789012345
+ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters
+app> IPMI 06 01
+CC: 00h
+DATA: 20 01 02
+COMMAND: App Get Device ID
+OK
+app> FRU SAVE
+SAVE: done
+OK
+app>
 ```
-
-The second `SAVE` comes after the quiet time. The bench client `tools/app-port/app_cli.py` tags
-each request (`#t0001 STATUS`) and skips an answer with another tag.
 
 <div style="page-break-after: always;"></div>
 
@@ -2296,7 +2382,7 @@ sends at that moment is lost and recovered by the requester's retry.
 | Pin-claim conflict, UART failure | `ports::claim`, `uart::init` | console line naming both owners, or 5 Hz LED | fail-stop (park); an application port failure other than a pin conflict prints `APP_UART not started` and the board runs without it |
 | UART receive ring full, overrun, transmit timeout | `uart.rs` `service`, `wait_for_room` | per-port counters in `SYS STATUS` | the byte is dropped (receive) or the bounded wait ends (transmit) |
 | Trace line without room in the console transmit ring | `print_line_or_drop` | `tx lines dropped` in `SYS STATUS` | the line is dropped whole and never stalls the IPMB; the capture log still holds it |
-| Application answer without room in the transmit ring | `app_port.rs` `send` | `dropped` in `SYS STATUS`, `answers dropped` in `DEBUG STATUS` | the answer is dropped whole; the payload CPU asks again |
+| Application answer longer than the transmit ring has room for | `app_port.rs` `drain` | none (the answer is only late) | the output stays in its buffer and leaves as the ring has room; no new request is taken meanwhile, and the main loop never waits |
 | Capture log full | `CaptureLog::add` | `overwritten` in `DEBUG STATUS` and in the dump header | the oldest whole records are dropped |
 
 <div style="page-break-after: always;"></div>
@@ -2594,15 +2680,20 @@ named constant in the owning module with its rule beside it.
 
 ### 12.4 Adding an application port command
 
-1. Write the handler in `ipmc-app/src/commands.rs` with the `Handler` signature (request, host,
-   output): it writes one line, `OK ...` or `ERR <CODE> <text>`, and nothing before it knows which.
-2. Add one row to `COMMANDS`: the keyword in capitals, the argument summary, one sentence of help
-   and the handler. `HELP` lists the row at once.
+1. Write the handler in `ipmc-app/src/commands.rs` with the `Handler` signature (arguments, host,
+   output): it writes its data lines (`KEY: value`) with `data` and returns `Ok`, or returns
+   `Err(Fail::new("CODE", format_args!("sentence")))`; the engine writes the final `OK` or
+   `ERROR <CODE>: <sentence>` line and takes back the data lines of a failed handler.
+2. Add one row to `COMMANDS`: the syntax string (keywords in capitals, then `[NAME]` required,
+   `{NAME}` optional, `{NAME...}` the rest of the line, last), one sentence of help and the
+   handler. `HELP` lists the row at once, aligned; the test `the_command_table_is_well_formed`
+   rejects a malformed syntax, a required parameter after an optional one, a rest parameter that
+   is not last and two rows with the same keywords.
 3. A value the host does not offer yet is a new method of `AppHost` (`host.rs`), implemented in
    `LinkHost` (`app_port.rs`) and in `FakeHost` (`tests.rs`); the compiler lists the places that
    miss it.
-4. Add one row to `REQUEST_TABLE` in `tests.rs` (the request line and the answer the fake host must
-   produce) and run `cargo test -p ipmc-app`.
+4. Add one row to `REQUEST_TABLE` in `tests.rs` (the request line and the lines the fake host
+   must answer), add the help row to `HELP_TABLE`, and run `cargo test -p ipmc-app`.
 5. Run `cargo clippy --workspace --all-targets -- -D warnings` and `python -I tools/dupcheck.py`
    (a handler that repeats another handler's code fails it), and add the row to section 7.6.
 
@@ -2792,14 +2883,15 @@ procedure and expected result of each.
 
 ### 14.6 Write the unit fields at the first boot
 
-1. The payload CPU sends `HELLO` and reads `OK IPMC-APP 1 ...`, then `FIELDS` for the longest value
-   of each field.
-2. It sends `SET BOARD_SERIAL 00:11:22:33:44:55`, `SET PRODUCT_SERIAL ...`, `SET BOARD_PART ...`,
-   `SET PRODUCT_PART ...`, `SET ASSET_TAG ...` and `SET MFG_DATE 2026-10-25 14:30` (or any
-   other of the thirteen fields); each answer echoes the value as stored.
+1. The payload CPU sends `INFO` and reads `PROTOCOL: 2` and the final `OK`, then `FRU FIELDS` for the
+   longest value of each field.
+2. It sends `FRU SET BOARD_SERIAL 00:11:22:33:44:55`, `FRU SET PRODUCT_SERIAL ...`,
+   `FRU SET BOARD_PART ...`, `FRU SET PRODUCT_PART ...`, `FRU SET ASSET_TAG ...` and
+   `FRU SET MFG_DATE 2026-10-25 14:30` (or any other of the thirteen fields); each answer's data
+   line echoes the value as stored, and the final line is `OK`.
 3. After `IPMC_FRU_PERSIST_DELAY_MS` without another write, the FRU log saves the image
    (`FRU log: saved record N at offset M`).
-4. The payload CPU repeats `SAVE` until it reads `OK SAVED` and may then remove power.
+4. The payload CPU repeats `FRU SAVE` until it reads `SAVE: done` and may then remove power.
 5. A Chassis Manager's Read FRU Data returns the new values and the self test still reads 55h 00h.
 
 <div style="page-break-after: always;"></div>

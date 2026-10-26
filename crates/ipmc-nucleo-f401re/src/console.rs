@@ -697,7 +697,6 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_uart(Port::Console);
     if ipmc_defs::IPMC_APP_UART_ENABLE {
         print_uart(Port::App);
-        out!("App answers:  dropped={}\n", app_port::answers_dropped());
     } else {
         out!("App UART:     off (IPMC_APP_UART_ENABLE 0)\n");
     }

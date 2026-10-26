@@ -2,7 +2,9 @@
 
 `app_cli.py` talks to the application port of the IPMC (APP_UART, USART1 PB6 TX / PB7 RX)
 through a USB serial adapter. The protocol is in `crates/ipmc-app` (module comment of
-`src/lib.rs`): one ASCII request line, one `OK ...` or `ERR <CODE> <text>` answer line.
+`src/lib.rs`): one ASCII request line; the answer is zero or more `KEY: value` data lines and one
+final line, `OK` or `ERROR <CODE>: <sentence>`. The IPMC also prints the prompt `app> ` and echoes
+what it receives; the client skips both.
 
 ## Setup
 
@@ -19,22 +21,30 @@ adapter is COM5; the board console stays on COM3 (one program holds a port at a 
 
 ```powershell
 $py = "tools\python-ipmi\.venv\Scripts\python.exe"
-& $py tools\app-port\app_cli.py --port COM5 HELLO STATUS "FRU STATE" FIELDS
-& $py tools\app-port\app_cli.py --port COM5 "SET BOARD_SERIAL 00:11:22:33:44:55" "GET BOARD_SERIAL" SAVE
+& $py tools\app-port\app_cli.py --port COM5 INFO STATUS "FRU STATE" "FRU FIELDS"
+& $py tools\app-port\app_cli.py --port COM5 "FRU SET BOARD_SERIAL 00:11:22:33:44:55" "FRU GET BOARD_SERIAL" "FRU SAVE"
 & $py tools\app-port\app_cli.py --port COM5          # interactive prompt, quit or Ctrl+Z to leave
+& $py tools\app-port\app_cli.py --port COM5 --raw    # a terminal: keys go to the port, Ctrl+] ends
 ```
 
 Options: `--baud` (default `IPMC_APP_UART_BAUD` of `crates/ipmc-defs/src/defs.rs`), `--timeout` (seconds to
-wait for an answer), `--no-tags` (send the bare protocol). Each request carries a tag
-(`#t0001 STATUS`); the IPMC echoes it and the client skips an answer with another tag.
+wait for an answer line), `--no-tags` (send requests without a tag), `--raw` (a terminal, see
+below). Each request carries a tag (`#t0001 STATUS`); the IPMC puts it on the final line
+(`OK #t0001`) and the client skips an answer with another tag.
 
-The exit status is 0 when every answer is `OK`, 1 for an `ERR` answer or no answer, 2 for a
-request longer than `IPMC_APP_LINE_MAX`.
+The client follows the parsing rule of the protocol: skip the lines that start with `app> `
+(prompt and echo), collect `KEY: value` lines, end the answer at the first line that is `OK`,
+starts with `OK ` or starts with `ERROR `. It prints the data lines and the final line of each
+answer. `--raw` passes every key to the port and every received byte to the screen, like a
+terminal program (Windows console; Ctrl+] ends it).
+
+The exit status is 0 when every answer is `OK`, 1 for an `ERROR` answer or no answer, 2 for a
+request, tag included, longer than `IPMC_APP_LINE_MAX`.
 
 ## Settings
 
 `app_settings.py` holds every value the tool chooses (default port, answer timeout, tag
-form, prompt). The baud rate and the line limit come from `crates/ipmc-defs/src/defs.rs`, so the tool and the
+form). The baud rate and the line limit come from `crates/ipmc-defs/src/defs.rs`, so the tool and the
 IPMC agree.
 
 ## Tests

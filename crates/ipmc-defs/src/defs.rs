@@ -190,8 +190,8 @@ pub const IPMC_APP_UART_FLOW: bool = false;
 /// application port RX ring, bytes; power of two; at least one application line (IPMC_APP_LINE_MAX
 /// + 2)
 pub const IPMC_APP_UART_RX_BUF: usize = 256;
-/// application port TX ring, bytes; power of two, 512..=16384; takes at least one longest answer
-/// plus CR LF
+/// application port TX ring, bytes; power of two, 512..=16384; an answer longer than the ring
+/// leaves in pieces (the firmware copies what fits on each main-loop pass)
 pub const IPMC_APP_UART_TX_BUF: usize = 1024;
 /// longest application port request line, bytes (16..=IPMC_APP_UART_RX_BUF - 3);
 /// IPMC_APP_UART_RX_BUF holds at least one
@@ -202,9 +202,9 @@ pub const IPMC_APP_BYTES_PER_POLL: usize = 32;
 /// false = the console FRU menu is read only (SHOW, DUMP, STORE, FIELDS, GET) and the SET and
 /// RESTORE commands do not exist
 pub const IPMC_FRU_CONSOLE_WRITE: bool = true;
-/// true = the application port may SET the per-unit FRU fields and run IPMI Write FRU Data; false =
-/// SET and IPMI Write FRU Data (NetFn 0Ah, command 12h) answer ERR WRITE_DISABLED and do not run,
-/// GET and the other IPMI requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as
+/// true = the application port may FRU SET the per-unit FRU fields and run IPMI Write FRU Data; false =
+/// FRU SET and IPMI Write FRU Data (NetFn 0Ah, command 12h) answer ERROR WRITE_DISABLED and do not
+/// run, FRU GET and the other IPMI requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as
 /// from the Chassis Manager
 pub const IPMC_APP_FRU_WRITE: bool = true;
 /// longest accepted console line in bytes; a longer line is rejected
