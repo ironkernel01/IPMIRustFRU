@@ -223,6 +223,8 @@ trait Ops {
     fn service(&mut self, port: Port);
     /// getc -- next received byte.
     fn getc(&mut self) -> Option<u8>;
+    /// discard_rx -- empties the RX ring and starts a stalled reader again.
+    fn discard_rx(&mut self);
     /// put -- copies bytes into the TX ring and starts the transmitter: what fits, at most
     /// PUT_CHUNK bytes per call (one critical section). Returns the count copied.
     fn put(&mut self, bytes: &[u8]) -> usize;
@@ -316,6 +318,14 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
             self.regs().cr1().modify(|_, w| w.rxneie().enabled());
         }
         byte
+    }
+
+    fn discard_rx(&mut self) {
+        while self.rx.pop().is_some() {}
+        if self.rx_stalled.get() {
+            self.rx_stalled.set(false);
+            self.regs().cr1().modify(|_, w| w.rxneie().enabled());
+        }
     }
 
     fn put(&mut self, bytes: &[u8]) -> usize {
@@ -534,6 +544,13 @@ fn USART2() {
 /// getc -- next received byte of `port`, or None when its ring is empty.
 pub fn getc(port: Port) -> Option<u8> {
     with_port(port, |u| u.getc()).flatten()
+}
+
+/// discard_rx -- throws away every byte waiting in the RX ring of `port` (one critical section)
+/// and starts a reader stalled by flow control again. The application port uses it after a loss,
+/// when the bytes in the ring cannot be trusted to form whole lines.
+pub fn discard_rx(port: Port) {
+    let _ = with_port(port, |u| u.discard_rx());
 }
 
 /// write -- copies as much of `bytes` as the TX ring takes, starts the transmitter and returns

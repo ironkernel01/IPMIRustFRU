@@ -942,14 +942,14 @@ fn the_store_region_check_accepts_sector_1_and_names_every_other_layout() {
 }
 
 #[test]
-fn a_16_kb_sector_holds_sixty_records_of_the_default_image() {
+fn a_16_kb_sector_holds_thirty_one_records_of_the_default_image() {
     assert_eq!(STORE_LEN, 16 * 1024);
     assert_eq!(
         RECORDS_PER_SECTOR,
         STORE_LEN as usize / RECORD_LEN,
         "the count the module comment states"
     );
-    if SIZE == 256 {
-        assert_eq!((RECORD_LEN, RECORDS_PER_SECTOR), (272, 60));
+    if SIZE == 512 {
+        assert_eq!((RECORD_LEN, RECORDS_PER_SECTOR), (528, 31));
     }
 }

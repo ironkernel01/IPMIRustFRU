@@ -8,7 +8,7 @@ use core::fmt::Write;
 
 use ipmc_core::fru_state::State;
 use ipmc_core::sensor::{PowerState, Summary};
-use ipmc_fru::{FieldError, FruStore, UnitField};
+use ipmc_fru::{FieldError, FruField, FruStore};
 
 use crate::commands::{ipmi_request, set_field};
 use crate::{
@@ -68,11 +68,11 @@ impl AppHost for FakeHost {
         self.state
     }
 
-    fn unit_field(&self, f: UnitField, out: &mut dyn core::fmt::Write) -> Result<(), FieldError> {
+    fn unit_field(&self, f: FruField, out: &mut dyn core::fmt::Write) -> Result<(), FieldError> {
         ipmc_fru::write_unit_field(self.store.bytes(), f, out)
     }
 
-    fn set_unit_field(&mut self, f: UnitField, value: &str) -> Result<(), FieldError> {
+    fn set_unit_field(&mut self, f: FruField, value: &str) -> Result<(), FieldError> {
         if let Some(error) = self.forced_set_error {
             return Err(error);
         }
@@ -119,7 +119,7 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ),
     (
         "help set",
-        "OK HELP SET <field> [value] - write a per-unit FRU field; no value clears it",
+        "OK HELP SET <field> [value] - write a FRU field; no value clears it",
     ),
     (
         "HELP STATUS",
@@ -166,6 +166,13 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ("GET PRODUCT_SERIAL", "OK PRODUCT_SERIAL IK-T1-000001"),
     ("GET ASSET_TAG", "OK ASSET_TAG"),
     ("GET MFG_DATE", "OK MFG_DATE 2026-10-23 00:00"),
+    ("GET BOARD_MFR", "OK BOARD_MFR IronKernel"),
+    ("GET BOARD_PRODUCT", "OK BOARD_PRODUCT VPX Tier-1 IPMC"),
+    ("GET BOARD_FILE_ID", "OK BOARD_FILE_ID ipmc-fru-v1"),
+    ("GET PRODUCT_MFR", "OK PRODUCT_MFR IronKernel"),
+    ("GET PRODUCT_NAME", "OK PRODUCT_NAME Tier-1 IPMC Reference"),
+    ("GET PRODUCT_VERSION", "OK PRODUCT_VERSION 0.1"),
+    ("GET PRODUCT_FILE_ID", "OK PRODUCT_FILE_ID"),
     (
         "GET NOPE",
         "ERR ARGS unknown field NOPE (FIELDS lists them)",
@@ -195,6 +202,19 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
         "SET MFG_DATE 2026-10-25 08:30",
         "OK MFG_DATE 2026-10-25 08:30",
     ),
+    ("SET BOARD_MFR Other Maker", "OK BOARD_MFR Other Maker"),
+    ("SET PRODUCT_NAME New name", "OK PRODUCT_NAME New name"),
+    ("SET PRODUCT_VERSION 2.1", "OK PRODUCT_VERSION 2.1"),
+    ("SET BOARD_FILE_ID fid-9", "OK BOARD_FILE_ID fid-9"),
+    ("SET PRODUCT_FILE_ID pfid-3", "OK PRODUCT_FILE_ID pfid-3"),
+    (
+        "SET MFG_DATE 2100-03-01 00:00",
+        "OK MFG_DATE 2100-03-01 00:00",
+    ),
+    (
+        "SET MFG_DATE 9999-12-31 23:59",
+        "OK MFG_DATE 9999-12-31 23:59",
+    ),
     ("SET BOARD_PART", "OK BOARD_PART"),
     ("SET BOARD_PART ", "OK BOARD_PART"),
     (
@@ -211,11 +231,11 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ),
     (
         "SET MFG_DATE yesterday",
-        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), from 1996-01-01",
+        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
     ),
     (
         "SET MFG_DATE 2026-02-30 00:00",
-        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), from 1996-01-01",
+        "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
     ),
     ("SET", "ERR ARGS usage: SET <field> [value]"),
     (
@@ -306,7 +326,7 @@ fn status_words_follow_the_power_and_health_states() {
 #[test]
 fn fields_lists_every_field_with_its_longest_value() {
     let mut host = FakeHost::new();
-    let want: Vec<String> = UnitField::ALL
+    let want: Vec<String> = FruField::ALL
         .iter()
         .map(|f| format!("{}={}", f.name(), f.max_len()))
         .collect();
@@ -347,7 +367,7 @@ fn every_field_error_has_its_error_code() {
         (FieldError::Nvmro, "ERR NVMRO the FRU is write protected"),
         (
             FieldError::BadDate,
-            "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), from 1996-01-01",
+            "ERR BAD_DATE use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59",
         ),
         (FieldError::Corrupt, "ERR FRU_IMAGE Corrupt"),
         (FieldError::AreaMissing, "ERR FRU_IMAGE AreaMissing"),
@@ -450,7 +470,7 @@ fn run<const N: usize>(chunks: &[&[u8]]) -> Vec<String> {
     for chunk in chunks {
         for byte in *chunk {
             let mut out = AnswerBuf::<ANSWER_MAX>::new();
-            if respond(assembler.push(*byte), 0, &mut host, &mut out) {
+            if respond(assembler.push(*byte), &mut host, &mut out) {
                 answers.push(out.as_str().to_string());
             }
         }
@@ -511,35 +531,86 @@ fn ipmi_write_fru_data_is_refused_when_writing_is_disabled() {
     }
 }
 
-#[test]
-fn a_line_that_completes_after_lost_bytes_is_not_run() {
-    let mut host = FakeHost::new();
-    let cases = [
-        (
-            Fed::Line("#a7 SET ASSET_TAG abc"),
-            "#a7 ERR LINE_DAMAGED 3 bytes lost on the port",
-        ),
-        (
-            Fed::Line("SET ASSET_TAG abc"),
-            "ERR LINE_DAMAGED 3 bytes lost on the port",
-        ),
-        (
-            Fed::Line("#toolongtag1 STATUS"),
-            "ERR LINE_DAMAGED 3 bytes lost on the port",
-        ),
-        (Fed::TooLong, "ERR LINE_DAMAGED 3 bytes lost on the port"),
-    ];
-    for (fed, text) in cases {
+/// feed_all -- pushes every byte of `bytes` and collects the answers (fresh answer buffer each).
+fn feed_all<const N: usize>(
+    assembler: &mut LineAssembler<N>,
+    host: &mut FakeHost,
+    bytes: &[u8],
+) -> Vec<String> {
+    let mut answers = Vec::new();
+    for byte in bytes {
         let mut out = AnswerBuf::<ANSWER_MAX>::new();
-        assert!(respond(fed, 3, &mut host, &mut out));
-        assert_eq!(out.as_str(), text);
+        if respond(assembler.push(*byte), host, &mut out) {
+            answers.push(out.as_str().to_string());
+        }
     }
-    // The request did not run.
+    answers
+}
+
+#[test]
+fn a_damaged_line_is_answered_without_a_tag_and_not_run() {
+    let mut host = FakeHost::new();
+    let mut assembler = LineAssembler::<64>::new();
+    // Bytes of a request arrived, then the port lost 3 and the ring was discarded.
+    assert!(feed_all(&mut assembler, &mut host, b"#a7 SET ASSET_").is_empty());
+    assembler.damage(3);
+    // The rest of the line ends: answered once, no tag, not run; the CR LF pair adds nothing.
+    let answers = feed_all(
+        &mut assembler,
+        &mut host,
+        b"TAG abc
+",
+    );
+    assert_eq!(answers, ["ERR LINE_DAMAGED 3 bytes lost on the port"]);
     assert_eq!(reply(&mut host, "GET ASSET_TAG"), "OK ASSET_TAG");
-    // Nothing is answered before a line completes, whatever was lost.
+    // The line after it runs normally.
+    let answers = feed_all(
+        &mut assembler,
+        &mut host,
+        b"SAVE
+",
+    );
+    assert_eq!(answers, ["OK SAVED"]);
+    // A loss that arrives before the line end adds up; a bare line end answers too.
+    assembler.damage(2);
+    assembler.damage(5);
+    let answers = feed_all(
+        &mut assembler,
+        &mut host,
+        b"
+",
+    );
+    assert_eq!(answers, ["ERR LINE_DAMAGED 7 bytes lost on the port"]);
+    // Nothing is answered before a line end.
     let mut out = AnswerBuf::<ANSWER_MAX>::new();
-    assert!(!respond(Fed::Nothing, 3, &mut host, &mut out));
+    assert!(!respond(Fed::Nothing, &mut host, &mut out));
     assert!(out.is_empty());
+}
+
+#[test]
+fn many_requests_then_a_damaged_set_never_runs_the_set() {
+    // The Codex scenario: a burst of complete requests overran the ring, the firmware discarded
+    // the ring (no answer for the lines inside it), and the SET that follows lost bytes.
+    let mut host = FakeHost::new();
+    let mut assembler = LineAssembler::<64>::new();
+    assembler.damage(40);
+    let answers = feed_all(
+        &mut assembler,
+        &mut host,
+        b"ASSET_TAG ABCD
+",
+    );
+    assert_eq!(answers, ["ERR LINE_DAMAGED 40 bytes lost on the port"]);
+    let answers = feed_all(
+        &mut assembler,
+        &mut host,
+        b"SET ASSET_TAG ABCD
+GET ASSET_TAG
+",
+    );
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0], "OK ASSET_TAG ABCD");
+    assert_eq!(answers[1], "OK ASSET_TAG ABCD");
 }
 
 #[test]

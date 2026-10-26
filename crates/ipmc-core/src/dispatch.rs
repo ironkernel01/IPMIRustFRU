@@ -26,7 +26,7 @@ use crate::sensor::{
 };
 use crate::tier;
 use crate::trace::Trace;
-use ipmc_fru::{FieldError, FruStore, UnitField};
+use ipmc_fru::{FieldError, FruField, FruStore};
 
 /// cc -- completion codes.
 pub mod cc {
@@ -250,7 +250,7 @@ impl Context {
     /// ipmc-app): refused with `FieldError::Nvmro` while NVMRO is asserted (VITA 46.11 Rule 8-3,
     /// as Write FRU Data is), else `FruStore::set_unit_field` and the self test on the new image,
     /// as after a Write FRU Data. The store is marked dirty, so the flash log saves the image.
-    pub fn set_unit_field(&mut self, field: UnitField, value: &str) -> Result<(), FieldError> {
+    pub fn set_unit_field(&mut self, field: FruField, value: &str) -> Result<(), FieldError> {
         if self.addr.nvmro_asserted {
             return Err(FieldError::Nvmro);
         }
@@ -649,19 +649,19 @@ mod tests {
     fn set_unit_field_edits_the_image_reruns_the_self_test_and_honours_nvmro() {
         let mut ctx = context();
         assert!(!ctx.fru.is_dirty());
-        ctx.set_unit_field(UnitField::BoardSerial, "00:11:22:33:44:55")
+        ctx.set_unit_field(FruField::BoardSerial, "00:11:22:33:44:55")
             .unwrap();
         assert!(ctx.fru.is_dirty());
         assert!(ctx.self_test.passed());
         assert_eq!(
-            ipmc_fru::unit_field(ctx.fru.bytes(), UnitField::BoardSerial),
+            ipmc_fru::unit_field(ctx.fru.bytes(), FruField::BoardSerial),
             Ok(ipmc_fru::FieldValue::Text("00:11:22:33:44:55"))
         );
         // NVMRO asserted: refused, the image stays.
         let before = *ctx.fru.image();
         ctx.addr.nvmro_asserted = true;
         assert_eq!(
-            ctx.set_unit_field(UnitField::AssetTag, "abc"),
+            ctx.set_unit_field(FruField::AssetTag, "abc"),
             Err(FieldError::Nvmro)
         );
         assert_eq!(ctx.fru.image(), &before);

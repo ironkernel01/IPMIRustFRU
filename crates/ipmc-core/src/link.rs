@@ -1364,6 +1364,14 @@ impl Link {
         self.egress.is_empty()
     }
 
+    /// request_in_flight -- the link holds a request it accepted and has not answered yet (in the
+    /// ingress FIFO), or a response it has not transmitted yet (on the egress queue). The firmware
+    /// defers a flash erase while this is true: the erase takes both slaves off the bus, and the
+    /// Chassis Manager would lose the answer it waits for.
+    pub const fn request_in_flight(&self) -> bool {
+        !self.ingress.is_empty() || !self.egress.is_empty()
+    }
+
     /// egress_dropped -- responses the egress queue rejected because it was full.
     pub const fn egress_dropped(&self) -> u32 {
         self.egress.dropped()
@@ -1734,15 +1742,22 @@ mod tests {
     fn egress_empty_follows_the_response_queue() {
         let mut link = link_with(false, TxPolicy::Alternate);
         assert!(link.egress_empty());
+        assert!(!link.request_in_flight());
         link.on_frame(Bus::A, &count_request(1, &[]), 0).unwrap();
         assert!(
             link.egress_empty(),
             "a request in the ingress FIFO has no response yet"
         );
+        // request_in_flight: accepted, not answered yet ...
+        assert!(link.request_in_flight());
         assert_eq!(poll(&mut link, 0), 1);
         assert!(!link.egress_empty());
+        // ... answered, not transmitted yet ...
+        assert!(link.request_in_flight());
         drain(&mut link);
         assert!(link.egress_empty());
+        // ... transmitted.
+        assert!(!link.request_in_flight());
     }
 
     #[test]

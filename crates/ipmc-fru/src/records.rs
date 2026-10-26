@@ -4,13 +4,17 @@
 //! Layouts are from the IPMI Platform Management FRU Information Storage Definition v1.0 rev 1.3
 //! ("FRU spec" below): Table 8-1 common header, Table 11-1 board info area, Table 12-1 product
 //! info area, section 13 type/length byte. VITA 46.11 rules: Common Header, Board Info Area and
-//! Product Info Area are present (Rule 8.1-2), the Chassis Info offset is 00h (Rule 8.1-3), the
-//! Internal Use and MultiRecord areas are absent (offset 00h, Permission 8.1-1 and 8.1-4).
+//! Product Info Area are present (Rule 8.1-2), the Chassis Info offset is 00h (Rule 8.1-3) and the
+//! Internal Use area is absent (offset 00h, Permission 8.1-1). The MultiRecord area (Permission
+//! 8.1-4) holds one record, the VITA 46.11 Alternate Manufacturing Date/Time record (Table
+//! 10.3.10-1): the standard 3-byte board date ends at 2027-11-24 20:15, the record's 32-bit
+//! minutes count does not.
 //!
 //! ```text
 //! offset 00h  common header, 8 bytes
 //!        08h  board info area, a multiple of 8 bytes (fields, C1h, room for the per-unit fields)
 //!        ..   product info area, a multiple of 8 bytes (the same)
+//!        ..   MultiRecord area: the VITA 46.11 Alternate Mfg Date/Time record (14 bytes)
 //!        ..   00h padding up to IPMC_FRU_SIZE
 //! ```
 //!
@@ -19,6 +23,7 @@
 //! checks a (possibly rewritten) image against the same layouts; the startup self test and
 //! every accepted Write FRU Data call it through ipmc-core `selftest`.
 
+use crate::date;
 use crate::store::FruError;
 use ipmc_wire::{zero_checksum as checksum, Builder, TYPE_ASCII, TYPE_MASK};
 
@@ -51,6 +56,23 @@ pub(crate) const MFG_DATE_LEN: usize = 3;
 pub(crate) const PRODUCT_HEADER_LEN: usize = 3;
 pub(crate) const BOARD_HEADER_LEN: usize = PRODUCT_HEADER_LEN + MFG_DATE_LEN;
 
+/// MR_TYPE_OEM -- MultiRecord type ID C0h, an OEM record (FRU spec Table 16-1; VITA 46.11
+/// Table 10.3.10-1).
+pub(crate) const MR_TYPE_OEM: u8 = 0xC0;
+/// MR_FLAGS_LAST -- the end-of-list bit of the second MultiRecord header byte.
+const MR_FLAGS_LAST: u8 = 0x80;
+/// VITA_MFR_ID -- the VITA manufacturer ID 0081ACh, LS byte first (VITA 46.11 Table 10.3.10-1).
+pub(crate) const VITA_MFR_ID: [u8; 3] = [0xAC, 0x81, 0x00];
+/// VITA_ALT_MFG_ID -- VITA record ID 34h, the Alternate Manufacturing Date/Time record.
+pub(crate) const VITA_ALT_MFG_ID: u8 = 0x34;
+/// VITA_ALT_MFG_VERSION -- the record's format version, 00h.
+pub(crate) const VITA_ALT_MFG_VERSION: u8 = 0;
+/// ALT_MFG_DATA_LEN -- data bytes of the record: manufacturer ID 3, record ID 1, version 1,
+/// minutes 4.
+pub(crate) const ALT_MFG_DATA_LEN: usize = 9;
+/// ALT_MFG_MINUTES_AT -- offset of the 4-byte minutes count in the record data.
+pub(crate) const ALT_MFG_MINUTES_AT: usize = 5;
+
 /// Common header byte positions (FRU spec Table 8-1).
 const HDR_VERSION: usize = 0;
 const HDR_INTERNAL: usize = 1;
@@ -72,17 +94,17 @@ const fn push_text(img: &mut Image, text: &str) {
     img.push_type_length_ascii(text, 0, FIELD_LEN_MAX);
 }
 
-/// reserve -- the bytes one per-unit field leaves free in the built area: the room the define
-/// reserves for it (`max`) less the length of its default string. An update up to `max` bytes
-/// then rewrites the field in place and no area moves (`unit.rs`). The guards in `ipmc-defs`
-/// keep the default within `max`.
+/// reserve -- the bytes one field leaves free in the built area: the room the define reserves
+/// for it (`max`) less the length of its default string. An update up to `max` bytes then
+/// rewrites the field in place and no area moves (`unit.rs`). The guards in `ipmc-defs` keep the
+/// default within `max`. An area's pad is the sum of this over its fields.
 const fn reserve(max: u32, default: &str) -> usize {
     max as usize - default.len()
 }
 
 /// finish_area -- closes the area that began at `start`: the C1h end-of-fields byte, `reserve`
-/// bytes of 00h (the room for the per-unit fields, FRU spec section 10 allows 00h padding after
-/// C1h up to the area length), 00h padding to a multiple of 8 bytes that leaves one byte for the
+/// bytes of 00h (the room for the fields, FRU spec section 10 allows 00h padding after C1h up
+/// to the area length), 00h padding to a multiple of 8 bytes that leaves one byte for the
 /// checksum, the area length in byte 1 (in 8-byte units) and the zero checksum.
 const fn finish_area(img: &mut Image, start: usize, reserve: usize) {
     img.push(END_OF_FIELDS);
@@ -115,36 +137,99 @@ const fn start_area(img: &mut Image) -> usize {
     start
 }
 
+/// BOARD_RESERVE -- the pad of the built board area: the room of its five text fields.
+const BOARD_RESERVE: usize = reserve(
+    ipmc_defs::IPMC_FRU_BOARD_MFR_MAX,
+    ipmc_defs::IPMC_FRU_BOARD_MFR,
+) + reserve(
+    ipmc_defs::IPMC_FRU_BOARD_PRODUCT_MAX,
+    ipmc_defs::IPMC_FRU_BOARD_PRODUCT,
+) + reserve(
+    ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
+    ipmc_defs::IPMC_FRU_BOARD_SERIAL,
+) + reserve(
+    ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
+    ipmc_defs::IPMC_FRU_BOARD_PART,
+) + reserve(
+    ipmc_defs::IPMC_FRU_BOARD_FILE_ID_MAX,
+    ipmc_defs::IPMC_FRU_FILE_ID,
+);
+
+/// PRODUCT_RESERVE -- the pad of the built product area: the room of its seven text fields.
+const PRODUCT_RESERVE: usize = reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_MFR_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_MFR,
+) + reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_NAME_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_NAME,
+) + reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_PART,
+) + reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_VERSION_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_VERSION,
+) + reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
+) + reserve(
+    ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
+    ipmc_defs::IPMC_FRU_ASSET_TAG,
+) + reserve(
+    ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID_MAX,
+    ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID,
+);
+
+/// push_alt_mfg_record -- the VITA 46.11 Alternate Manufacturing Date/Time record (Table
+/// 10.3.10-1), 14 bytes: header type C0h (OEM), 82h (end of list, record format version 2), data
+/// length 09h, the data checksum and the header checksum (FRU spec Table 16-1), then the data:
+/// the VITA manufacturer ID 0081ACh LS byte first, record ID 34h, format version 00h and the
+/// date as 32-bit minutes since 1996-01-01 00:00 UTC, LS byte first (00000000h = unspecified).
+const fn push_alt_mfg_record(img: &mut Image, minutes: u32) {
+    let minutes = minutes.to_le_bytes();
+    let data: [u8; ALT_MFG_DATA_LEN] = [
+        VITA_MFR_ID[0],
+        VITA_MFR_ID[1],
+        VITA_MFR_ID[2],
+        VITA_ALT_MFG_ID,
+        VITA_ALT_MFG_VERSION,
+        minutes[0],
+        minutes[1],
+        minutes[2],
+        minutes[3],
+    ];
+    let data_sum = checksum(&data);
+    let head = [
+        MR_TYPE_OEM,
+        MR_FLAGS_LAST | MULTIRECORD_VERSION,
+        ALT_MFG_DATA_LEN as u8,
+        data_sum,
+    ];
+    img.push_all(&head);
+    img.push(checksum(&head));
+    img.push_all(&data);
+}
+
 /// build -- the FRU image from the IPMC_FRU_* defines.
 const fn build() -> Image {
     let mut img = Image::with_len(COMMON_HEADER_LEN);
 
-    // Board Info Area (FRU spec Table 11-1).
+    // Board Info Area (FRU spec Table 11-1). The standard 3-byte Mfg Date/Time is 000000h
+    // (unspecified): the date lives in the Alternate Mfg Date/Time record below (date.rs).
     let board = start_area(&mut img);
     img.push(LANGUAGE_ENGLISH);
-    let date = ipmc_defs::IPMC_FRU_MFG_MINUTES.to_le_bytes();
-    img.push(date[0]);
-    img.push(date[1]);
-    img.push(date[2]);
+    let mut i = 0;
+    while i < MFG_DATE_LEN {
+        img.push(0);
+        i += 1;
+    }
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_MFR);
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_PRODUCT);
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_SERIAL);
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_PART);
     push_text(&mut img, ipmc_defs::IPMC_FRU_FILE_ID);
-    finish_area(
-        &mut img,
-        board,
-        reserve(
-            ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
-            ipmc_defs::IPMC_FRU_BOARD_SERIAL,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
-            ipmc_defs::IPMC_FRU_BOARD_PART,
-        ),
-    );
+    finish_area(&mut img, board, BOARD_RESERVE);
 
-    // Product Info Area (FRU spec Table 12-1). The product area has its own FRU File ID field;
-    // owner decision 2 defines one file ID (the board's), so this one is the empty field.
+    // Product Info Area (FRU spec Table 12-1).
     let product = start_area(&mut img);
     img.push(LANGUAGE_ENGLISH);
     push_text(&mut img, ipmc_defs::IPMC_FRU_PRODUCT_MFR);
@@ -153,21 +238,16 @@ const fn build() -> Image {
     push_text(&mut img, ipmc_defs::IPMC_FRU_PRODUCT_VERSION);
     push_text(&mut img, ipmc_defs::IPMC_FRU_PRODUCT_SERIAL);
     push_text(&mut img, ipmc_defs::IPMC_FRU_ASSET_TAG);
-    push_text(&mut img, "");
-    finish_area(
-        &mut img,
-        product,
-        reserve(
-            ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
-            ipmc_defs::IPMC_FRU_PRODUCT_PART,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
-            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
-            ipmc_defs::IPMC_FRU_ASSET_TAG,
-        ),
+    push_text(&mut img, ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID);
+    finish_area(&mut img, product, PRODUCT_RESERVE);
+
+    // MultiRecord Area: the Alternate Mfg Date/Time record, the only record, so the last.
+    let multirecord = img.len();
+    assert!(
+        multirecord.is_multiple_of(AREA_ALIGN),
+        "the MultiRecord area starts on an 8-byte boundary"
     );
+    push_alt_mfg_record(&mut img, date::DEFAULT_MINUTES);
 
     // Common header (FRU spec Table 8-1): Internal Use, Chassis Info and MultiRecord are absent.
     img.bytes[HDR_VERSION] = FORMAT_VERSION;
@@ -175,7 +255,7 @@ const fn build() -> Image {
     img.bytes[HDR_CHASSIS] = 0;
     img.bytes[HDR_BOARD] = (board / AREA_ALIGN) as u8;
     img.bytes[HDR_PRODUCT] = (product / AREA_ALIGN) as u8;
-    img.bytes[HDR_MULTIRECORD] = 0;
+    img.bytes[HDR_MULTIRECORD] = (multirecord / AREA_ALIGN) as u8;
     let (head, _) = img.bytes.split_at(HDR_CHECKSUM);
     img.bytes[HDR_CHECKSUM] = checksum(head);
     img
@@ -373,11 +453,99 @@ impl<'a> Iterator for Fields<'a> {
 
 /// MULTIRECORD_HEADER_LEN -- a MultiRecord header is 5 bytes: type ID, end-of-list bit and format
 /// version, record length, record checksum, header checksum (FRU spec Table 16-1).
-const MULTIRECORD_HEADER_LEN: usize = 5;
+pub(crate) const MULTIRECORD_HEADER_LEN: usize = 5;
 /// MULTIRECORD_VERSION -- record format version 2h (FRU spec section 16.2.3); bits 3:0.
 const MULTIRECORD_VERSION: u8 = 2;
 /// MULTIRECORD_END_OF_LIST -- bit 7 of the second header byte marks the last record (section 16.2.2).
 const MULTIRECORD_END_OF_LIST: u8 = 0x80;
+
+/// MultiRecord -- one decoded MultiRecord (FRU spec Table 16-1), borrowing the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MultiRecord<'a> {
+    /// Offset of the record header in the image.
+    pub offset: usize,
+    /// Record type ID.
+    pub type_id: u8,
+    /// Second header byte: end-of-list bit 7, format version in bits 3:0.
+    pub flags: u8,
+    /// The record data (header excluded).
+    pub data: &'a [u8],
+    /// The header checksum byte is the zero checksum of the first four header bytes.
+    pub header_ok: bool,
+    /// The record checksum byte is the zero checksum of the data.
+    pub data_ok: bool,
+}
+
+impl MultiRecord<'_> {
+    /// is_last -- the end-of-list bit is set.
+    pub const fn is_last(&self) -> bool {
+        self.flags & MULTIRECORD_END_OF_LIST != 0
+    }
+
+    /// alt_mfg_minutes -- the date of a VITA 46.11 Alternate Manufacturing Date/Time record (OEM
+    /// type C0h, manufacturer ID 0081ACh, record ID 34h, format version 00h, four bytes of
+    /// minutes since 1996-01-01 00:00): None for any other record or a malformed one. The
+    /// checksums are not part of the shape (`header_ok`, `data_ok`).
+    pub fn alt_mfg_minutes(&self) -> Option<u32> {
+        let [m0, m1, m2, m3] = *self.data.get(ALT_MFG_MINUTES_AT..)?.first_chunk::<4>()?;
+        let shape_ok = self.type_id == MR_TYPE_OEM
+            && self.flags & MULTIRECORD_VERSION_MASK == MULTIRECORD_VERSION
+            && self.data.len() == ALT_MFG_DATA_LEN
+            && self.data.starts_with(&VITA_MFR_ID)
+            && self.data.get(VITA_MFR_ID.len()) == Some(&VITA_ALT_MFG_ID)
+            && self.data.get(VITA_MFR_ID.len() + 1) == Some(&VITA_ALT_MFG_VERSION);
+        shape_ok.then(|| u32::from_le_bytes([m0, m1, m2, m3]))
+    }
+}
+
+/// MultiRecords -- iterator over the MultiRecord chain from `multirecords`; it ends after the
+/// end-of-list record, at a record that runs past the image, and after at most one record per
+/// image byte.
+#[derive(Clone, Copy, Debug)]
+pub struct MultiRecords<'a> {
+    image: &'a [u8],
+    offset: usize,
+    left: usize,
+}
+
+/// multirecords -- the MultiRecord chain that starts at `units` (8-byte units, the common header
+/// byte 5). Checksums are reported per record, not enforced (`verify` enforces them).
+pub fn multirecords(image: &[u8], units: u8) -> MultiRecords<'_> {
+    MultiRecords {
+        image,
+        offset: usize::from(units) * AREA_ALIGN,
+        left: if units == 0 { 0 } else { image.len() },
+    }
+}
+
+impl<'a> Iterator for MultiRecords<'a> {
+    type Item = MultiRecord<'a>;
+
+    fn next(&mut self) -> Option<MultiRecord<'a>> {
+        if self.left == 0 {
+            return None;
+        }
+        self.left -= 1;
+        let header_end = self.offset.checked_add(MULTIRECORD_HEADER_LEN)?;
+        let [type_id, flags, length, record_checksum, header_checksum] = *self
+            .image
+            .get(self.offset..header_end)?
+            .first_chunk::<5>()?;
+        let data_end = header_end.checked_add(usize::from(length))?;
+        let data = self.image.get(header_end..data_end)?;
+        let found = MultiRecord {
+            offset: self.offset,
+            type_id,
+            flags,
+            data,
+            header_ok: checksum(&[type_id, flags, length, record_checksum]) == header_checksum,
+            data_ok: checksum(data) == record_checksum,
+        };
+        self.left = if found.is_last() { 0 } else { self.left };
+        self.offset = data_end;
+        Some(found)
+    }
+}
 
 /// verify -- checks `image` against the FRU layouts; the startup self test and every accepted
 /// Write FRU Data run it.
@@ -394,8 +562,9 @@ const MULTIRECORD_END_OF_LIST: u8 = 0x80;
 ///    inside the image (BadLength) and an end-of-list record before the image ends (NoEndMarker).
 ///    The chain walk is bounded by the image length.
 ///
-/// This image has neither of the last two areas; a Chassis Manager may add one (VITA
-/// Permissions 8.1-1 and 8.1-4), and then the layouts above are what it must follow.
+/// The built image has no Internal Use area and one MultiRecord record (the Alternate Mfg
+/// Date/Time record); a Chassis Manager may add an Internal Use area (VITA Permission 8.1-1) or
+/// records (Permission 8.1-4), and then the layouts above are what it must follow.
 pub fn verify(image: &[u8]) -> Result<(), FruError> {
     let head = common_header(image)?;
     if !head.checksum_ok {
@@ -486,48 +655,63 @@ mod tests {
     // section 13) for the default strings of ipmi_defs.h, with every checksum worked out apart
     // from `build`. A change to a default string changes them and fails these tests on purpose.
 
-    /// Room the defaults leave: the board area reserves (24 - 12) for the serial and (24 - 14) for
-    /// the part number, the product area (24 - 10) for the part, (24 - 12) for the serial and
-    /// (24 - 0) for the asset tag.
+    /// Room the defaults leave, per field (MAX - default length): board area 14 (manufacturer),
+    /// 17 (product name), 12 (serial), 10 (part), 5 (file ID) = 58; product area 14, 11, 14,
+    /// 13 (version), 12, 24 (asset tag), 16 (file ID) = 104.
     ///
-    /// Board area bytes: 6 header + (1+10) + (1+15) + (1+12) + (1+14) + (1+11) = 73 field
-    /// bytes, C1h = 74, + 22 reserved = 96, + 1 checksum = 97, rounded up to 8 = 104.
+    /// Board area bytes: 6 header + (1+10) + (1+15) + (1+12) + (1+14) + (1+11) = 73 field bytes,
+    /// C1h = 74, + 58 reserved = 132, + 1 checksum = 133, rounded up to 8 = 136.
     /// Product area bytes: 3 header + (1+10) + (1+21) + (1+10) + (1+3) + (1+12) + 1 + 1 = 66,
-    /// C1h = 67, + 50 reserved = 117, + 1 checksum = 118, rounded up to 8 = 120.
-    const BOARD_LEN: usize = 104;
-    const PRODUCT_LEN: usize = 120;
+    /// C1h = 67, + 104 reserved = 171, + 1 checksum = 172, rounded up to 8 = 176.
+    const BOARD_LEN: usize = 136;
+    const PRODUCT_LEN: usize = 176;
 
     /// Common header: version 01h; internal 00h; chassis 00h (VITA Rule 8.1-3); board at unit 1
-    /// (offset 08h); product at unit 0Eh (offset 70h, the board area is 104 bytes); multirecord
-    /// 00h; pad 00h; checksum 100h - (01h + 01h + 0Eh) = F0h.
-    const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0E, 0x00, 0x00, 0xF0];
+    /// (offset 08h); product at unit 12h (offset 90h, the board area is 136 bytes); multirecord
+    /// at unit 28h (offset 140h, after the 176-byte product area); pad 00h; checksum
+    /// 100h - (01h + 01h + 12h + 28h) = C4h.
+    const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x12, 0x28, 0x00, 0xC4];
 
-    /// Board area at 08h up to and including the C1h byte: version 01h, length 0Dh (104 bytes),
-    /// language 00h, date 16204320 = F74220h -> 20 42 F7, "IronKernel" (CAh), "VPX Tier-1 IPMC"
-    /// (CFh), "IK-T1-000001" (CCh), "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h. After it
-    /// come 29 bytes of 00h (22 reserved, 7 alignment) and the checksum.
+    /// Board area at 08h up to and including the C1h byte: version 01h, length 11h (136 bytes),
+    /// language 00h, the standard date 000000h (unspecified), "IronKernel" (CAh), "VPX Tier-1
+    /// IPMC" (CFh), "IK-T1-000001" (CCh), "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h. After
+    /// it come 61 bytes of 00h (58 reserved, 3 alignment) and the checksum.
     const BOARD_BODY: [u8; 74] = [
-        0x01, 0x0D, 0x00, 0x20, 0x42, 0xF7, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E,
+        0x01, 0x11, 0x00, 0x00, 0x00, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E,
         0x65, 0x6C, 0xCF, 0x56, 0x50, 0x58, 0x20, 0x54, 0x69, 0x65, 0x72, 0x2D, 0x31, 0x20, 0x49,
         0x50, 0x4D, 0x43, 0xCC, 0x49, 0x4B, 0x2D, 0x54, 0x31, 0x2D, 0x30, 0x30, 0x30, 0x30, 0x30,
         0x31, 0xCE, 0x49, 0x4B, 0x2D, 0x49, 0x50, 0x4D, 0x43, 0x2D, 0x54, 0x31, 0x2D, 0x4E, 0x55,
         0x43, 0xCB, 0x69, 0x70, 0x6D, 0x63, 0x2D, 0x66, 0x72, 0x75, 0x2D, 0x76, 0x31, 0xC1,
     ];
 
-    /// Product area at 70h up to and including the C1h byte: version 01h, length 0Fh (120 bytes),
+    /// Product area at 90h up to and including the C1h byte: version 01h, length 16h (176 bytes),
     /// language 00h, "IronKernel" (CAh), "Tier-1 IPMC Reference" (D5h), "IK-IPMC-T1" (CAh),
     /// "0.1" (C3h), "IK-T1-000001" (CCh), empty asset tag (C0h), empty file ID (C0h), C1h.
-    /// After it come 52 bytes of 00h (50 reserved, 2 alignment) and the checksum.
+    /// After it come 108 bytes of 00h (104 reserved, 4 alignment) and the checksum.
     const PRODUCT_BODY: [u8; 67] = [
-        0x01, 0x0F, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E, 0x65, 0x6C, 0xD5,
+        0x01, 0x16, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E, 0x65, 0x6C, 0xD5,
         0x54, 0x69, 0x65, 0x72, 0x2D, 0x31, 0x20, 0x49, 0x50, 0x4D, 0x43, 0x20, 0x52, 0x65, 0x66,
         0x65, 0x72, 0x65, 0x6E, 0x63, 0x65, 0xCA, 0x49, 0x4B, 0x2D, 0x49, 0x50, 0x4D, 0x43, 0x2D,
         0x54, 0x31, 0xC3, 0x30, 0x2E, 0x31, 0xCC, 0x49, 0x4B, 0x2D, 0x54, 0x31, 0x2D, 0x30, 0x30,
         0x30, 0x30, 0x30, 0x31, 0xC0, 0xC0, 0xC1,
     ];
 
+    /// MultiRecord area at 140h: the VITA 46.11 Alternate Mfg Date/Time record (Table
+    /// 10.3.10-1), 14 bytes. Header: C0h (OEM), 82h (end of list, version 2), 09h data length,
+    /// data checksum, header checksum = 100h - (C0h + 82h + 09h + data checksum). Data: ACh 81h
+    /// 00h (manufacturer ID 0081ACh), 34h (record ID), 00h (format version) and 16204320 minutes
+    /// (2026-10-23 00:00) = 00F74220h LS byte first. Data checksum 100h - (ACh + 81h + 34h + 20h
+    /// + 42h + F7h) mod 256 = 46h.
+    const RECORD: [u8; 14] = [
+        0xC0, 0x82, 0x09, 0x46, 0x6F, 0xAC, 0x81, 0x00, 0x34, 0x00, 0x20, 0x42, 0xF7, 0x00,
+    ];
+
     const BOARD_AT: usize = 0x08;
-    const PRODUCT_AT: usize = 0x70;
+    const PRODUCT_AT: usize = 0x90;
+    const RECORD_AT: usize = 0x140;
+    /// SPARE_AT -- the first 8-byte boundary after the built image: where the tests place an
+    /// Internal Use area or a MultiRecord area of their own.
+    const SPARE_AT: usize = 0x150;
 
     /// sum8 -- the bytes added modulo 256.
     fn sum8(bytes: &[u8]) -> u8 {
@@ -548,7 +732,9 @@ mod tests {
             assert!(area[body.len()..len - 1].iter().all(|b| *b == 0));
             assert_eq!(sum8(area), 0);
         }
-        assert_eq!(IMAGE_LEN, 8 + BOARD_LEN + PRODUCT_LEN);
+        assert_eq!(&store.bytes()[RECORD_AT..RECORD_AT + 14], &RECORD);
+        assert_eq!(IMAGE_LEN, RECORD_AT + RECORD.len());
+        assert_eq!(RECORD_AT, 8 + BOARD_LEN + PRODUCT_LEN);
         // Everything after the areas is 00h padding.
         assert!(store.bytes()[IMAGE_LEN..].iter().all(|b| *b == 0));
         assert_eq!(store.bytes().len(), SIZE);
@@ -558,51 +744,77 @@ mod tests {
     fn built_areas_have_exactly_the_reserved_length() {
         // Each reserve is MAX - default length (ipmi_defs.h IPMC_FRU_*_MAX); the area length is
         // the field bytes with the defaults, C1h, the reserves and the checksum, rounded up to 8.
-        let reserve = |max: u32, default: &str| max as usize - default.len();
-        let field_bytes = |texts: &[&str]| texts.iter().map(|text| 1 + text.len()).sum::<usize>();
-        let board_fields = BOARD_HEADER_LEN
-            + field_bytes(&[
+        let rooms = |pairs: &[(u32, &str)]| -> (usize, usize) {
+            (
+                pairs.iter().map(|(_, text)| 1 + text.len()).sum::<usize>(),
+                pairs
+                    .iter()
+                    .map(|(max, text)| *max as usize - text.len())
+                    .sum::<usize>(),
+            )
+        };
+        let (board_fields, board_room) = rooms(&[
+            (
+                ipmc_defs::IPMC_FRU_BOARD_MFR_MAX,
                 ipmc_defs::IPMC_FRU_BOARD_MFR,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_BOARD_PRODUCT_MAX,
                 ipmc_defs::IPMC_FRU_BOARD_PRODUCT,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
                 ipmc_defs::IPMC_FRU_BOARD_SERIAL,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
                 ipmc_defs::IPMC_FRU_BOARD_PART,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_BOARD_FILE_ID_MAX,
                 ipmc_defs::IPMC_FRU_FILE_ID,
-            ]);
-        let board_room = reserve(
-            ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
-            ipmc_defs::IPMC_FRU_BOARD_SERIAL,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
-            ipmc_defs::IPMC_FRU_BOARD_PART,
-        );
-        let product_fields = PRODUCT_HEADER_LEN
-            + field_bytes(&[
+            ),
+        ]);
+        let (product_fields, product_room) = rooms(&[
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_MFR_MAX,
                 ipmc_defs::IPMC_FRU_PRODUCT_MFR,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_NAME_MAX,
                 ipmc_defs::IPMC_FRU_PRODUCT_NAME,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
                 ipmc_defs::IPMC_FRU_PRODUCT_PART,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_VERSION_MAX,
                 ipmc_defs::IPMC_FRU_PRODUCT_VERSION,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
                 ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
+            ),
+            (
+                ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
                 ipmc_defs::IPMC_FRU_ASSET_TAG,
-                "",
-            ]);
-        let product_room = reserve(
-            ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
-            ipmc_defs::IPMC_FRU_PRODUCT_PART,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
-            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
-        ) + reserve(
-            ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
-            ipmc_defs::IPMC_FRU_ASSET_TAG,
-        );
+            ),
+            (
+                ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID_MAX,
+                ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID,
+            ),
+        ]);
         // fields + C1h + room + checksum, up to a multiple of 8.
         let rounded = |used: usize| (used + 2).next_multiple_of(AREA_ALIGN);
+        let board_used = BOARD_HEADER_LEN + board_fields + board_room;
+        let product_used = PRODUCT_HEADER_LEN + product_fields + product_room;
         let store = FruStore::new();
         let head = common_header(store.bytes()).unwrap();
         let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();
         let product = area(store.bytes(), AreaKind::Product, head.product).unwrap();
-        assert_eq!(board.bytes.len(), rounded(board_fields + board_room));
-        assert_eq!(product.bytes.len(), rounded(product_fields + product_room));
+        assert_eq!(board.bytes.len(), rounded(board_used));
+        assert_eq!(product.bytes.len(), rounded(product_used));
         assert_eq!(
             (board.bytes.len(), product.bytes.len()),
             (BOARD_LEN, PRODUCT_LEN)
@@ -621,10 +833,22 @@ mod tests {
     }
 
     #[test]
-    fn mfg_date_is_minutes_from_1996_to_2026_10_23() {
-        // (30 years x 365 + 8 leap days) + 295 days = 11253 days; x 1440 minutes.
-        assert_eq!(11_253u32 * 1_440, ipmc_defs::IPMC_FRU_MFG_MINUTES);
-        assert_eq!(ipmc_defs::IPMC_FRU_MFG_MINUTES, 0x00F7_4220);
+    fn the_built_date_is_the_alt_record_and_the_standard_field_is_zero() {
+        // 2026-10-23 00:00: (30 years x 365 + 8 leap days) + 295 days = 11253 days x 1440
+        // minutes; the define is the text, the standard field is 000000h.
+        assert_eq!(ipmc_defs::IPMC_FRU_MFG_DATE, "2026-10-23 00:00");
+        assert_eq!(date::DEFAULT_MINUTES, 11_253u32 * 1_440);
+        let store = FruStore::new();
+        let head = common_header(store.bytes()).unwrap();
+        let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();
+        assert_eq!(board.mfg_minutes(), Some(0));
+        let record = multirecords(store.bytes(), head.multirecord)
+            .next()
+            .unwrap();
+        assert_eq!(record.alt_mfg_minutes(), Some(date::DEFAULT_MINUTES));
+        assert!(record.is_last() && record.header_ok && record.data_ok);
+        assert_eq!(multirecords(store.bytes(), head.multirecord).count(), 1);
+        assert_eq!(multirecords(store.bytes(), 0).count(), 0);
     }
 
     #[test]
@@ -637,8 +861,8 @@ mod tests {
                 internal: 0,
                 chassis: 0,
                 board: 1,
-                product: 0x0E,
-                multirecord: 0,
+                product: 0x12,
+                multirecord: 0x28,
                 pad: 0,
                 checksum_ok: true
             }
@@ -646,7 +870,7 @@ mod tests {
         let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();
         assert!(board.checksum_ok);
         assert_eq!(board.bytes.len(), BOARD_LEN);
-        assert_eq!(board.mfg_minutes(), Some(16_204_320));
+        assert_eq!(board.mfg_minutes(), Some(0));
         let names: Vec<&[u8]> = board.fields().map(|f| f.data).collect();
         assert_eq!(
             names,
@@ -808,15 +1032,14 @@ mod tests {
         assert_eq!(verify(&bytes), Err(FruError::NoEndMarker));
     }
 
-    /// Image with a MultiRecord area at unit IMAGE_LEN / 8 (right after the product area): one OEM
+    /// Image with a MultiRecord area at unit SPARE_AT / 8 (after the built record): one OEM
     /// record, type C0h, end of list and version 2 (82h), 2 data bytes AAh 55h, record checksum
     /// 01h (AAh + 55h = FFh), header checksum -(C0h + 82h + 02h + 01h) = BBh.
     fn with_multirecord(change: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
         altered(|b| {
-            b[5] = (IMAGE_LEN / AREA_ALIGN) as u8;
+            b[5] = (SPARE_AT / AREA_ALIGN) as u8;
             b[7] = checksum(&b[..7]);
-            b[IMAGE_LEN..IMAGE_LEN + 7]
-                .copy_from_slice(&[0xC0, 0x82, 0x02, 0x01, 0xBB, 0xAA, 0x55]);
+            b[SPARE_AT..SPARE_AT + 7].copy_from_slice(&[0xC0, 0x82, 0x02, 0x01, 0xBB, 0xAA, 0x55]);
             change(b);
         })
     }
@@ -824,7 +1047,7 @@ mod tests {
     #[test]
     fn a_multirecord_chain_is_walked() {
         assert_eq!(verify(&with_multirecord(|_| {})), Ok(()));
-        let a = IMAGE_LEN;
+        let a = SPARE_AT;
         // Header checksum, data checksum, version, data past the image, no end-of-list bit.
         assert_eq!(
             verify(&with_multirecord(|b| b[a + 4] ^= 1)),
@@ -872,9 +1095,9 @@ mod tests {
     fn an_internal_use_area_needs_version_1() {
         let with_internal = |version: u8| {
             altered(|b| {
-                b[1] = (IMAGE_LEN / AREA_ALIGN) as u8;
+                b[1] = (SPARE_AT / AREA_ALIGN) as u8;
                 b[7] = checksum(&b[..7]);
-                b[IMAGE_LEN] = version;
+                b[SPARE_AT] = version;
             })
         };
         assert_eq!(verify(&with_internal(1)), Ok(()));

@@ -69,7 +69,7 @@
 #define IPMB_FAULT_STREAK 8                       /* consecutive bus-fault errors on one IPMB (stretch timeout, SCL or SDA stuck low, bus busy, slave BERR or TIMEOUT) before the bus is marked faulted in the IPMB Link sensor (2..=64); address and data NACKs are not bus faults; a good write or frame resets the count (VITA 46.11 Rule 9.3-10) */
 #define IPMB_FAULT_CLEAR_MS 1000                  /* both lines must read idle-high continuously this long before a faulted bus is cleared (100..=60000), milliseconds */
 #define IPMC_IPMI_TRACE 1                         /* 1 = trace every dispatched request on the console; 0 = silent: the link and dispatcher lines are compiled out, so they are absent from the console and from the capture log */
-#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536, a power of two; usable size IPMC_LOG_SIZE - 1 because the ring keeps one slot empty): whole IPMB frames in and out and the trace lines, oldest overwritten first; each DEBUG DUMP row walks the log from its start, so a larger log makes DEBUG DUMP slower per row */
+#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=16384, a power of two; RAM budget, the stack reservation check in link.x fails a build that leaves too little; usable size IPMC_LOG_SIZE - 1 because the ring keeps one slot empty): whole IPMB frames in and out and the trace lines, oldest overwritten first; each DEBUG DUMP row walks the log from its start, so a larger log makes DEBUG DUMP slower per row */
 #define IPMC_LOG_TEXT_MAX 160                     /* longest trace line kept in the log, bytes (32..=200); a longer line is cut and ends in ... */
 
 #define IPMB_STRAP_FROM_PINS 0                    /* strap value is read from the pins */
@@ -87,9 +87,10 @@
 #define IPMC_APP_UART_BAUD 115200                 /* application port baud rate, 8N1 */
 #define IPMC_APP_UART_FLOW 0                      /* 1 = RTS/CTS hardware handshake on PA12/PA11; 0 = TX/RX only */
 #define IPMC_APP_UART_RX_BUF 256                  /* application port RX ring, bytes; power of two; at least one application line (IPMC_APP_LINE_MAX + 2) */
-#define IPMC_APP_UART_TX_BUF 1024                 /* application port TX ring, bytes; power of two */
+#define IPMC_APP_UART_TX_BUF 1024                 /* application port TX ring, bytes; power of two, 512..=16384; takes at least one longest answer plus CR LF */
 #define IPMC_APP_LINE_MAX 128                     /* longest application port request line, bytes (16..=IPMC_APP_UART_RX_BUF - 3); IPMC_APP_UART_RX_BUF holds at least one */
 #define IPMC_APP_BYTES_PER_POLL 32                /* most application port bytes one main-loop pass takes (1..=IPMC_APP_UART_RX_BUF) */
+#define IPMC_FRU_CONSOLE_WRITE 1                  /* 1 = the console FRU menu sets every FRU field (SET) and restores the built image (RESTORE); 0 = the console FRU menu is read only (SHOW, DUMP, STORE, FIELDS, GET) and the SET and RESTORE commands do not exist */
 #define IPMC_APP_FRU_WRITE 1                      /* 1 = the application port may SET the per-unit FRU fields and run IPMI Write FRU Data; 0 = SET and IPMI Write FRU Data (NetFn 0Ah, command 12h) answer ERR WRITE_DISABLED and do not run, GET and the other IPMI requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager */
 #define IPMC_MENU_LINE_MAX 128                    /* longest accepted console line in bytes; a longer line is rejected */
 #define IPMC_MENU_TOKENS_MAX 40                   /* most whitespace-separated tokens in one console line or one command syntax */
@@ -127,20 +128,28 @@
 #define IPMC_FRU_BOARD_PRODUCT "VPX Tier-1 IPMC"  /* FRU board area: product name */
 #define IPMC_FRU_BOARD_SERIAL "IK-T1-000001"      /* FRU board area: serial number */
 #define IPMC_FRU_BOARD_PART "IK-IPMC-T1-NUC"      /* FRU board area: part number */
-#define IPMC_FRU_FILE_ID "ipmc-fru-v1"            /* FRU board area: FRU file ID */
+#define IPMC_FRU_FILE_ID "ipmc-fru-v1"            /* FRU board area: FRU file ID (the board file ID; the product area has its own, IPMC_FRU_PRODUCT_FILE_ID) */
 #define IPMC_FRU_PRODUCT_MFR "IronKernel"         /* FRU product area: manufacturer */
 #define IPMC_FRU_PRODUCT_NAME "Tier-1 IPMC Reference" /* FRU product area: product name */
 #define IPMC_FRU_PRODUCT_PART "IK-IPMC-T1"        /* FRU product area: part or model number */
-#define IPMC_FRU_PRODUCT_VERSION "0.1"            /* FRU product area: version; must equal the major.minor of the crate version (guard in ipmc-core identity.rs) */
+#define IPMC_FRU_PRODUCT_VERSION "0.1"            /* FRU product area: version; the default must equal the major.minor of the crate version (guard in ipmc-core identity.rs); a value written later with SET is not checked against it */
 #define IPMC_FRU_PRODUCT_SERIAL "IK-T1-000001"    /* FRU product area: serial number */
 #define IPMC_FRU_ASSET_TAG ""                     /* FRU product area: asset tag, empty */
+#define IPMC_FRU_PRODUCT_FILE_ID ""               /* FRU product area: FRU file ID, empty (the built product area carries the no-data field) */
+#define IPMC_FRU_BOARD_MFR_MAX 24                 /* room reserved for the board manufacturer, bytes (2..=63); every FRU field has reserved room (the pooled pad at the end of each area is the sum over the area's fields of MAX less the default's length), so SET rewrites a field in place and no area moves */
+#define IPMC_FRU_BOARD_PRODUCT_MAX 32             /* room reserved for the board product name, bytes (2..=63) */
+#define IPMC_FRU_BOARD_FILE_ID_MAX 16             /* room reserved for the board FRU file ID, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_MFR_MAX 24               /* room reserved for the product manufacturer, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_NAME_MAX 32              /* room reserved for the product name, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_VERSION_MAX 16           /* room reserved for the product version, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_FILE_ID_MAX 16           /* room reserved for the product FRU file ID, bytes (2..=63) */
 #define IPMC_FRU_BOARD_SERIAL_MAX 24              /* room reserved for the board serial number, bytes (17..=63); the built board area holds this many bytes for it whatever the default's length, so an update up to this length rewrites it in place; at least 17, the text form of a MAC address 00:11:22:33:44:55 */
 #define IPMC_FRU_BOARD_PART_MAX 24                /* room reserved for the board part number, bytes (2..=63) */
 #define IPMC_FRU_PRODUCT_PART_MAX 24              /* room reserved for the product part or model number, bytes (2..=63) */
 #define IPMC_FRU_PRODUCT_SERIAL_MAX 24            /* room reserved for the product serial number, bytes (17..=63); at least 17 for a MAC address text */
 #define IPMC_FRU_ASSET_TAG_MAX 24                 /* room reserved for the asset tag, bytes (2..=63) */
-#define IPMC_FRU_MFG_MINUTES 16204320             /* FRU board area manufacturing date, minutes since 1996-01-01 00:00 (FRU spec section 11, 3 bytes little endian, 000000h = unspecified); 2026-10-23 00:00 = (30 years x 365 + 8 leap days + 295 days) = 11253 days x 1440 = 16204320; at most 16777215 */
-#define IPMC_FRU_SIZE 256                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info); a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru persist.rs) is 16 bytes longer than this */
+#define IPMC_FRU_MFG_DATE "2026-10-23 00:00"      /* FRU manufacturing date, YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59 (checked at compile time by ipmc-fru date.rs); the built image holds it in the VITA 46.11 Alternate Manufacturing Date/Time record (VITA 34h, a 32-bit minutes count, MultiRecord area) and leaves the standard 3-byte Mfg Date/Time field 000000h (unspecified), because that field ends at 2027-11-24 20:15 */
+#define IPMC_FRU_SIZE 512                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info): the built image with every field's reserved room (12 text fields) and the 14-byte Alternate Mfg Date/Time record; the flash record is 528 bytes, 31 records per 16 KB sector; a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru persist.rs) is 16 bytes longer than this */
 #define IPMC_FRU_PERSIST 1                        /* 1 = Write FRU Data survives reset (FRU image kept in the flash store, sector 1 alone, 16 KB); 0 = RAM only, a reset restores the built image */
 #define IPMC_FRU_PERSIST_DELAY_MS 1000            /* quiet time after the last Write FRU Data before the image is saved to flash, milliseconds (100..=10000); coalesces a Chassis Manager writing an area in chunks into one record */
 #define IPMC_FRU_SCAN_CHUNK 64                    /* bytes read at a time when the flash log checks a range for erased flash (ipmc-fru persist.rs); a multiple of 4, 16..=272; the buffer lives on the stack */

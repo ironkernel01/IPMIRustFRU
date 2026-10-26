@@ -204,13 +204,18 @@ const _: () = assert!(
 );
 const _: () = assert!(IPMC_IPMI_TRACE <= 1, "IPMC_IPMI_TRACE must be 0 or 1");
 
-// The capture log ring (ipmc-core capture.rs): 1 KiB holds a few frames, 64 KiB is the most the
-// 96 KiB of RAM could spare; a trace line is kept to IPMC_LOG_TEXT_MAX bytes, 32 holds a short
+// The capture log ring (ipmc-core capture.rs): 1 KiB holds a few frames, 16 KiB is the most the
+// RAM budget below allows; a trace line is kept to IPMC_LOG_TEXT_MAX bytes, 32 holds a short
 // status line, 200 the longest the console prints. The relations to IPMB_MSG_MAX are guarded
 // beside the type (capture.rs).
+// RAM budget: the log is 16 KB at most because the RAM of the STM32F401 is 96 KB and the statics
+// (this log, the UART rings, the FRU image) share it with the stack. The firmware reserves 32 KB
+// for the stack (`_stack_reserve` in memory.x, measured on the release ELF with the log at 16384;
+// the method and the numbers are in that file) and link.x fails the build when the statics leave
+// less. The IpmbLink temporary in `take` was measured at 16.6 KB whatever the log size.
 const _: () = assert!(
-    IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 65536 && IPMC_LOG_SIZE.is_power_of_two(),
-    "IPMC_LOG_SIZE must be a power of two, 1024..=65536 (the usable size is one byte less)"
+    IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 16384 && IPMC_LOG_SIZE.is_power_of_two(),
+    "IPMC_LOG_SIZE must be a power of two, 1024..=16384 (the usable size is one byte less)"
 );
 const _: () = assert!(
     IPMC_LOG_TEXT_MAX >= 32 && IPMC_LOG_TEXT_MAX <= 200,
@@ -262,9 +267,9 @@ const _: () = assert!(
 );
 const _: () = assert!(
     IPMC_APP_UART_TX_BUF.is_power_of_two()
-        && IPMC_APP_UART_TX_BUF >= 64
+        && IPMC_APP_UART_TX_BUF >= 512
         && IPMC_APP_UART_TX_BUF <= 16384,
-    "IPMC_APP_UART_TX_BUF must be a power of two, 64..=16384"
+    "IPMC_APP_UART_TX_BUF must be a power of two, 512..=16384 (one answer, ipmc_app::ANSWER_MAX 256, plus CR LF must fit; the firmware checks the exact sum)"
 );
 const _: () = assert!(
     IPMC_APP_LINE_MAX >= 16 && IPMC_APP_LINE_MAX + 2 < IPMC_APP_UART_RX_BUF,
@@ -277,6 +282,10 @@ const _: () = assert!(
 const _: () = assert!(
     IPMC_APP_FRU_WRITE == 0 || IPMC_APP_FRU_WRITE == 1,
     "IPMC_APP_FRU_WRITE must be 0 or 1"
+);
+const _: () = assert!(
+    IPMC_FRU_CONSOLE_WRITE == 0 || IPMC_FRU_CONSOLE_WRITE == 1,
+    "IPMC_FRU_CONSOLE_WRITE must be 0 or 1"
 );
 const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,
@@ -445,12 +454,11 @@ fru_string_guard!(IPMC_FRU_PRODUCT_PART);
 fru_string_guard!(IPMC_FRU_PRODUCT_VERSION);
 fru_string_guard!(IPMC_FRU_PRODUCT_SERIAL);
 fru_string_guard!(IPMC_FRU_ASSET_TAG);
+fru_string_guard!(IPMC_FRU_PRODUCT_FILE_ID);
 
-// The manufacturing date is 3 bytes, little endian (FRU spec section 11, Table 11-1).
-const _: () = assert!(
-    IPMC_FRU_MFG_MINUTES <= 0xFF_FFFF,
-    "IPMC_FRU_MFG_MINUTES must fit 3 bytes (minutes since 1996-01-01)"
-);
+fru_string_guard!(IPMC_FRU_MFG_DATE);
+// IPMC_FRU_MFG_DATE is a date in `YYYY-MM-DD HH:MM` form; ipmc-fru date.rs checks the shape and
+// the range at compile time with the one date parser.
 // The FRU area is addressed by a 16-bit offset (IPMI v2.0 Table 34-3) and its areas are
 // multiples of 8 bytes (FRU spec section 8: offsets in multiples of 8 bytes). That it holds the
 // built image is checked in ipmc-fru records.rs, which owns the image length.
@@ -490,6 +498,13 @@ fru_room_guard!(
     MAC_TEXT_LEN
 );
 fru_room_guard!(IPMC_FRU_ASSET_TAG_MAX, IPMC_FRU_ASSET_TAG, 2);
+fru_room_guard!(IPMC_FRU_BOARD_MFR_MAX, IPMC_FRU_BOARD_MFR, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PRODUCT_MAX, IPMC_FRU_BOARD_PRODUCT, 2);
+fru_room_guard!(IPMC_FRU_BOARD_FILE_ID_MAX, IPMC_FRU_FILE_ID, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_MFR_MAX, IPMC_FRU_PRODUCT_MFR, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_NAME_MAX, IPMC_FRU_PRODUCT_NAME, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_VERSION_MAX, IPMC_FRU_PRODUCT_VERSION, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_FILE_ID_MAX, IPMC_FRU_PRODUCT_FILE_ID, 2);
 // The flash persistence switch is a boolean; the save delay is long enough to coalesce a chunked
 // Write FRU Data and short enough that a write is on flash before a person resets the board.
 const _: () = assert!(

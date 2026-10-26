@@ -266,8 +266,10 @@ fn the_reset_happens_after_the_wait_when_the_response_cannot_leave() {
 
 /// read_last_byte -- the last FRU byte as the Chassis Manager reads it (Read FRU Data).
 fn read_last_byte(emu: &mut Emulator, seq: u8, now_ms: u32, lines: &mut Lines) -> u8 {
-    let last = u8::try_from(emu.context().fru.bytes().len() - 1).unwrap();
-    let frame = request_with(NETFN_STORAGE, READ_FRU_DATA, seq, &[0, last, 0, 1]);
+    let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
+        .unwrap()
+        .to_le_bytes();
+    let frame = request_with(NETFN_STORAGE, READ_FRU_DATA, seq, &[0, last, last_hi, 1]);
     let response = exchange(emu, &frame, now_ms, lines);
     let parsed = ipmb::parse(&response).unwrap();
     assert_eq!(parsed.completion_code, Some(0));
@@ -279,11 +281,18 @@ fn read_last_byte(emu: &mut Emulator, seq: u8, now_ms: u32, lines: &mut Lines) -
 fn an_accepted_fru_write_survives_a_cold_reset_at_once() {
     let mut emu = board();
     let mut lines = Lines::default();
-    let last = u8::try_from(emu.context().fru.bytes().len() - 1).unwrap();
+    let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
+        .unwrap()
+        .to_le_bytes();
     let before = read_last_byte(&mut emu, 1, 0, &mut lines);
     let marker = !before;
     // Write FRU Data, answered 00h; the save delay (IPMC_FRU_PERSIST_DELAY_MS) has not passed.
-    let write = request_with(NETFN_STORAGE, WRITE_FRU_DATA, 2, &[0, last, 0, marker]);
+    let write = request_with(
+        NETFN_STORAGE,
+        WRITE_FRU_DATA,
+        2,
+        &[0, last, last_hi, marker],
+    );
     let response = exchange(&mut emu, &write, 10, &mut lines);
     assert_eq!(ipmb::parse(&response).unwrap().completion_code, Some(0));
     // Cold Reset at once: the response leaves, the unsaved write is saved, then the board resets.
@@ -302,9 +311,16 @@ fn a_cold_reset_restores_the_fru_image_from_the_flash_copy() {
     // it from the copy, and the RAM store is not what the reset keeps.
     let mut emu = board();
     let mut lines = Lines::default();
-    let last = u8::try_from(emu.context().fru.bytes().len() - 1).unwrap();
+    let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
+        .unwrap()
+        .to_le_bytes();
     let marker = !read_last_byte(&mut emu, 1, 0, &mut lines);
-    let write = request_with(NETFN_STORAGE, WRITE_FRU_DATA, 2, &[0, last, 0, marker]);
+    let write = request_with(
+        NETFN_STORAGE,
+        WRITE_FRU_DATA,
+        2,
+        &[0, last, last_hi, marker],
+    );
     exchange(&mut emu, &write, 10, &mut lines);
     emu.poll(10 + ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS, &mut lines);
     exchange(&mut emu, &request(FAKE_RESET_CMD, 3), 2000, &mut lines);

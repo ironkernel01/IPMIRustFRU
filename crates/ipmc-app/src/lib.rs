@@ -13,11 +13,17 @@
 //! - asks for the IPMC status and the FRU state,
 //! - runs IPMI requests locally, as if the Chassis Manager had sent them (customer specific
 //!   IPMI to payload commands start here), and
-//! - writes the per-unit FRU fields (serial numbers, part numbers, asset tag, manufacturing
-//!   date) at the first boot of a real system.
+//! - reads and writes the thirteen FRU fields (manufacturer, product name, serial
+//!   number, part number and file ID of the board; the manufacturing date; manufacturer, name,
+//!   part number, version, serial number, asset tag and file ID of the product) at the first boot
+//!   of a real system.
 //!
 //! The FRU image reserves room for those fields (the `IPMC_FRU_*_MAX` defines in ipmi_defs.h),
-//! so an update rewrites its field in place and no area moves.
+//! so an update rewrites its field in place and no area moves. The manufacturing date is
+//! `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59. It lives in the VITA 46.11
+//! Alternate Manufacturing Date/Time record, because the standard 3-byte field of the FRU board
+//! area ends at 2027-11-24 20:15; the standard field stays 000000h (unspecified). The console
+//! `FRU` menu reads and writes the same fields through the same path.
 //!
 //! # The line format
 //!
@@ -29,13 +35,16 @@
 //!
 //! # Lost bytes
 //!
-//! The UART counts the bytes it loses (overrun, receive ring full). A line that completes after
-//! the counters moved is not run: the answer is `ERR LINE_DAMAGED <n> bytes lost on the port`
-//! (with the tag when the line had a valid one) and the payload CPU sends the line again. A
-//! payload that writes a field also compares the `OK <FIELD> <value>` echo of `SET` with what it
-//! sent. With `IPMC_APP_UART_FLOW` 1 the IPMC deasserts RTS only when the data register holds an
-//! unread byte, so a sender that has a byte in flight can still overrun by one byte; the overrun
-//! counter counts it and the line is answered `ERR LINE_DAMAGED`.
+//! The UART counts the bytes it loses (overrun, receive ring full). When the count moves, the
+//! firmware discards every byte waiting in the receive ring and calls `LineAssembler::damage`;
+//! the next line end answers `ERR LINE_DAMAGED <n> bytes lost on the port` (no tag, because the
+//! tag may be among the lost bytes), nothing runs for it, and the lines after it run normally.
+//! Lines that were complete inside the discarded bytes get no answer at all: a payload CPU
+//! treats an answer that does not arrive within its timeout as a lost request and sends it
+//! again. A payload that writes a field also compares the `OK <FIELD> <value>` echo of `SET`
+//! with what it sent. With `IPMC_APP_UART_FLOW` 1 the IPMC deasserts RTS only when the data
+//! register holds an unread byte, so a sender that has a byte in flight can still overrun by one
+//! byte; the overrun counter counts it and the line end is answered `ERR LINE_DAMAGED`.
 //!
 //! Two worked exchanges (`>` is the request, `<` the answer):
 //!

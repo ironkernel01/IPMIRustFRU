@@ -1,13 +1,21 @@
 // data_cmds.rs - console views of the data the IPMI handlers serve: FRU SHOW and FRU DUMP over the
-// FRU image, SENSORS SDR over the Device SDR repository, FRU STORE over the flash log state.
-// Read-only except FRU RESTORE, which asks ipmb_link.rs to save the built image to the log. The data lives in the
-// dispatch context that ipmb_link.rs owns, and these handlers only print it. Decoding comes from
-// ipmc_fru::records and ipmc_core::sdr; nothing here parses a byte layout of its own.
+// FRU image, FRU FIELDS and FRU GET over the thirteen FRU fields, SENSORS SDR over the Device SDR
+// repository, FRU STORE over the flash log state. FRU SET and FRU RESTORE write: SET goes through
+// `IpmbLink::set_unit_field`, the one path the application port uses too (live NVMRO check, the
+// store's dirty mark, the delayed flash save), and RESTORE asks ipmb_link.rs to save the built
+// image to the log. The data lives in the dispatch context that ipmb_link.rs owns. Decoding,
+// field names, lengths, parsing and printing come from ipmc_fru (`FruField`, `unit_field`) and
+// ipmc_core::sdr; nothing here parses a byte layout of its own.
 //
 // Nothing here runs in an interrupt handler.
 
+use core::fmt::Write;
+
+use ipmc_app::AnswerBuf;
+use ipmc_fru::date::DateRange;
 use ipmc_fru::persist::RECORD_LEN;
 use ipmc_fru::records::{self as fru, AreaKind};
+use ipmc_fru::{mfg_date, unit_field, FieldError, FieldValue, FruField};
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
 use crate::console::Context;
@@ -46,6 +54,71 @@ fn print_text(data: &[u8]) {
     }
 }
 
+/// print_mfg_date -- the manufacturing date line of the board area in FRU SHOW. The standard
+/// 3-byte field is 000000h (unspecified) by design: it ends at 2027-11-24 20:15, so the date is
+/// in the VITA 34h record (`print_multirecords`). A nonzero standard field (a Chassis Manager
+/// wrote it) is shown with its value and ignored; the next SET MFG_DATE writes it back to
+/// 000000h.
+fn print_mfg_date(image: &[u8]) {
+    let standard = match mfg_date(image) {
+        Ok(found) => found.standard,
+        Err(error) => {
+            out!("  Mfg date/time:     unreadable ({})\n", error.name());
+            return;
+        }
+    };
+    if standard == 0 {
+        out!("  Mfg date/time:     standard field 000000h (unspecified); the date is in the VITA 34h record\n");
+    } else {
+        out!(
+            "  Mfg date/time:     standard field {:06X}h = {} minutes since 1996-01-01 00:00 (ignored; the date is in the VITA 34h record)\n",
+            standard,
+            standard
+        );
+    }
+}
+
+/// print_multirecords -- the MultiRecord area of FRU SHOW: its offset and every record, the
+/// Alternate Mfg Date/Time record (VITA 34h) decoded with the date it holds. A missing area or
+/// record and a bad checksum are shown, not failed.
+fn print_multirecords(image: &[u8], units: u8) {
+    if units == 0 {
+        out!("MultiRecord area: absent (Mfg date/time unspecified)\n");
+        return;
+    }
+    out!(
+        "MultiRecord area at {:02X}h\n",
+        usize::from(units) * fru::AREA_ALIGN
+    );
+    let mut any = false;
+    for record in fru::multirecords(image, units) {
+        any = true;
+        out!(
+            "  Record at {:02X}h: type {:02X}h, {} data bytes, header checksum {}, data checksum {}\n",
+            record.offset,
+            record.type_id,
+            record.data.len(),
+            if record.header_ok { "OK" } else { "BAD" },
+            if record.data_ok { "OK" } else { "BAD" }
+        );
+        if let Some(minutes) = record.alt_mfg_minutes() {
+            out!("  Alternate Mfg Date/Time (VITA 34h): ");
+            if minutes == 0 {
+                out!("unspecified");
+            } else {
+                out!("{} UTC", FieldValue::Minutes(minutes));
+            }
+            if !(record.header_ok && record.data_ok) {
+                out!(" (checksum BAD: reads as unspecified)");
+            }
+            out!("\n");
+        }
+    }
+    if !any {
+        out!("  (no record)\n");
+    }
+}
+
 /// print_area -- one information area: its offset, length, checksum and every field.
 fn print_area(image: &[u8], kind: AreaKind, name: &str, units: u8, labels: &[&str]) {
     let offset = usize::from(units) * fru::AREA_ALIGN;
@@ -63,11 +136,8 @@ fn print_area(image: &[u8], kind: AreaKind, name: &str, units: u8, labels: &[&st
         area.bytes.len(),
         if area.checksum_ok { "OK" } else { "BAD" }
     );
-    if let Some(minutes) = area.mfg_minutes() {
-        out!(
-            "  Mfg date/time:     {} minutes since 1996-01-01 00:00\n",
-            minutes
-        );
+    if kind == AreaKind::Board {
+        print_mfg_date(image);
     }
     for (index, field) in area.fields().enumerate() {
         let label = labels.get(index).copied().unwrap_or("Custom field");
@@ -130,6 +200,7 @@ pub fn cmd_fru_show(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
         header.product,
         &PRODUCT_LABELS,
     );
+    print_multirecords(image, header.multirecord);
     Ok(())
 }
 
@@ -218,6 +289,94 @@ pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     Ok(())
 }
 
+/// print_value -- the current value of `field`: its text, `(empty)` for the no-data field, the
+/// date or `unspecified`, or the name of the error that stops the read.
+fn print_value(image: &[u8], field: FruField) {
+    match unit_field(image, field) {
+        Ok(FieldValue::Text("")) => out!("(empty)"),
+        Ok(value) => out!("{}", value),
+        Err(error) => out!("({})", error.name()),
+    }
+}
+
+/// cmd_fru_fields -- `FRU FIELDS`: every field with its maximum length and its current value, in
+/// the order of `FruField::ALL`.
+pub fn cmd_fru_fields(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    let image = ctx.ipmb.dispatch().fru.bytes();
+    for field in FruField::ALL {
+        out!("{:<16} max {:<2}  ", field.name(), field.max_len());
+        print_value(image, field);
+        out!("\n");
+    }
+    Ok(())
+}
+
+/// field_arg -- the field named by parameter 0, or the error line and `CmdError::Reported`.
+fn field_arg(args: &Args<'_>) -> Result<FruField, CmdError> {
+    let name = args.text_at(0)?;
+    FruField::from_name(name).ok_or_else(|| {
+        out!("Error: unknown field {} (FRU FIELDS lists them)\n", name);
+        CmdError::Reported
+    })
+}
+
+/// cmd_fru_get -- `FRU GET [FIELD]`: the current value of one field.
+pub fn cmd_fru_get(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+    let field = field_arg(args)?;
+    out!("{:<16} ", field.name());
+    print_value(ctx.ipmb.dispatch().fru.bytes(), field);
+    out!("\n");
+    Ok(())
+}
+
+/// VALUE_BUF -- room for the words of a SET value joined by single spaces: the longest FRU text
+/// is 63 bytes, so a longer join is `TooLong` whatever the field.
+const VALUE_BUF: usize = 64;
+
+/// report_field_error -- the `Error:` line of a refused field write: the field, the `FieldError`
+/// name and, where the error has a number or a range, that.
+fn report_field_error(field: FruField, error: FieldError) -> CmdError {
+    out!("Error: {} {}", field.name(), error.name());
+    match error {
+        FieldError::TooLong => out!(" (maximum {} bytes)", field.max_len()),
+        FieldError::BadDate => out!(" ({})", DateRange),
+        _ => {}
+    }
+    out!("\n");
+    CmdError::Reported
+}
+
+/// cmd_fru_set -- `FRU SET [FIELD] {VALUE...}`: writes one field through
+/// `IpmbLink::set_unit_field`, the path the application port uses. The value is the words after
+/// the field name joined by single spaces; no value clears a text field; MFG_DATE takes
+/// `YYYY-MM-DD HH:MM` (UTC). Answers the value as stored. Refused while NVMRO is asserted.
+pub fn cmd_fru_set(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+    let field = field_arg(args)?;
+    let mut value = AnswerBuf::<VALUE_BUF>::new();
+    for index in 1..args.len() {
+        let word = args.text_at(index)?;
+        let joined = if index > 1 {
+            value.write_str(" ")
+        } else {
+            Ok(())
+        };
+        if joined.and_then(|()| value.write_str(word)).is_err() {
+            return Err(report_field_error(field, FieldError::TooLong));
+        }
+    }
+    if let Err(error) = ctx.ipmb.set_unit_field(field, value.as_str()) {
+        return Err(report_field_error(field, error));
+    }
+    out!("OK: {} ", field.name());
+    print_value(ctx.ipmb.dispatch().fru.bytes(), field);
+    if ctx.ipmb.fru_log_status().is_some() {
+        out!("; saved to flash after the save delay (FRU STORE)\n");
+    } else {
+        out!("; kept in RAM only (the flash log is off)\n");
+    }
+    Ok(())
+}
+
 /// cmd_fru_restore -- saves the built image as a new log record (one record write: a power cut
 /// loads the previous image or the built one) and puts it back in the store. Asks nothing and
 /// prints what it did; refused while NVMRO is asserted (no non-volatile write, VITA 46.11
@@ -234,6 +393,10 @@ pub fn cmd_fru_restore(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
         }
         Err(RestoreError::Nvmro) => {
             out!("Error: NVMRO is asserted; the flash log is not written\n");
+            Err(CmdError::Reported)
+        }
+        Err(RestoreError::Busy) => {
+            out!("Error: busy (an IPMB request is in progress); nothing erased, try again\n");
             Err(CmdError::Reported)
         }
         Err(RestoreError::Failed(error)) => {

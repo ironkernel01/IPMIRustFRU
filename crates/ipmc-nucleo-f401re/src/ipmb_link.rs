@@ -19,7 +19,7 @@
 //
 // The FRU flash log (ipmc_fru::persist) is saved from `service`, once a Write FRU Data has been
 // quiet for IPMC_FRU_PERSIST_DELAY_MS. A save that has to erase the store sector first (once per
-// 60 records, when the 16 KB sector is full) takes both IPMB slaves off the bus (`PausedErase`):
+// 31 records, when the 16 KB sector is full) takes both IPMB slaves off the bus (`PausedErase`):
 // the core stalls on flash during an erase, so the board stays silent for that time (at most
 // 500 ms for the 16 KB sector, DS10086 Table 45; the console line "IPMB paused <n> ms" reports
 // the measured time) instead of stretching SCL in the middle of a frame.
@@ -41,7 +41,7 @@ use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
 use ipmc_core::trace::Trace;
 use ipmc_fru::persist::{FlashError, FlashLog, PersistError, Status};
-use ipmc_fru::{FieldError, FruStore, UnitField};
+use ipmc_fru::{FieldError, FruField, FruStore};
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
@@ -68,6 +68,12 @@ const PAUSE_WAIT_MS: u32 = ipmc_defs::IPMC_FRU_PAUSE_WAIT_MS;
 const FRU_ERASE_QUIET_MS: u32 = ipmc_defs::IPMC_FRU_ERASE_QUIET_MS;
 /// FRU_PERSIST_DELAY_MS -- quiet time before a Write FRU Data is saved (ipmi_defs.h).
 const FRU_PERSIST_DELAY_MS: u32 = ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
+/// URGENT_LINK_WAIT_MS -- longest an urgent save before a Cold Reset waits for the link to hold
+/// no accepted request and no untransmitted response before it erases anyway: the T5 response
+/// limit of 227 ms (VITA 46.11 Table 4.1.1-1) plus margin, so a request accepted just before
+/// still gets its answer out. After it the reset is imminent and the answer would be lost to
+/// the reset either way. Fixed by the specification limit, not a build tunable.
+const URGENT_LINK_WAIT_MS: u32 = 250;
 
 /// IpmbIo -- what the start-up code hands the link: the master, the consumer end of each bus's
 /// frame queue (None for a bus that is not fitted or whose I2C init failed) and the local fault
@@ -388,6 +394,10 @@ pub struct IpmbLink {
     /// A save tried while a Cold Reset was pending failed: the normal delay applies again, so a
     /// failing flash does not stall every pass until the reset wait runs out.
     reset_save_failed: bool,
+    /// SysTick time the urgent save (a Cold Reset is pending) first ran; None otherwise.
+    urgent_since: Option<u32>,
+    /// The urgent save gave up waiting for the idle link and said so (one console line).
+    urgent_forced: bool,
     /// The speed each bus's master and I2C peripheral run at (`apply_bus_speeds`); both start at
     /// 100 kHz (Rule 4.1.1-4.3), as the link does after any restart.
     applied_speed: [BusSpeed; FaultTracker::COUNT],
@@ -442,6 +452,10 @@ struct PausedErase<'a> {
     /// here, and the erase is deferred rather than racing it.
     rx_a: &'a Option<RxConsumer>,
     rx_b: &'a Option<RxConsumer>,
+    /// The link holds an accepted request not yet answered or a response not yet transmitted
+    /// (`Link::request_in_flight`, read when this value was made; nothing in the erase call
+    /// changes it): the erase is deferred.
+    link_busy: bool,
     /// The last erase that ran: milliseconds the IPMB was paused and the result. The owner of
     /// the log prints it through `IpmbLink::status`.
     erase_report: Option<(u32, Result<(), FlashError>)>,
@@ -476,11 +490,13 @@ impl PausedErase<'_> {
         Ok(paused)
     }
 
-    /// frame_waiting -- a received frame sits in a driver queue, not yet taken by `drain_rx`.
-    fn frame_waiting(&self) -> bool {
-        [self.rx_a, self.rx_b]
-            .into_iter()
-            .any(|rx| rx.as_ref().is_some_and(|c| c.peek().is_some()))
+    /// traffic_waiting -- a received frame sits in a driver queue, not yet taken by `drain_rx`,
+    /// or the link holds a request it has not answered or a response it has not transmitted.
+    fn traffic_waiting(&self) -> bool {
+        self.link_busy
+            || [self.rx_a, self.rx_b]
+                .into_iter()
+                .any(|rx| rx.as_ref().is_some_and(|c| c.peek().is_some()))
     }
 
     /// resume_all -- gives the suspended buses back to their slaves.
@@ -510,14 +526,15 @@ impl FlashLog for PausedErase<'_> {
         self.flash.millis()
     }
 
-    /// erase -- both slaves off, then a check of both receive queues: a frame accepted before the
-    /// slaves came off the bus (a request the Chassis Manager is waiting on) gives the buses back
-    /// and defers the erase (`FlashError::Deferred`, retried on a later pass). Otherwise the
+    /// erase -- both slaves off, then a check of both receive queues and of the link
+    /// (`traffic_waiting`): a frame accepted before the slaves came off the bus, or a request or
+    /// response the link still holds (a request the Chassis Manager is waiting on), gives the
+    /// buses back and defers the erase (`FlashError::Deferred`, retried on a later pass). Otherwise the
     /// erase, both slaves back on, and `erase_report` holds the time the board was silent
     /// (measured with the DWT cycle counter: SysTick does not run while the core waits on flash).
     fn erase(&mut self) -> Result<(), FlashError> {
         let paused = self.suspend_all()?;
-        if self.frame_waiting() {
+        if self.traffic_waiting() {
             self.resume_all(paused);
             return Err(FlashError::Deferred);
         }
@@ -537,6 +554,9 @@ pub enum RestoreError {
     LogOff,
     /// NVMRO is asserted: no non-volatile write (VITA 46.11 Rule 8-3, Rec 4.1.10-1).
     Nvmro,
+    /// The erase the restore needs was deferred: the link holds a request or a response, or a
+    /// frame is waiting (`PausedErase::traffic_waiting`). Nothing was erased; try again.
+    Busy,
     /// Erasing the log failed.
     Failed(PersistError),
 }
@@ -609,6 +629,8 @@ impl IpmbLink {
             ext: ipmc_ext::Active::default(),
             reset_gate: ResetGate::new(),
             reset_save_failed: false,
+            urgent_since: None,
+            urgent_forced: false,
             applied_speed: [BusSpeed::Standard; FaultTracker::COUNT],
             capture: DefaultLog::new(ipmc_defs::IPMC_LOG_AT_BOOT == 1),
             i2c_trace: ipmc_defs::IPMC_I2C_TRACE_AT_BOOT == 1,
@@ -661,6 +683,7 @@ impl IpmbLink {
             return Err(RestoreError::Nvmro);
         }
         let plan = self.erase_plan();
+        let link_busy = self.link.request_in_flight();
         let (persist, flash) = self.fru_log.parts().ok_or(RestoreError::LogOff)?;
         let mut paused = PausedErase {
             flash,
@@ -668,6 +691,7 @@ impl IpmbLink {
             plan,
             rx_a: &self.rx_a,
             rx_b: &self.rx_b,
+            link_busy,
             erase_report: None,
         };
         // The built image replaces the FRU content; the Tier-3 settings byte is not FRU content
@@ -680,6 +704,7 @@ impl IpmbLink {
         match restored {
             Ok(_) => {}
             Err(PersistError::Flash(FlashError::NvmroAsserted)) => return Err(RestoreError::Nvmro),
+            Err(PersistError::Flash(FlashError::Deferred)) => return Err(RestoreError::Busy),
             Err(error) => return Err(RestoreError::Failed(error)),
         }
         self.dispatch.set_fru(built);
@@ -708,7 +733,7 @@ impl IpmbLink {
     /// are); otherwise the dispatch context edits the RAM image and reruns the self test. The
     /// store is marked dirty, so `service_fru_log` saves the image after the usual delay: the
     /// one save path of every FRU change.
-    pub fn set_unit_field(&mut self, field: UnitField, value: &str) -> Result<(), FieldError> {
+    pub fn set_unit_field(&mut self, field: FruField, value: &str) -> Result<(), FieldError> {
         if ga::nvmro_asserted() {
             return Err(FieldError::Nvmro);
         }
@@ -725,6 +750,24 @@ impl IpmbLink {
         let now_ms = systick::millis();
         let reset_pending = self.dispatch.pending_reset.is_some();
         let urgent = reset_pending && !self.reset_save_failed;
+        // An urgent save waits URGENT_LINK_WAIT_MS for the link to go idle before an erase; the
+        // main loop keeps servicing the link meanwhile (the erase defers, `PausedErase`).
+        let urgent_since = if urgent {
+            *self.urgent_since.get_or_insert(now_ms)
+        } else {
+            self.urgent_since = None;
+            self.urgent_forced = false;
+            now_ms
+        };
+        let in_flight = self.link.request_in_flight();
+        let link_wait_over = urgent && now_ms.wrapping_sub(urgent_since) >= URGENT_LINK_WAIT_MS;
+        let link_busy = in_flight && !link_wait_over;
+        if link_wait_over && in_flight && !self.urgent_forced {
+            self.urgent_forced = true;
+            self.status(format_args!(
+                "FRU log: urgent save erases with the link still busy after {URGENT_LINK_WAIT_MS} ms"
+            ));
+        }
         let quiet = urgent || self.bus_quiet(now_ms);
         let delay_ms = if urgent { 0 } else { FRU_PERSIST_DELAY_MS };
         let Some((persist, flash)) = self.fru_log.parts() else {
@@ -736,6 +779,7 @@ impl IpmbLink {
             plan,
             rx_a: &self.rx_a,
             rx_b: &self.rx_b,
+            link_busy,
             erase_report: None,
         };
         let nvmro = self.dispatch.addr.nvmro_asserted;
@@ -845,14 +889,7 @@ impl IpmbLink {
     /// received in this pass reset the streak, the writes then add to it) and
     /// `clear_faulted_buses` after it.
     pub fn service(&mut self) {
-        let nvmro = ga::nvmro_asserted();
-        if nvmro != self.dispatch.addr.nvmro_asserted {
-            self.dispatch.addr.nvmro_asserted = nvmro;
-            LoggedTrace::new(&mut self.capture, self.ipmi_console).line(format_args!(
-                "NVMRO: {}",
-                if nvmro { "asserted" } else { "deasserted" }
-            ));
-        }
+        self.refresh_nvmro();
         self.drain_rx();
         let mut trace = LoggedTrace::new(&mut self.capture, self.ipmi_console);
         self.link.poll(
@@ -867,6 +904,20 @@ impl IpmbLink {
         self.service_fru_log();
         self.service_reset();
         self.apply_bus_speeds();
+    }
+
+    /// refresh_nvmro -- samples the NVMRO pin into the dispatch context (the one reader of the
+    /// pin for IPMI decisions); one console line when it changes. `service` and
+    /// `local_request` call it, so a request from any source sees the live level.
+    fn refresh_nvmro(&mut self) {
+        let nvmro = ga::nvmro_asserted();
+        if nvmro != self.dispatch.addr.nvmro_asserted {
+            self.dispatch.addr.nvmro_asserted = nvmro;
+            LoggedTrace::new(&mut self.capture, self.ipmi_console).line(format_args!(
+                "NVMRO: {}",
+                if nvmro { "asserted" } else { "deasserted" }
+            ));
+        }
     }
 
     /// apply_bus_speeds -- gives each running bus the speed the link holds for it (Set IPMB State
@@ -955,6 +1006,10 @@ impl IpmbLink {
             Some(ResetRequest::Cold) => {
                 self.status(format_args!("Cold Reset: restarting"));
                 uart::flush(uart::Port::Console);
+                // The answer to an application port request that asked for this reset may still
+                // sit in the APP_UART TX ring. `flush` is bounded by `flush_polls`; with CTS held
+                // off the bound runs out (counted as a TX timeout) and the reset goes ahead.
+                uart::flush(uart::Port::App);
                 reset_cause::keep_sequence(
                     self.link.next_request_seq(),
                     self.link.recent_request_seqs(now_ms),
@@ -1275,6 +1330,9 @@ impl IpmbLink {
         cmd: u8,
         data: &[u8],
     ) -> Result<(usize, [u8; IPMB_MAX_LEN]), LocalError> {
+        // The live NVMRO level, as `service` reads it: the handler of a local request (APP_UART
+        // IPMI, DEBUG IPMI, the start-up events-off request) decides on it like a bus request.
+        self.refresh_nvmro();
         let mut trace = LoggedTrace::new(&mut self.capture, false);
         self.link.local_request(
             &mut self.dispatch,

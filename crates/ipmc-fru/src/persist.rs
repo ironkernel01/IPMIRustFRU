@@ -10,8 +10,8 @@
 //! Single-sector trade-off (owner decision 10-25-2026, no second copy): a power cut between that
 //! erase and that write loses the stored image, and the next start-up loads the built image. The
 //! erase comes after `Persist::save_needs_erase` and happens once per `RECORDS_PER_SECTOR`
-//! saves: a record is `RECORD_LEN` bytes, so the 16 KB sector holds 16384 / RECORD_LEN = 60
-//! records (RECORD_LEN is 272 bytes at IPMC_FRU_SIZE 256) before the erase.
+//! saves: a record is `RECORD_LEN` bytes, so the 16 KB sector holds 16384 / RECORD_LEN = 31
+//! records (RECORD_LEN is 528 bytes at IPMC_FRU_SIZE 512) before the erase.
 //!
 //! Record (little-endian, every field word-aligned, `RECORD_LEN` bytes, SIZE = IPMC_FRU_SIZE):
 //!

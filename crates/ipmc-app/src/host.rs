@@ -11,7 +11,7 @@ use core::fmt;
 use ipmc_core::fru_state::State;
 use ipmc_core::ipmb::IPMB_MAX_LEN;
 use ipmc_core::sensor::{PowerState, Summary};
-use ipmc_fru::{FieldError, UnitField};
+use ipmc_fru::{FieldError, FruField};
 
 /// Status -- the values the `STATUS` answer reports, read at the moment of the request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,13 +109,13 @@ pub trait AppHost {
     /// unit_field -- writes the value of `f` as stored in the FRU image to `out`: the text of a
     /// text field (nothing for an empty one), `YYYY-MM-DD HH:MM` for the date. The firmware reads
     /// the RAM copy of the FRU image, the one a Chassis Manager reads with Read FRU Data.
-    fn unit_field(&self, f: UnitField, out: &mut dyn fmt::Write) -> Result<(), FieldError>;
+    fn unit_field(&self, f: FruField, out: &mut dyn fmt::Write) -> Result<(), FieldError>;
 
     /// set_unit_field -- writes `value` into the field `f` of the FRU image. The firmware
     /// refuses while NVMRO is asserted (`FieldError::Nvmro`), edits the RAM image in place
     /// (`FruStore::set_unit_field`) and reruns the self test. The change reaches the flash log
     /// through the same dirty mark and save delay as a Write FRU Data from the Chassis Manager.
-    fn set_unit_field(&mut self, f: UnitField, value: &str) -> Result<(), FieldError>;
+    fn set_unit_field(&mut self, f: FruField, value: &str) -> Result<(), FieldError>;
 
     /// ipmi -- runs one IPMI request locally, as if the Chassis Manager had sent it, and returns
     /// the completion code with the response data. Nothing goes on the IPMB. The firmware uses

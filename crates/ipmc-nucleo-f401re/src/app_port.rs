@@ -29,7 +29,7 @@ use ipmc_app::{
 };
 use ipmc_core::fru_state::State;
 use ipmc_core::link::LocalError;
-use ipmc_fru::{FieldError, UnitField};
+use ipmc_fru::{FieldError, FruField};
 
 use crate::bsp::systick;
 use crate::bsp::uart::{self, Port};
@@ -48,6 +48,13 @@ const BYTES_PER_POLL: u32 = ipmc_defs::IPMC_APP_BYTES_PER_POLL;
 /// CRLF -- the end of every answer line.
 const CRLF: &[u8] = b"\r\n";
 
+// The TX ring keeps one slot empty, so it takes IPMC_APP_UART_TX_BUF - 1 bytes: a longest answer
+// and its CR LF must fit whole, or `send` drops it.
+const _: () = assert!(
+    ipmc_defs::IPMC_APP_UART_TX_BUF as usize > ANSWER_MAX + CRLF.len(),
+    "IPMC_APP_UART_TX_BUF must take the longest answer (ipmc_app::ANSWER_MAX) plus CR LF"
+);
+
 /// ANSWERS_DROPPED -- answers the TX ring had no room for. Only the main loop writes it.
 static ANSWERS_DROPPED: AtomicU32 = AtomicU32::new(0);
 
@@ -59,10 +66,8 @@ pub fn answers_dropped() -> u32 {
 /// AppPort -- the line assembler of the port; the main loop calls `poll` every pass.
 pub struct AppPort {
     assembler: LineAssembler<LINE_MAX>,
-    /// Bytes the port had lost (UART overrun plus RX ring overflow) when the previous line ended.
-    /// The baseline is taken at the end of the previous line, not at the first byte of this one,
-    /// so a lost first byte of a line is counted against that line.
-    lost_at_line_start: u32,
+    /// `lost_bytes()` at the last poll that looked: a move means bytes were lost since.
+    lost_seen: u32,
 }
 
 /// lost_bytes -- bytes the application port has lost since reset (overrun and RX overflow).
@@ -76,17 +81,29 @@ impl AppPort {
     pub const fn new() -> Self {
         AppPort {
             assembler: LineAssembler::new(),
-            lost_at_line_start: 0,
+            lost_seen: 0,
         }
     }
 
-    /// poll -- one main-loop pass. Takes at most BYTES_PER_POLL bytes from the UART RX ring and
-    /// answers at most one request line: the pass ends after the answer, so a payload CPU that
-    /// sends many requests cannot hold the IPMB link service off. Does nothing when the port is
-    /// off or did not start.
+    /// poll -- one main-loop pass. When the port lost bytes since the previous pass, discards
+    /// everything in the UART RX ring and marks the assembler damaged: the next line end is
+    /// answered `ERR LINE_DAMAGED` and not run, lines after it run normally (ipmc-app lib.rs).
+    /// Then takes at most BYTES_PER_POLL bytes and answers at most one request line: the pass
+    /// ends after the answer, so a payload CPU that sends many requests cannot hold the IPMB
+    /// link service off. Does nothing when the port is off or did not start.
     pub fn poll(&mut self, link: &mut IpmbLink) {
         if !ENABLED || !uart::is_up(Port::App) {
             return;
+        }
+        // The loss is not tied to a line: the byte can be anywhere in the ring, so every byte
+        // waiting is dropped and the line assembler resynchronises at the next line end.
+        let lost_now = lost_bytes();
+        let moved = lost_now.wrapping_sub(self.lost_seen);
+        if moved > 0 {
+            uart::discard_rx(Port::App);
+            self.assembler.damage(moved);
+            self.lost_seen = lost_now;
+            link.log_text(format_args!("app port lost {moved} bytes, ring discarded"));
         }
         for _ in 0..BYTES_PER_POLL {
             let Some(byte) = uart::getc(Port::App) else {
@@ -100,12 +117,12 @@ impl AppPort {
                     "app request (line longer than {LINE_MAX} bytes)"
                 )),
                 Fed::BadChar => link.log_text(format_args!("app request (not printable ASCII)")),
+                Fed::Damaged(lost) => {
+                    link.log_text(format_args!("app request (damaged, {lost} bytes lost)"))
+                }
             }
-            // Bytes lost since the previous line ended: the line is answered, not run (R4).
-            let lost = lost_bytes().wrapping_sub(self.lost_at_line_start);
             let mut out = AnswerBuf::<ANSWER_MAX>::new();
-            ipmc_app::respond(fed, lost, &mut LinkHost { link: &mut *link }, &mut out);
-            self.lost_at_line_start = lost_bytes();
+            ipmc_app::respond(fed, &mut LinkHost { link: &mut *link }, &mut out);
             if out.overflowed() {
                 out.clear();
                 // The fixed text fits the empty buffer.
@@ -156,11 +173,11 @@ impl AppHost for LinkHost<'_> {
         self.link.dispatch().fru_state.state()
     }
 
-    fn unit_field(&self, f: UnitField, out: &mut dyn fmt::Write) -> Result<(), FieldError> {
+    fn unit_field(&self, f: FruField, out: &mut dyn fmt::Write) -> Result<(), FieldError> {
         ipmc_fru::write_unit_field(self.link.dispatch().fru.bytes(), f, out)
     }
 
-    fn set_unit_field(&mut self, f: UnitField, value: &str) -> Result<(), FieldError> {
+    fn set_unit_field(&mut self, f: FruField, value: &str) -> Result<(), FieldError> {
         self.link.set_unit_field(f, value)
     }
 

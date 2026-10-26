@@ -11,7 +11,7 @@ use core::fmt::{self, Write};
 use ipmc_core::fru_state::State;
 use ipmc_core::ipmb::IPMB_MAX_LEN;
 use ipmc_core::sensor::{PowerState, Summary};
-use ipmc_fru::{FieldError, UnitField};
+use ipmc_fru::{FieldError, FruField};
 
 use crate::host::{AppHost, SaveState};
 use crate::line::{AnswerBuf, Fed};
@@ -108,19 +108,19 @@ pub const COMMANDS: &[AppCommand] = &[
     AppCommand {
         keyword: "GET",
         args: "<field>",
-        help: "read a per-unit FRU field as stored",
+        help: "read a FRU field as stored",
         handler: cmd_get,
     },
     AppCommand {
         keyword: "SET",
         args: "<field> [value]",
-        help: "write a per-unit FRU field; no value clears it",
+        help: "write a FRU field; no value clears it",
         handler: cmd_set,
     },
     AppCommand {
         keyword: "FIELDS",
         args: "",
-        help: "the per-unit FRU fields and the longest value of each",
+        help: "the FRU fields and the longest value of each",
         handler: cmd_fields,
     },
     AppCommand {
@@ -208,26 +208,18 @@ fn answer_line(line: &str, host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::
     }
 }
 
-/// respond -- answers what `LineAssembler::push` returned. `lost` is the bytes the port lost
-/// since the previous line ended (UART overrun and receive-ring overflow counters). A line that
-/// completes with `lost` above 0 is not run: it gets `ERR LINE_DAMAGED <n> bytes lost on the
-/// port`, with the tag echoed when the line had a valid one, because a changed request must
-/// never act. Otherwise a line goes to `answer`; a line that was too long or held a byte other
-/// than printable ASCII gets its own `ERR` answer (the request is lost, so no tag can be
-/// echoed). Returns true when an answer was written, false for `Fed::Nothing`.
+/// respond -- answers what `LineAssembler::push` returned. A line goes to `answer`; a line that
+/// was too long or held a byte other than printable ASCII gets its own `ERR` answer (the request
+/// is lost, so no tag can be echoed). `Fed::Damaged(n)` answers `ERR LINE_DAMAGED <n> bytes lost
+/// on the port` without a tag (the tag may be among the lost bytes) and runs nothing, because a
+/// changed request must never act. Returns true when an answer was written, false for
+/// `Fed::Nothing`.
 ///
-/// A payload that writes a field compares the `OK <FIELD> <value>` echo of `SET` with what it
-/// sent; a byte lost without any counter (a framing error) shows there.
-pub fn respond(fed: Fed<'_>, lost: u32, host: &mut dyn AppHost, out: &mut dyn Write) -> bool {
-    if lost > 0 {
-        let line = match fed {
-            Fed::Nothing => return false,
-            Fed::Line(line) => line,
-            Fed::TooLong | Fed::BadChar => "",
-        };
-        let _ = damaged(line, lost, out);
-        return true;
-    }
+/// Lines that were complete inside the bytes the firmware discarded after a loss get no answer
+/// at all; the payload's answer timeout covers them. A payload that writes a field also compares
+/// the `OK <FIELD> <value>` echo of `SET` with what it sent; a byte lost without any counter (a
+/// framing error) shows there.
+pub fn respond(fed: Fed<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> bool {
     let _ = match fed {
         Fed::Nothing => return false,
         Fed::Line(line) => {
@@ -244,27 +236,19 @@ pub fn respond(fed: Fed<'_>, lost: u32, host: &mut dyn AppHost, out: &mut dyn Wr
             "ARGS",
             format_args!("only printable ASCII is accepted"),
         ),
+        Fed::Damaged(lost) => err(
+            out,
+            "LINE_DAMAGED",
+            format_args!("{lost} bytes lost on the port"),
+        ),
     };
     true
-}
-
-/// damaged -- `ERR LINE_DAMAGED <lost> bytes lost on the port`, after the tag of `line` when it
-/// has a valid one.
-fn damaged(line: &str, lost: u32, out: &mut dyn Write) -> fmt::Result {
-    if let Some((tag, _)) = leading_tag(line).filter(|(tag, _)| valid_tag(tag)) {
-        write!(out, "#{tag} ")?;
-    }
-    err(
-        out,
-        "LINE_DAMAGED",
-        format_args!("{lost} bytes lost on the port"),
-    )
 }
 
 // ---- handlers ----
 
 /// cmd_help -- `HELP` lists the keywords: `OK HELP HELP HELLO STATUS ...`. `HELP <keyword>`
-/// describes one: `OK HELP SET <field> [value] - write a per-unit FRU field`. An unknown keyword
+/// describes one: `OK HELP SET <field> [value] - write a FRU field`. An unknown keyword
 /// is `ERR UNKNOWN <word>`.
 fn cmd_help(request: &Request<'_>, _host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::Result {
     let mut tokens = request.tokens();
@@ -352,7 +336,7 @@ fn cmd_fru(request: &Request<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
 
 /// field_error -- writes the `ERR` line of a failed field access. `field` gives the `max=` of
 /// `TOO_LONG`.
-fn field_error(out: &mut dyn Write, error: FieldError, field: UnitField) -> fmt::Result {
+fn field_error(out: &mut dyn Write, error: FieldError, field: FruField) -> fmt::Result {
     match error {
         FieldError::TooLong => err(out, "TOO_LONG", format_args!("max={}", field.max_len())),
         FieldError::BadLength => err(
@@ -370,7 +354,7 @@ fn field_error(out: &mut dyn Write, error: FieldError, field: UnitField) -> fmt:
         FieldError::BadDate => err(
             out,
             "BAD_DATE",
-            format_args!("use YYYY-MM-DD HH:MM (UTC), from 1996-01-01"),
+            format_args!("{}", ipmc_fru::date::DateRange),
         ),
         FieldError::AreaMissing | FieldError::Corrupt => {
             err(out, "FRU_IMAGE", format_args!("{}", error.name()))
@@ -379,8 +363,8 @@ fn field_error(out: &mut dyn Write, error: FieldError, field: UnitField) -> fmt:
 }
 
 /// field_of -- the field named by `word`, or the `ERR ARGS` line.
-fn field_of(word: &str, out: &mut dyn Write) -> Result<UnitField, fmt::Result> {
-    UnitField::from_name(word).ok_or_else(|| {
+fn field_of(word: &str, out: &mut dyn Write) -> Result<FruField, fmt::Result> {
+    FruField::from_name(word).ok_or_else(|| {
         err(
             out,
             "ARGS",
@@ -391,7 +375,7 @@ fn field_of(word: &str, out: &mut dyn Write) -> Result<UnitField, fmt::Result> {
 
 /// echo_field -- writes `OK <FIELD> <value>` for the value the host holds now; an empty value
 /// prints nothing after the name. On a host error nothing of the `OK` line is written.
-fn echo_field(host: &dyn AppHost, field: UnitField, out: &mut dyn Write) -> fmt::Result {
+fn echo_field(host: &dyn AppHost, field: FruField, out: &mut dyn Write) -> fmt::Result {
     let mut value = AnswerBuf::<VALUE_MAX>::new();
     if let Err(error) = host.unit_field(field, &mut value) {
         return field_error(out, error, field);
@@ -461,11 +445,11 @@ pub(crate) fn set_field(
     }
 }
 
-/// cmd_fields -- `FIELDS` answers `OK FIELDS BOARD_SERIAL=<max> BOARD_PART=<max> ...`: every
+/// cmd_fields -- `FIELDS` answers `OK FIELDS BOARD_MFR=<max> BOARD_PRODUCT=<max> ...` (all thirteen): every
 /// field with the longest value it takes, in bytes.
 fn cmd_fields(_request: &Request<'_>, _host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::Result {
     write!(out, "OK FIELDS")?;
-    UnitField::ALL
+    FruField::ALL
         .iter()
         .try_for_each(|field| write!(out, " {}={}", field.name(), field.max_len()))
 }

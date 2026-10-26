@@ -303,7 +303,8 @@ ipmc
   SENSORS SHOW | SDR | TRACE {LEVEL}
   POWER   ON | OFF | CLEAR | STATUS
   SIM     RAIL {N} {MV} | TEMP {DC} | FAULT {NAME} {STATE} | SHOW
-  FRU     SHOW | DUMP {OFFSET} {COUNT} | STORE | RESTORE
+  FRU     SHOW | DUMP {OFFSET} {COUNT} | STORE | FIELDS | GET [FIELD]
+          | SET [FIELD] {VALUE...} | RESTORE        (SET and RESTORE: IPMC_FRU_CONSOLE_WRITE 1)
   DEBUG   STATUS | LOG {STATE} | DUMP {FORMAT} | CLEAR | TRACE {WHAT} {STATE} | EVENTS {STATE}
           | IPMI [NETFN] [CMD] {DATA...} | INJECT [BUS] {BYTES...} | CACHE {ACTION}
   STATUS  (alias of SYS STATUS)
@@ -339,19 +340,25 @@ ipmc
 | 25 | cmd_fru_show | `FRU SHOW` | - | - | 2 | 2 | FRU image decoded: common header, board and product areas, checksums |
 | 26 | cmd_fru_dump | `FRU DUMP {OFFSET} {COUNT}` | - | OFFSET, COUNT | 2 | 4 | Hex dump of the FRU image; default offset 0 and the rest of the area |
 | 27 | cmd_fru_store | `FRU STORE` | - | - | 2 | 2 | Flash log state: records, newest sequence, free bytes, pending write, next erase |
-| 28 | cmd_fru_restore | `FRU RESTORE` | - | - | 2 | 2 | Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted |
-| 29 | cmd_debug_status | `DEBUG STATUS` | - | - | 2 | 2 | Debug switches, capture log use, event receiver, duplicate cache |
-| 30 | cmd_debug_log | `DEBUG LOG {STATE}` | - | STATE | 2 | 3 | Capture log ON or OFF; no argument shows its state |
-| 31 | cmd_debug_dump | `DEBUG DUMP {FORMAT}` | - | FORMAT | 2 | 3 | Print the capture log: CSV (default) or TRACE; any key stops it |
-| 32 | cmd_debug_clear | `DEBUG CLEAR` | - | - | 2 | 2 | Empty the capture log |
-| 33 | cmd_debug_trace | `DEBUG TRACE {WHAT} {STATE}` | - | WHAT, STATE | 2 | 4 | Console trace: IPMI (request, link and event lines) or I2C (one line per frame), ON or OFF |
-| 34 | cmd_debug_events | `DEBUG EVENTS {STATE}` | - | STATE | 2 | 3 | Event messages ON (receiver 20h) or OFF (receiver FFh) |
-| 35 | cmd_debug_ipmi | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | NETFN, CMD | DATA... | 4 | rest | Run one IPMI request locally, as from 20h; nothing goes on the bus |
-| 36 | cmd_debug_inject | `DEBUG INJECT [BUS] {BYTES...}` | BUS | BYTES... | 3 | rest | Hand a whole IPMB frame to the link as if received on bus A or B |
-| 37 | cmd_debug_cache | `DEBUG CACHE {ACTION}` | - | ACTION | 2 | 3 | Duplicate cache: no argument shows the entries, CLEAR empties it |
+| 28 | cmd_fru_fields | `FRU FIELDS` | - | - | 2 | 2 | Every FRU field with its maximum length and its current value |
+| 29 | cmd_fru_get | `FRU GET [FIELD]` | FIELD | - | 3 | 3 | Current value of one FRU field; FRU FIELDS lists the names |
+| 30 | cmd_fru_set | `FRU SET [FIELD] {VALUE...}` | FIELD | VALUE... | 3 | rest | Write a FRU field (no value clears a text field; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted |
+| 31 | cmd_fru_restore | `FRU RESTORE` | - | - | 2 | 2 | Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted |
+| 32 | cmd_debug_status | `DEBUG STATUS` | - | - | 2 | 2 | Debug switches, capture log use, event receiver, duplicate cache |
+| 33 | cmd_debug_log | `DEBUG LOG {STATE}` | - | STATE | 2 | 3 | Capture log ON or OFF; no argument shows its state |
+| 34 | cmd_debug_dump | `DEBUG DUMP {FORMAT}` | - | FORMAT | 2 | 3 | Print the capture log: CSV (default) or TRACE; any key stops it |
+| 35 | cmd_debug_clear | `DEBUG CLEAR` | - | - | 2 | 2 | Empty the capture log |
+| 36 | cmd_debug_trace | `DEBUG TRACE {WHAT} {STATE}` | - | WHAT, STATE | 2 | 4 | Console trace: IPMI (request, link and event lines) or I2C (one line per frame), ON or OFF |
+| 37 | cmd_debug_events | `DEBUG EVENTS {STATE}` | - | STATE | 2 | 3 | Event messages ON (receiver 20h) or OFF (receiver FFh) |
+| 38 | cmd_debug_ipmi | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | NETFN, CMD | DATA... | 4 | rest | Run one IPMI request locally, as from 20h; nothing goes on the bus |
+| 39 | cmd_debug_inject | `DEBUG INJECT [BUS] {BYTES...}` | BUS | BYTES... | 3 | rest | Hand a whole IPMB frame to the link as if received on bus A or B |
+| 40 | cmd_debug_cache | `DEBUG CACHE {ACTION}` | - | ACTION | 2 | 3 | Duplicate cache: no argument shows the entries, CLEAR empties it |
 
 `rest` in the Max column means any number of words up to `MENU_TOKENS_MAX`: the last token is a
-`{NAME...}` token (section 5). The DEBUG words are hex bytes, typed as `06`, `0x06` or `6`; the
+`{NAME...}` token (section 5). The FRU group table is chosen at compile time from
+`IPMC_FRU_CONSOLE_WRITE`: with 0 the rows `FRU SET` and `FRU RESTORE` are not in it (rows 30 and 31
+above; `HELP` does not list them and a typed `SET` is an unknown command). `FRU SET` joins its
+value words with single spaces; `MFG_DATE` takes `YYYY-MM-DD HH:MM` (UTC). The DEBUG words are hex bytes, typed as `06`, `0x06` or `6`; the
 handlers parse them with `ipmc_wire::hex_word` and report `'<word>' is not a hex byte` for another
 form. `DEBUG DUMP` prints a header line, then the rows over the following main-loop passes, then
 `# end of capture`; a received byte other than a line feed stops it with `# dump stopped`, and a new
@@ -368,7 +375,7 @@ Groups:
 | `SENSORS` | Voltage rails, die temperature, inputs and Tier-1 readings |
 | `POWER` | Payload power enable |
 | `SIM` | Simulated sensor inputs |
-| `FRU` | FRU image, its decoded areas and the flash log |
+| `FRU` | FRU image, its decoded areas, its fields and the flash log |
 | `DEBUG` | Test switches, the IPMB capture log and local IPMI requests |
 
 Further groups are added by the phases that own them; each is

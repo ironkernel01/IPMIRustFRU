@@ -259,7 +259,7 @@ the private Tier-2/3 extension enters the build.
 |---|---|---|
 | `ipmc-defs` | `no_std` library | the only Rust reader of `ipmi_defs.h` (and of the extension's header when the extension is built in): one `pub const` per define, compile-time guards on every value, the IPMB timing arithmetic (`i2c_timing.rs`) and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
 | `ipmc-wire` | `no_std` library | IPMI byte primitives: zero checksum, const record builder, type/length ASCII field, CRC-32, hex-byte parser |
-| `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the per-unit field editor (`unit.rs`), the RAM scratchpad (`FruStore`) and the flash store (`persist`) |
+| `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the FRU field editor (`unit.rs`) and the manufacturing date (`date.rs`), the RAM scratchpad (`FruStore`) and the flash store (`persist`) |
 | `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, byte ring, capture log, command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
 | `ipmc-ext` | `no_std` library, `forbid(unsafe_code)` | the bridge: `ipmc_ext::Active` is `NoExtension` in the Tier-1 build and the extension's state when `ipmc-defs` found it; the firmware and the emulator hold one `Active` |
 | `ipmc-sensors` | `no_std` library | sensor and board-I/O HAL: four traits, hardware-free evaluation, drivers (simulation, STM32F401 ADC/GPIO behind feature `stm32f401`, example I2C/SPI parts), board table, sampling monitor, payload reset pulse timing, GPIO pin ownership |
@@ -313,7 +313,7 @@ the private Tier-2/3 extension enters the build.
   validates against a read-only view and leaves the change for `Link::poll`, which applies it
   before the response is queued.
 - The FRU flash store (`ipmc-fru/src/persist.rs`) is an append-only log in one sector (flash
-  sector 1, 16 KB, 60 records of 272 bytes) with a commit word programmed last and a CRC-32 per
+  sector 1, 16 KB, 31 records of 528 bytes) with a commit word programmed last and a CRC-32 per
   record; the highest sequence number wins at boot, and a power cut at any word of an append
   leaves the previous record loadable. The save that finds the sector full erases it and writes
   the newest image first (owner decision 10-25-2026, no second copy): a power cut between that
@@ -484,7 +484,7 @@ decision 24).
 | `IPMB_FAULT_STREAK` | 8 | consecutive bus-fault errors before a bus is marked faulted (2..=64) |
 | `IPMB_FAULT_CLEAR_MS` | 1000 | both lines idle-high this long before a fault clears |
 | `IPMC_IPMI_TRACE` | 1 | one trace line per dispatched request, and the link and event lines (failed transmissions, resends, requests sent). 0 removes the link and dispatcher lines at compile time, so they are absent from the capture log as well as from the console; the status lines stay (FRU log saves, bus faults, bus speed changes, resets, and the FRU state change line) |
-| `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=65536, a power of two); the usable size is one byte less, because the ring keeps a slot empty; each `DEBUG DUMP` row walks the log from its start, so a larger log makes the dump slower per row |
+| `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=16384, a power of two; the stack reservation check of `link.x` fails a build whose statics leave too little RAM); the usable size is one byte less, because the ring keeps a slot empty; each `DEBUG DUMP` row walks the log from its start, so a larger log makes the dump slower per row |
 | `IPMC_LOG_TEXT_MAX` | 160 | longest trace line the log keeps, bytes (32..=200); a longer line is cut and ends in `...` |
 
 ### Straps, identity and FRU
@@ -499,11 +499,12 @@ decision 24).
 | `IPMC_SUPPORT_*` | sensor 1, FRU inventory 1, others 0 | Get Device ID byte 7 |
 | `IPMC_MANUFACTURER_ID` | 000000h | unspecified until an IANA enterprise number is registered |
 | `IPMC_PRODUCT_ID` | 494Bh | product ID |
-| `IPMC_FRU_BOARD_*`, `IPMC_FRU_PRODUCT_*`, `IPMC_FRU_FILE_ID`, `IPMC_FRU_ASSET_TAG` | strings | FRU board and product area fields |
-| `IPMC_FRU_MFG_MINUTES` | 16204320 | board manufacturing date, minutes since 1996-01-01 (10-23-2026) |
-| `IPMC_FRU_SIZE` | 256 | FRU inventory area size |
+| `IPMC_FRU_BOARD_*`, `IPMC_FRU_PRODUCT_*`, `IPMC_FRU_FILE_ID` (the board file ID), `IPMC_FRU_PRODUCT_FILE_ID` (empty), `IPMC_FRU_ASSET_TAG` | strings | FRU board and product area fields |
+| `IPMC_FRU_MFG_DATE` | `2026-10-23 00:00` | manufacturing date, `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59; the build checks it with the date parser of `date.rs`. It is the default of the VITA 34h record (section 6.2) |
+| `IPMC_FRU_SIZE` | 512 | FRU inventory area size: the built image with every field's reserved room and the 14-byte date record (section 9.2); the flash record is 528 bytes, 31 per sector |
+| `IPMC_FRU_CONSOLE_WRITE` | 1 | 1 = the console `FRU` menu sets every field (`SET`) and restores the built image (`RESTORE`); 0 = the menu is read only (`SHOW`, `DUMP`, `STORE`, `FIELDS`, `GET`) and `SET` and `RESTORE` do not exist (not in `HELP`, a typed `SET` is an unknown command) |
 | `IPMC_FRU_PERSIST` | 1 | Write FRU Data and the application port survive reset (the flash store, sector 1 alone, 16 KB); 0 keeps the FRU in RAM and a reset restores the built image |
-| `IPMC_FRU_BOARD_SERIAL_MAX`, `IPMC_FRU_BOARD_PART_MAX`, `IPMC_FRU_PRODUCT_PART_MAX`, `IPMC_FRU_PRODUCT_SERIAL_MAX`, `IPMC_FRU_ASSET_TAG_MAX` | 24 each | room the built areas reserve for each per-unit text field, bytes, whatever the default string's length (the serial numbers 17..=63, so that a MAC address text fits; the others 2..=63). An update up to this length rewrites its field in place and no area moves |
+| `IPMC_FRU_BOARD_MFR_MAX`, `IPMC_FRU_BOARD_PRODUCT_MAX`, `IPMC_FRU_BOARD_SERIAL_MAX`, `IPMC_FRU_BOARD_PART_MAX`, `IPMC_FRU_BOARD_FILE_ID_MAX`, `IPMC_FRU_PRODUCT_MFR_MAX`, `IPMC_FRU_PRODUCT_NAME_MAX`, `IPMC_FRU_PRODUCT_PART_MAX`, `IPMC_FRU_PRODUCT_VERSION_MAX`, `IPMC_FRU_PRODUCT_SERIAL_MAX`, `IPMC_FRU_ASSET_TAG_MAX`, `IPMC_FRU_PRODUCT_FILE_ID_MAX` | 24, 32, 24, 24, 16, 24, 32, 24, 16, 24, 24, 16 | room the built areas reserve for each text field, bytes, whatever the default string's length (the serial numbers 17..=63, so that a MAC address text fits; the others 2..=63; each default must fit). An update up to this length rewrites its field in place and no area moves. The product version default must equal the crate's major.minor; a value written later is not checked against it |
 | `IPMC_FRU_PERSIST_DELAY_MS` | 1000 | quiet time after the last write before a save |
 | `IPMC_FRU_SCAN_CHUNK` | 64 | bytes per read when the log checks a range for erased flash (a multiple of 4, 16..=272; the buffer lives on the stack) |
 | `IPMC_FRU_ERASE_QUIET_MS` | 500 | run-time erase waits for an empty egress queue and this long without a received frame |
@@ -522,7 +523,7 @@ decision 24).
 | `IPMC_APP_UART_ENABLE` | 1 | the application port APP_UART (USART1) runs; 0 leaves USART1 off and parks its pins |
 | `IPMC_APP_UART_BAUD` | 115200 | application port baud rate, 8N1 |
 | `IPMC_APP_UART_FLOW` | 0 | 1 = RTS/CTS hardware handshake on PA12/PA11; 0 = TX and RX only, and PA11/PA12 stay unclaimed |
-| `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2) |
+| `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) one longest answer (`ANSWER_MAX`) plus CR LF, checked at compile time in `app_port.rs` |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
 | `IPMC_APP_FRU_WRITE` | 1 | the application port may `SET` the unit fields and run the IPMI Write FRU Data request; 0 refuses both with `ERR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
@@ -630,34 +631,74 @@ emulator and tools).
 
 `crates/ipmc-fru/src/records.rs`
 
-Builds the 256-byte FRU 0 image at compile time from the `IPMC_FRU_*` strings: the 8-byte Common
+Builds the 512-byte FRU 0 image at compile time from the `IPMC_FRU_*` strings: the 8-byte Common
 Header (version 1, Internal Use 00h, Chassis Info 00h, Board Info at offset 01h = byte 8,
-Product Info at offset 0Eh = byte 112 (70h), MultiRecord 00h, checksum F0h), the Board Info Area
-(104 bytes: language, manufacturing date, manufacturer, product name, serial, part number, FRU
-file ID, C1h end marker, room for the unit fields, padding, checksum) and the Product Info Area
-(120 bytes: language, manufacturer, name, part or model number, version, serial, asset tag, an
-empty file ID, C1h, room, padding, checksum), 232 bytes in all (`IMAGE_LEN`), then 00h padding to
-`IPMC_FRU_SIZE`. The room is a run of 00h bytes after the C1h marker that FRU Information
-Storage Definition section 10 allows up to the area length: each unit field reserves its
-`IPMC_FRU_*_MAX` bytes whatever the default string's length. A string the area cannot hold or an
-image larger than the area fails the build. The decoder
-(`common_header`, `area`, `Area::fields`) and `verify` check a possibly rewritten image: header
-version and checksum, area versions, lengths, zero checksums and end-of-fields markers.
+Product Info at offset 12h = byte 144 (90h), MultiRecord at offset 28h = byte 320 (140h), checksum
+C4h), the Board Info Area (136 bytes: language, the standard manufacturing date 000000h,
+manufacturer, product name, serial, part number, FRU file ID, C1h end marker, room for the
+fields, padding, checksum), the Product Info Area (176 bytes: language, manufacturer, name, part
+or model number, version, serial, asset tag, an empty file ID, C1h, room, padding, checksum) and
+the MultiRecord area with the one 14-byte Alternate Manufacturing Date/Time record, 334 bytes in
+all (`IMAGE_LEN`), then 00h padding to `IPMC_FRU_SIZE`. The room is a run of 00h bytes after the
+C1h marker that FRU Information Storage Definition section 10 allows up to the area length: each
+text field reserves its `IPMC_FRU_*_MAX` bytes whatever the default string's length, so the pad
+at the end of an area is the sum over its fields of `MAX` less the default's length (58 bytes in
+the board area, 104 in the product area by default). A string the area cannot hold or an image
+larger than the area fails the build. The decoder (`common_header`, `area`, `Area::fields`,
+`multirecords`) and `verify` check a possibly rewritten image: header version and checksum, area
+versions, lengths, zero checksums, end-of-fields markers and the MultiRecord chain.
+
+The manufacturing date is the VITA 46.11 Alternate Manufacturing Date/Time record (Table
+10.3.10-1, VITA record 34h), 14 bytes in the MultiRecord area:
+
+| Offset | Size | Content |
+|---:|---:|---|
+| 0 | 1 | record type ID C0h (OEM) |
+| 1 | 1 | 82h: end-of-list bit 7 set, bits 6:4 zero, record format version 2h |
+| 2 | 1 | 09h, the record length after the 5-byte header |
+| 3 | 1 | record checksum: zero checksum of bytes 5..13 |
+| 4 | 1 | header checksum: zero checksum of bytes 0..3 |
+| 5 | 3 | `AC 81 00`, the VITA manufacturer ID 0081ACh, least significant byte first |
+| 8 | 1 | 34h, the VITA record ID |
+| 9 | 1 | 00h, the record format version |
+| 10 | 4 | minutes since 1996-01-01 00:00 UTC, least significant byte first; 00000000h = unspecified |
+
+The standard 3-byte Mfg Date/Time of the Board Info Area (FRU spec Table 11-1) holds minutes
+since 1996-01-01 00:00 and ends at FFFFFFh, 2027-11-24 20:15; a Chassis Manager decodes only that
+field, so it cannot be widened. This IPMC therefore keeps the date only in the 32-bit field of the
+VITA 34h record, which covers 1996-01-01 00:00 to 9999-12-31 23:59, and leaves the standard field
+000000h (unspecified) in the built image and after every write. A Chassis Manager that reads only
+the standard field sees "unspecified"; one that reads the VITA record sees the date. The record
+uses the one checksum of `ipmc-wire` and the one const record builder (`Builder`).
+
+`crates/ipmc-fru/src/date.rs`
+
+The date text `YYYY-MM-DD HH:MM` (UTC) and the minutes count: `days_from_civil` and
+`civil_from_days` (Gregorian leap-year rule, so 2100-02-29 does not exist), `text_of`,
+`parse_text` and `DEFAULT_MINUTES`, all `const fn`, so the build parses `IPMC_FRU_MFG_DATE` with
+the same code the console and the application port use and fails on a date outside the range.
+`DateRange` prints the accepted range in the bad-date answer of both ports.
 
 `crates/ipmc-fru/src/unit.rs`
 
-The per-unit field editor (section 7.6 gives the protocol that calls it). `UnitField` names the
-six fields: `BOARD_SERIAL`, `BOARD_PART`, `MFG_DATE`, `PRODUCT_PART`, `PRODUCT_SERIAL`,
-`ASSET_TAG`; `max_len` is the room `IPMC_FRU_*_MAX` reserves (16 characters for the date text).
-`FruStore::set_unit_field` decodes the area, writes its fields back in the same order with the one
-field replaced, then C1h, 00h up to the area's old length and the zero checksum, so the area
-length never changes and no other area moves. The rewritten image is built beside the old one,
-passes `verify`, and only then replaces it. The date is the text `YYYY-MM-DD HH:MM` (UTC); the image holds
-minutes since 1996-01-01 00:00 in 3 bytes, least significant byte first. A refusal leaves the image
-as it was: `FieldError` has `TooLong`, `BadLength` (a text of one byte is reserved by the type/length
-rule), `NotAscii`, `NoRoom` (an image a Chassis Manager wrote may have no spare room), `Nvmro`
-(the firmware checks the pin, the store cannot see it), `BadDate`, `AreaMissing` and `Corrupt`.
-`write_unit_field` prints a field as stored.
+The FRU field editor (section 7.6 gives the protocol that calls it). `FruField` names the thirteen
+fields in the order `ALL` lists them: `BOARD_MFR`, `BOARD_PRODUCT`, `BOARD_SERIAL`, `BOARD_PART`,
+`BOARD_FILE_ID`, `MFG_DATE`, `PRODUCT_MFR`, `PRODUCT_NAME`, `PRODUCT_PART`, `PRODUCT_VERSION`,
+`PRODUCT_SERIAL`, `ASSET_TAG`, `PRODUCT_FILE_ID`; `max_len` is the room `IPMC_FRU_*_MAX` reserves
+(16 characters for the date text). `FruStore::set_unit_field` decodes the area, writes its fields
+back in the same order with the one field replaced, then C1h, 00h up to the area's old length and
+the zero checksum, so the area length never changes and no other area moves. The rewritten image
+is built beside the old one, passes `verify`, and only then replaces it. `MFG_DATE` changes the
+four minutes bytes of the VITA 34h record in place, rewrites its two checksums and sets the
+standard board field to 000000h (and the board checksum); a value read comes from the record when
+its checksums are good and its minutes are not 0, else it reads `unspecified`. An image without a
+MultiRecord area answers `AreaMissing` to a write, one without the record `NoRoom`; the area never
+moves. The date is the text `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59. A
+refusal leaves the image as it was: `FieldError` has `TooLong`, `BadLength` (a text of one byte is
+reserved by the type/length rule), `NotAscii`, `NoRoom` (an image a Chassis Manager wrote may
+have no spare room), `Nvmro` (the firmware checks the pin, the store cannot see it), `BadDate`,
+`AreaMissing` and `Corrupt`. `write_unit_field` prints a field as stored; `mfg_date` returns both
+stored forms for `FRU SHOW`.
 
 `crates/ipmc-fru/src/store.rs`
 
@@ -944,7 +985,7 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/console.rs` | command tables (eight groups, section 7.3) and the `SYS`, `LED`, `IPMB` handlers on the `ipmc-menu` engine; banner; `SYS STATUS` with the failure counters of both UARTs; `poll_dump`, which continues a running `DEBUG DUMP` one main-loop pass at a time; `service_app` |
 | `src/debug_cmds.rs` | the `DEBUG` group (section 10.11): `STATUS`, `LOG`, `DUMP` (the `DumpJob` that prints rows while the console transmit ring has room for the longest one), `CLEAR`, `TRACE`, `EVENTS`, `IPMI`, `INJECT`, `CACHE`; `events_off_at_boot`; `local`, the function behind `DEBUG IPMI` and the application port `IPMI` command |
 | `src/app_port.rs` | the transport of the application port (section 7.6): `AppPort::poll` takes bytes from the APP_UART receive ring, feeds the `ipmc-app` line assembler and writes the answer; `LinkHost`, the `AppHost` implementation over the link layer; the count of dropped answers |
-| `src/data_cmds.rs` | `FRU SHOW`, `FRU DUMP`, `FRU STORE`, `FRU RESTORE`, `SENSORS SDR` |
+| `src/data_cmds.rs` | `FRU SHOW`, `FRU DUMP`, `FRU STORE`, `FRU FIELDS`, `FRU GET`, `FRU SET`, `FRU RESTORE`, `SENSORS SDR` |
 | `src/bsp/clock.rs` | HSE bypass (HSI fallback) to 84 MHz, PLL M 8 / N 336 / P 4 / Q 7, compile-time check of the PLL against `IPMC_SYSCLK_HZ` |
 | `src/bsp/i2c_hw.rs` | I2C1 and I2C3: slave interrupts (EV and ER), the per-bus frame queues, `suspend`/`resume` for the bit-bang master, `set_speed` (CCR, TRISE and F/S for 100 or 400 kHz while the slave is idle), `HwMaster`, `clear_stuck_busy`, driver counters |
 | `src/bsp/i2c_bitbang.rs` | `BitbangMaster`: START, bits, ACK, STOP on open-drain GPIO with DWT timing at the phases of the bus speed (`BitPhases`), clock-stretch read-back, arbitration check, bus recovery (9 clocks and a STOP, always at 100 kHz) |
@@ -971,7 +1012,7 @@ console message and waits only while the ring is full; `print_line_or_drop` writ
 and its CR LF whole when the ring has room for all of it, and otherwise drops it and counts it
 (`tx_lines_dropped`), so a trace line never stalls the IPMB; `print_row_or_drop` does the same for the
 longer per-frame I2C trace row. `write` copies at most 64 bytes per critical section and loops. `flush` waits, bounded, until the
-last byte has left; it runs before a reset and before the fault park. Every wait polls the same
+last byte has left; it runs before a reset (the console and the application port) and before the fault park. `discard_rx` empties the receive ring of a port in one critical section and starts a reader stopped by flow control again. Every wait polls the same
 `service` body, so it also ends where the interrupt cannot run (a HardFault). Receive overflow,
 overrun, transmit timeout and dropped lines are counted per port and printed by `SYS STATUS`. The
 interrupts run at NVIC priority 2 << 4, below the I2C slaves (1 << 4). The interrupt body runs
@@ -980,7 +1021,7 @@ it, a few microseconds. With `IPMC_APP_UART_FLOW` 1 the driver enables RTS/CTS i
 peripheral (CTSE and RTSE, RM0368 19.3.14) and leaves a byte in the data register when the
 receive ring is full, so RTS stays deasserted until `getc` makes room. RTS deasserts only when the
 data register holds an unread byte, so a sender with a byte in flight can still overrun by one byte;
-the overrun counter counts it and the application port answers the line `ERR LINE_DAMAGED`; PA11 reads "not clear to send" when it is open.
+the overrun counter counts it and the application port answers the next line end `ERR LINE_DAMAGED` after discarding the receive ring (`discard_rx`); PA11 reads "not clear to send" when it is open.
 
 ### 6.7 `ipmc-emu`: x86 emulator
 
@@ -1095,7 +1136,7 @@ byte is the defining body, 03h for VSO; "byte 3" of a VITA response table is res
 | 04h | 21h | Get Device SDR | reservation, record ID, offset, count | next ID, bytes | C5h for a non-zero offset without the current reservation; CBh no record; C9h range; CAh too large |
 | 04h | 22h | Reserve Device SDR Repository | none | reservation ID | each call returns a new non-zero ID |
 | 04h | 2Dh | Get Sensor Reading | sensor number | reading, status, state | CBh for a number above 6 (above 7 at Tier-3, section 9.3) |
-| 0Ah | 10h | Get FRU Inventory Area Info | FRU ID | 00h 01h 00h | 256 bytes, byte access |
+| 0Ah | 10h | Get FRU Inventory Area Info | FRU ID | 00h 02h 00h | 512 bytes, byte access |
 | 0Ah | 11h | Read FRU Data | FRU ID, offset, count | count, bytes | C9h count 0 or range; CAh too large for one frame |
 | 0Ah | 12h | Write FRU Data | FRU ID, offset, bytes | count written | 80h while NVMRO is asserted; reruns the self test; saved to flash after the quiet time |
 | 2Ch | 00h | Get VSO Capabilities | VSO | 03h, 00h, IPMB capabilities, 00h, 22h, 00h, 00h | IPMB capabilities 00h (one interface) or 01h (two), 100 kHz; 10h or 11h at Tier-3, 400 kHz (section 9.6) |
@@ -1205,9 +1246,24 @@ text of every command.
 | `IPMB` | `ADDR`, `STATS`, `STATE` |
 | `SENSORS` | `SHOW`, `SDR`, `TRACE {LEVEL}` |
 | `POWER` | `ON`, `OFF`, `CLEAR`, `STATUS` |
-| `FRU` | `SHOW`, `DUMP {OFFSET} {COUNT}`, `STORE`, `RESTORE` |
+| `FRU` | `SHOW`, `DUMP {OFFSET} {COUNT}`, `STORE`, `FIELDS`, `GET [FIELD]`; with `IPMC_FRU_CONSOLE_WRITE` 1 also `SET [FIELD] {VALUE...}`, `RESTORE` |
 | `SIM` | `RAIL {N} {MV}`, `TEMP {DC}`, `FAULT {NAME} {STATE}`, `SHOW` |
 | `DEBUG` | `STATUS`, `LOG {STATE}`, `DUMP {FORMAT}`, `CLEAR`, `TRACE {WHAT} {STATE}`, `EVENTS {STATE}`, `IPMI [NETFN] [CMD] {DATA...}`, `INJECT [BUS] {BYTES...}`, `CACHE {ACTION}` |
+
+`FRU FIELDS` lists the thirteen fields with the longest value of each and the value now stored, one
+line each (`BOARD_SERIAL     max 24  IK-T1-000001`); `FRU GET [FIELD]` prints one. `FRU SET [FIELD]
+{VALUE...}` writes a field through `IpmbLink::set_unit_field`, the path the application port
+uses (the live NVMRO check, the store's dirty mark, the delayed flash save; there is no second
+writer). The value is the words after the field name joined by single spaces; no value clears a
+text field; `MFG_DATE` takes `YYYY-MM-DD HH:MM`. The answer is `OK: <FIELD> <value as stored>;
+saved to flash after the save delay (FRU STORE)`, or `Error: <FIELD> <FieldError name>` with the
+maximum for `TooLong` and the date range for `BadDate`. With `IPMC_FRU_CONSOLE_WRITE` 0 the
+`SET` and `RESTORE` rows are not in the table (the table is chosen at compile time). `FRU SHOW`
+prints the common header, both areas, a board line for the standard date (`standard field 000000h
+(unspecified); the date is in the VITA 34h record`) and a MultiRecord section with the record
+decoded (`Alternate Mfg Date/Time (VITA 34h): 2026-10-23 00:00 UTC`) and its checksum states; a
+missing record or a bad checksum shows as unspecified, not as a failure. `FRU RESTORE` answers
+`busy` and erases nothing while the link holds a request or a response (section 10.8).
 
 The DEBUG group switches and reads the capture log, runs a request locally and injects a frame
 (section 10.11). `DEBUG DUMP` is a job: it prints a header line, then rows on the following
@@ -1288,9 +1344,9 @@ The application port connects the payload CPU on the same board to the IPMC over
 | `HELLO` | none | `OK IPMC-APP <protocol version> <firmware name> v<version> tier=<n>` | firmware name, version, Tier and protocol version |
 | `STATUS` | none | `OK STATUS ipmb=<addr>h ga=<n> fru=M<n> power=<state> health=<state> nvmro=<0 or 1> uptime_s=<n>` | IPMB address, GA, FRU state, power, health, NVMRO, uptime |
 | `FRU` | `STATE` | `OK FRU M<n> <state name>` | the Operational State of FRU 0 (M0, M1, M4, M5, M6) |
-| `GET` | `<field>` | `OK <FIELD> <value>`; an empty field prints nothing after the name | read a per-unit FRU field as stored |
-| `SET` | `<field> [value]` | `OK <FIELD> <value>` with the value as stored now; no value clears a text field | write a per-unit FRU field; no value clears it |
-| `FIELDS` | none | `OK FIELDS <FIELD>=<max> ...` | the per-unit FRU fields and the longest value of each |
+| `GET` | `<field>` | `OK <FIELD> <value>`; an empty field prints nothing after the name | read a FRU field as stored |
+| `SET` | `<field> [value]` | `OK <FIELD> <value>` with the value as stored now; no value clears a text field | write a FRU field; no value clears it |
+| `FIELDS` | none | `OK FIELDS <FIELD>=<max> ...` | the FRU fields and the longest value of each |
 | `IPMI` | `<netfn> <cmd> [data...]` | `OK IPMI CC=<cc> DATA=<hex bytes>` | run an IPMI request locally; hex bytes; nothing goes on the IPMB |
 | `SAVE` | none | `OK SAVED` | OK once the FRU image is in the flash log |
 
@@ -1302,16 +1358,24 @@ sample). `IPMI` takes every number as a hex byte (`06`, `0x06` and `6` are the s
 request through the dispatcher as if the Chassis Manager had sent it, the same function as
 `DEBUG IPMI`; a completion code other than 00h is still an `OK` answer, because the request ran.
 
-The unit fields (`FIELDS`; `max` is the room `IPMC_FRU_*_MAX` reserves, 24 by default):
+The FRU fields (`FIELDS`; `max` is the room `IPMC_FRU_*_MAX` reserves; the console uses the same
+table):
 
 | Field | FRU area | Longest value |
 |---|---|---:|
+| `BOARD_MFR` | Board Info, manufacturer | 24 |
+| `BOARD_PRODUCT` | Board Info, product name | 32 |
 | `BOARD_SERIAL` | Board Info, serial number | 24 |
 | `BOARD_PART` | Board Info, part number | 24 |
-| `MFG_DATE` | Board Info, manufacturing date and time, written as `YYYY-MM-DD HH:MM` (UTC, from 1996-01-01) | 16 |
+| `BOARD_FILE_ID` | Board Info, FRU file ID | 16 |
+| `MFG_DATE` | the VITA 34h record, manufacturing date and time, written as `YYYY-MM-DD HH:MM` (UTC, 1996-01-01 00:00 to 9999-12-31 23:59); reads `unspecified` without a set, sound record | 16 |
+| `PRODUCT_MFR` | Product Info, manufacturer | 24 |
+| `PRODUCT_NAME` | Product Info, product name | 32 |
 | `PRODUCT_PART` | Product Info, part or model number | 24 |
+| `PRODUCT_VERSION` | Product Info, version | 16 |
 | `PRODUCT_SERIAL` | Product Info, serial number | 24 |
 | `ASSET_TAG` | Product Info, asset tag | 24 |
+| `PRODUCT_FILE_ID` | Product Info, FRU file ID | 16 |
 
 `SET` writes the RAM image through `IpmbLink::set_unit_field`, the editor of section 6.2, then
 reruns the self test; the dirty mark and the quiet time of `IPMC_FRU_PERSIST_DELAY_MS` carry the
@@ -1331,7 +1395,7 @@ Error answers:
 | `ERR BAD_DATE` | the date text is malformed or out of range |
 | `ERR FRU_IMAGE <name>` | the area is missing or damaged, or the rewritten image would fail `verify` |
 | `ERR WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is 0 and the request is `SET` or an `IPMI` Write FRU Data; nothing runs |
-| `ERR LINE_DAMAGED <n> bytes lost on the port` | the UART lost `<n>` bytes (overrun or receive ring full) since the previous line ended; the line does not run, and the answer carries the tag when the line had a valid one |
+| `ERR LINE_DAMAGED <n> bytes lost on the port` | the UART lost `<n>` bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring, and the next line end is answered with this error, without a tag (the tag may be among the lost bytes), and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
 | `ERR IPMI_FAILED <why>` | the request did not run: `TOO_LONG` (more data than one frame holds) or `DISPATCH` (a NetFn that is odd or above 3Eh) |
 | `ERR PENDING a save is waiting` | `SAVE` while a change waits for its flash save |
 | `ERR LOG_OFF` | `SAVE` with the flash log off (`IPMC_FRU_PERSIST` 0 or the store did not start) |
@@ -1423,10 +1487,12 @@ performs the reset.
    `IPMC_RESET_WAIT_MS` has passed since it first saw the request; in the second case one trace
    line says what was still open.
 2. While a reset is pending the FRU save runs at once (`service_fru_log`): no persist delay and no
-   wait for a quiet bus, because the IPMB is about to go away. The erase it may need is bounded
-   (at most 500 ms, covered by `IPMC_RESET_WAIT_MS`). A failed attempt returns to the normal delay, so
+   wait for a quiet bus, because the IPMB is about to go away. The erase waits, up to 250 ms (the T5 limit of 227 ms plus margin, `URGENT_LINK_WAIT_MS`),
+   for the link to hold no accepted request and no untransmitted response, and runs anyway after
+   that (one console line says so); the erase itself is bounded (at most 500 ms, covered by
+   `IPMC_RESET_WAIT_MS`). A failed attempt returns to the normal delay, so
    a failing flash does not stall every pass until the wait runs out.
-3. When the gate says go, one console line goes out and the console is flushed.
+3. When the gate says go, one console line goes out and the console and the application port are flushed (each bounded by its flush bound; with CTS held off the bound runs out and the reset goes ahead).
    `reset_cause::keep_sequence` stores the next request sequence number and the mask of the
    sequence numbers sent inside T9 (`Link::recent_request_seqs`) in four `.uninit` words, which
    start-up code does not touch, the last a check word over the other three. `reset_cause::system_reset` then requests SYSRESETREQ, so the banner after the
@@ -1619,7 +1685,7 @@ regions and `link.x` places the sections:
 
 | Region | Base | Size | Contents |
 |---|---:|---:|---|
-| `RAM` | `0x2000_0000` | 96 KB | statics and stack |
+| `RAM` | `0x2000_0000` | 96 KB | statics and stack; `_stack_reserve` (32 KB, `memory.x`) must stay free above the statics |
 | System memory | `0x1FFF_7A2A`..`0x1FFF_7A2F` | 6 bytes | factory VREFIN_CAL, TS_CAL1, TS_CAL2 (read by `adc.rs`) |
 
 `link.x` is the script of cortex-m-rt 0.7.7 with these differences: the vector table sits in
@@ -1646,25 +1712,40 @@ ways to program the board treat the store differently:
 A reflash may erase the whole flash, unit fields included, and the firmware has no guard against
 it (owner decision 10-25-2026).
 
+`link.x` asserts that the RAM from the end of the statics (`.data`, `.bss`, `.uninit`) to the top of RAM
+is at least `_stack_reserve`, 32 KB; the error names `IPMC_LOG_SIZE` and the four UART buffer
+defines. The 32 KB come from the release ELF at `IPMC_LOG_SIZE` 16384, the largest the guard
+allows (`arm-none-eabi-objdump -d`: the frame of each function from its push list and `sub sp`,
+summed along the longest call chain, indirect menu-handler calls added by hand): start-up 25,744
+bytes (`main` 8,232 + `IpmbLink::take` 16,600 + `Link::with_first_request_seq` 840 + `memcpy` 72),
+run time 11,932 bytes (`main` 8,232 + the menu 816 + the deepest console handler, `FRU RESTORE`
+over `Persist::save`, 2,884), and 540 bytes of interrupt nesting (SysTick 108, I2C event 80,
+USART 40 and three 104-byte exception frames) on top of either path. The largest, 26,284 bytes,
+plus a margin of about 25 percent for calls through trait objects, rounds up to 32 KB. The
+frames of `main` and `take` do not shrink with `IPMC_LOG_SIZE` (the log lives in the static), so
+the check is on the statics. A larger frame (a new local in `main` or `take`, a larger FRU image)
+is measured again and `_stack_reserve` changes with it.
+
 The statics of the firmware are the `IpmbLink` (the duplicate cache of 64 entries of 76 bytes,
 the capture log of `IPMC_LOG_SIZE` bytes and the frame queues) and the four UART rings
 (`IPMC_UART_RX_BUF`, `IPMC_UART_TX_BUF`, `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF`), which
 live in `.bss` and not in the flash image.
 
-### 9.2 FRU 0 image (256 bytes)
+### 9.2 FRU 0 image (512 bytes)
 
 | Offset | Size | Content |
 |---:|---:|---|
-| 00h | 8 | Common Header: `01 00 00 01 0E 00 00 F0` (version 1; Internal Use, Chassis Info, MultiRecord 00h; Board at 1 x 8, Product at 0Eh x 8, checksum) |
-| 08h | 104 | Board Info Area (length byte 0Dh): version, length, language, manufacturing date (3 bytes LE minutes), manufacturer, product name, serial, part number, FRU file ID, C1h, room for the serial and part number (00h), padding, checksum |
-| 70h | 120 | Product Info Area (length byte 0Fh): version, length, language, manufacturer, name, part/model, version, serial, asset tag, FRU file ID (empty), C1h, room for the part number, serial and asset tag (00h), padding, checksum |
-| E8h | 24 | 00h padding to 100h (`IMAGE_LEN` is 232) |
+| 00h | 8 | Common Header: `01 00 00 01 12 28 00 C4` (version 1; Internal Use, Chassis Info 00h; Board at 1 x 8, Product at 12h x 8, MultiRecord at 28h x 8, checksum) |
+| 08h | 136 | Board Info Area (length byte 11h): version, length, language, the standard manufacturing date 000000h (3 bytes), manufacturer, product name, serial, part number, FRU file ID, C1h, room for the five text fields (58 bytes of 00h), padding, checksum |
+| 90h | 176 | Product Info Area (length byte 16h): version, length, language, manufacturer, name, part/model, version, serial, asset tag, FRU file ID (empty), C1h, room for the seven text fields (104 bytes of 00h), padding, checksum |
+| 140h | 14 | MultiRecord area: the VITA 46.11 Alternate Manufacturing Date/Time record (section 6.2): `C0 82 09 <data sum> <header sum> AC 81 00 34 00 20 42 F7 00` for the default date |
+| 14Eh | 178 | 00h padding to 200h (`IMAGE_LEN` is 334) |
 
 The area sizes are those of the default strings and `IPMC_FRU_*_MAX` values; an area is always a
 multiple of 8 bytes, and a longer string or a larger `_MAX` grows it (the build fails when the
-image no longer fits `IPMC_FRU_SIZE`). The room after C1h is the `_MAX` value of each unit field
-less the length of its default string, so an update of a field up to its `_MAX` rewrites the
-field in place and the area keeps its length (section 6.2).
+image no longer fits `IPMC_FRU_SIZE`). The room after C1h is the `_MAX` value of each text field
+less the length of its default string, summed over the area, so an update of a field up to its
+`_MAX` rewrites the field in place and the area keeps its length (section 6.2).
 
 ### 9.3 Get Sensor Reading data (bytes after the completion code)
 
@@ -1707,10 +1788,10 @@ event enable). Set Payload Mode, in the commercial release build, is its only wr
 | 8 | 2 | image length (= `IPMC_FRU_SIZE`) |
 | 10 | 1 | record format version (1) |
 | 11 | 1 | Tier-3 non-volatile settings: bit 0 Default-Activation-Locked, bit 1 Commanded-Deactivation-Ignored (Rule 4.1.2-10.2), other bits 0 |
-| 12 | 256 | FRU image |
-| 268 | 4 | CRC-32 over bytes 4..268 |
+| 12 | 512 | FRU image |
+| 524 | 4 | CRC-32 over bytes 4..524 |
 
-A record is 272 bytes (68 words), so the 16 KB store sector holds 60 records (16,320 bytes; 64
+A record is 528 bytes (132 words), so the 16 KB store sector holds 31 records (16,368 bytes; 16
 bytes at the end stay unused). All fields are little-endian; the length, version and settings
 fields share one word, every other field is whole words. Erased flash reads FFh. The save that
 finds no free slot erases the sector and writes the record as the first one (section 10.8).
@@ -2104,15 +2185,17 @@ sequenceDiagram
     P->>F: read back and verify the record
 ```
 
-The store is one sector with 60 slots, so the erase comes once per 60 saves: the save that finds
+The store is one sector with 31 slots, so the erase comes once per 31 saves: the save that finds
 no free slot erases the sector and writes the newest image as the first record. That erase starts
 only when the egress queue is empty and no frame arrived for `IPMC_FRU_ERASE_QUIET_MS`; until then
 the image stays safe in RAM. `FRU RESTORE` erases at once when its record needs a sector, without
-that quiet gate. `PausedErase` suspends each running slave (a healthy one waits up to
+that quiet gate, but answers `busy` and erases nothing while the link holds a request or a response. `PausedErase` suspends each running slave (a healthy one waits up to
 `IPMC_FRU_PAUSE_WAIT_MS` for idle; a faulted one is switched off at once), erases, resumes the
 slaves and reports the time the board was silent (a status line on the console and in the capture
-log), measured with the DWT counter. After the slaves are off the driver checks both receive queues;
-a frame accepted before that defers the erase (`FlashError::Deferred`): the slaves resume, nothing is
+log), measured with the DWT counter. After the slaves are off the driver checks both receive queues and the link
+(`Link::request_in_flight`: an accepted request not yet answered, or a response not yet
+transmitted, on either bus); a frame or a request in that state defers the erase
+(`FlashError::Deferred`): the slaves resume, nothing is
 printed, the write stays pending with the failure counter unchanged, and the next pass retries;
 `systick::catch_up` adds the stalled time to the clock. On the bench the sector erase paused the
 IPMB for 198 ms (DS10086 Table 45, x32 programming: typical 250 ms, maximum 500 ms); a request
@@ -2259,6 +2342,8 @@ The DEBUG group (help text as in `console.rs`):
 | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally, as from 20h; nothing goes on the bus |
 | `DEBUG INJECT [BUS] {BYTES...}` | Hand a whole IPMB frame to the link as if received on bus A or B |
 | `DEBUG CACHE {ACTION}` | Duplicate cache: no argument shows the entries, CLEAR empties it |
+
+A local request (`DEBUG IPMI`, the application port `IPMI`, the start-up events-off request) reads the live NVMRO pin first, as the main loop does, so it decides like a bus request.
 
 `DEBUG IPMI` and `DEBUG INJECT` take hex bytes (`06`, `0x06` and `6` are the same). `DEBUG IPMI`
 runs the request through the dispatcher (`IpmbLink::local_request`) and prints
@@ -2692,8 +2777,8 @@ procedure and expected result of each.
 1. The payload CPU sends `HELLO` and reads `OK IPMC-APP 1 ...`, then `FIELDS` for the longest value
    of each field.
 2. It sends `SET BOARD_SERIAL 00:11:22:33:44:55`, `SET PRODUCT_SERIAL ...`, `SET BOARD_PART ...`,
-   `SET PRODUCT_PART ...`, `SET ASSET_TAG ...` and `SET MFG_DATE 2026-10-25 14:30`; each answer
-   echoes the value as stored.
+   `SET PRODUCT_PART ...`, `SET ASSET_TAG ...` and `SET MFG_DATE 2026-10-25 14:30` (or any
+   other of the thirteen fields); each answer echoes the value as stored.
 3. After `IPMC_FRU_PERSIST_DELAY_MS` without another write, the FRU log saves the image
    (`FRU log: saved record N at offset M`).
 4. The payload CPU repeats `SAVE` until it reads `OK SAVED` and may then remove power.
@@ -2735,7 +2820,7 @@ procedure and expected result of each.
   another master sends then is lost and recovered by its retry.
 - **Flash erase stall.** An erase stops the core for up to 500 ms (typical 250 ms; 198 ms
   measured); the IPMB slaves are off the bus for that time (the Chassis Manager sees timeouts and
-  retries). Erases are rare: the store sector holds 60 records, the erase comes once per 60 saves,
+  retries). Erases are rare: the store sector holds 31 records, the erase comes once per 31 saves,
   and only when the bus has been quiet for `IPMC_FRU_ERASE_QUIET_MS`.
 - **One-sector FRU store.** The store has no second copy (owner decision 10-25-2026). A power cut
   between the erase of a full sector and the end of the first record's programming loses the

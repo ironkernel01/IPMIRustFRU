@@ -18,6 +18,10 @@ pub enum Fed<'a> {
     /// A line ended that contained a byte other than printable ASCII (20h..=7Eh) or a tab; its
     /// bytes are dropped.
     BadChar,
+    /// The port lost bytes (`LineAssembler::damage`) and the line that was being collected, or the
+    /// next one to end, cannot be trusted: its end arrived. The count is the bytes lost since the
+    /// previous line ended; the line's bytes are dropped and it must not run.
+    Damaged(u32),
 }
 
 /// LineAssembler -- collects bytes into lines of at most `N` bytes.
@@ -35,6 +39,9 @@ pub struct LineAssembler<const N: usize> {
     overflow: bool,
     /// A byte that is not printable ASCII arrived in the current line.
     bad: bool,
+    /// Bytes the port lost since the previous line ended; above 0 the next line end answers
+    /// `Fed::Damaged` (see `damage`).
+    lost: u32,
 }
 
 impl<const N: usize> LineAssembler<N> {
@@ -46,7 +53,22 @@ impl<const N: usize> LineAssembler<N> {
             ready: false,
             overflow: false,
             bad: false,
+            lost: 0,
         }
+    }
+
+    /// damage -- the port lost `lost` bytes (above 0) and the firmware discarded what was waiting
+    /// in its receive ring. The partial line is dropped, and the next line end (the first CR or
+    /// LF `push` takes afterwards) returns `Fed::Damaged` instead of a line, so a request that
+    /// lost a byte never runs. Lines that were complete inside the discarded bytes get no
+    /// answer: the payload's answer timeout covers them. Lines after the damaged one run
+    /// normally. Losses that arrive before that line end add up.
+    pub fn damage(&mut self, lost: u32) {
+        self.lost = self.lost.saturating_add(lost);
+        self.len = 0;
+        self.ready = false;
+        self.overflow = false;
+        self.bad = false;
     }
 
     /// push -- takes one received byte. Returns `Fed::Line` when the byte ends a request line,
@@ -79,6 +101,12 @@ impl<const N: usize> LineAssembler<N> {
         let (overflow, bad) = (self.overflow, self.bad);
         self.overflow = false;
         self.bad = false;
+        if self.lost > 0 {
+            let lost = self.lost;
+            self.lost = 0;
+            self.len = 0;
+            return Fed::Damaged(lost);
+        }
         if overflow {
             self.len = 0;
             return Fed::TooLong;

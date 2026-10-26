@@ -57,6 +57,54 @@ class ClientTests(unittest.TestCase):
         self.assertIsNone(app_cli.Client(FakeTransport([])).request("HELLO"))
 
 
+class LineLengthTests(unittest.TestCase):
+    def test_the_tag_counts_toward_the_limit_and_nothing_is_written_when_it_is_exceeded(self):
+        limit = app_settings.line_max()
+        # A line that fits on its own but not with the 7-byte tag.
+        line = "X" * (limit - 3)
+        transport = FakeTransport(["#t0001 OK"])
+        client = app_cli.Client(transport)
+        with self.assertRaises(app_cli.LineTooLong):
+            client.request(line)
+        self.assertEqual(transport.written, [])
+        # The same line without a tag fits, and the longest tagged line goes out.
+        plain = app_cli.Client(FakeTransport(["OK"]), use_tags=False)
+        self.assertEqual(plain.request(line), "OK")
+        longest = "X" * (limit - app_cli.Client.TAG_LEN)
+        self.assertEqual(client.request(longest), "#t0001 OK")
+        self.assertEqual(len(transport.written), 1)
+        self.assertEqual(len(transport.written[0]), limit + len(app_cli.REQUEST_END))
+
+    def test_interactive_mode_refuses_the_line_and_goes_on(self):
+        limit = app_settings.line_max()
+        lines = iter(["X" * (limit + 1), "SAVE", "quit"])
+        transport = FakeTransport(["OK SAVED"])
+        client = app_cli.Client(transport, use_tags=False)
+        printed = []
+        ok = app_cli.run_interactive(client, lambda _prompt: next(lines), printed.append)
+        self.assertFalse(ok)
+        self.assertEqual(client.refused, 1)
+        self.assertEqual(transport.written, [b"SAVE\r\n"])
+
+    def test_interactive_mode_does_not_send_a_tagged_line_that_is_too_long(self):
+        limit = app_settings.line_max()
+        lines = iter(["X" * (limit - 2), "quit"])
+        transport = FakeTransport([])
+        client = app_cli.Client(transport)
+        printed = []
+        self.assertFalse(app_cli.run_interactive(client, lambda _p: next(lines), printed.append))
+        self.assertEqual(transport.written, [])
+        self.assertEqual(client.refused, 1)
+        self.assertIn("not sent", printed[-1])
+
+    def test_main_returns_2_when_a_tagged_request_is_too_long(self):
+        def factory(*_):
+            raise AssertionError("the port must not open")
+
+        line = "X" * (app_settings.line_max() - 2)
+        self.assertEqual(app_cli.main([line], factory), 2)
+
+
 class OkTests(unittest.TestCase):
     def test_ok_and_err_with_and_without_a_tag(self):
         rows = [

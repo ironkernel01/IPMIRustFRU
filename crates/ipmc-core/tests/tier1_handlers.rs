@@ -87,8 +87,8 @@ const FRU_ID_COMMANDS: [FruIdCommand; 2] = [
         name: "Get FRU Inventory Area Info",
         call: storage,
         cmd: GET_FRU_AREA_INFO,
-        // Size 256 = 0100h LS byte first; byte 4 bit 0 = 0, accessed by bytes.
-        answer: &[0x00, 0x01, 0x00],
+        // Size 512 = 0200h LS byte first; byte 4 bit 0 = 0, accessed by bytes.
+        answer: &[0x00, 0x02, 0x00],
     },
     FruIdCommand {
         name: "Get Device Locator Record ID",
@@ -120,15 +120,24 @@ fn fru_id_commands_answer_fru_zero_and_refuse_everything_else() {
 // ---- Read FRU Data (Table 34-3) ----
 
 /// The common header the image starts with (FRU spec Table 8-1; ipmc-fru records.rs derives the same bytes).
-const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0E, 0x00, 0x00, 0xF0];
+const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x12, 0x28, 0x00, 0xC4];
+
+/// le -- an offset as the LS and MS bytes of a FRU data request.
+const fn le(offset: usize) -> [u8; 2] {
+    (offset as u16).to_le_bytes()
+}
+
+/// FREE_AT -- an offset in the unused tail of the area, past the built areas (00h bytes).
+const FREE_AT: usize = fru::IMAGE_LEN + 8;
 
 #[test]
 fn read_fru_data_in_16_byte_chunks_like_the_chassis_manager() {
     let mut c = ctx();
     let mut image = Vec::new();
-    for chunk in 0..16u8 {
+    for chunk in 0..fru::SIZE / 16 {
         // The capture reads offsets 00h, 10h, 20h ... with count 10h.
-        let r = storage(&mut c, READ_FRU_DATA, &[0x00, chunk * 0x10, 0x00, 0x10]);
+        let [lo, hi] = le(chunk * 16);
+        let r = storage(&mut c, READ_FRU_DATA, &[0x00, lo, hi, 0x10]);
         assert_eq!(r.cc, OK, "chunk {chunk}");
         assert_eq!(r.data[0], 0x10, "count returned is 1-based");
         assert_eq!(r.data.len(), 17);
@@ -165,13 +174,15 @@ fn read_fru_data_error_paths() {
     expect_err(storage(&mut c, READ_FRU_DATA, &[1, 0, 0, 8]), OUT_OF_RANGE);
     // Count 0 (counts are 1-based).
     expect_err(storage(&mut c, READ_FRU_DATA, &[0, 0, 0, 0]), OUT_OF_RANGE);
-    // Offset or offset + count beyond the 256-byte area.
+    // Offset or offset + count beyond the area.
+    let [size_lo, size_hi] = le(fru::SIZE);
+    let [near_lo, near_hi] = le(fru::SIZE - 8);
     expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, 0x00, 0x01, 1]),
+        storage(&mut c, READ_FRU_DATA, &[0, size_lo, size_hi, 1]),
         OUT_OF_RANGE,
     );
     expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, 0xF8, 0x00, 16]),
+        storage(&mut c, READ_FRU_DATA, &[0, near_lo, near_hi, 16]),
         OUT_OF_RANGE,
     );
     expect_err(
@@ -185,7 +196,8 @@ fn read_fru_data_error_paths() {
         CANT_RETURN,
     );
     // The last byte of the area is readable.
-    let r = storage(&mut c, READ_FRU_DATA, &[0, 0xFF, 0x00, 1]);
+    let [last_lo, last_hi] = le(fru::SIZE - 1);
+    let r = storage(&mut c, READ_FRU_DATA, &[0, last_lo, last_hi, 1]);
     assert_eq!((r.cc, r.data), (OK, vec![1, 0]));
 }
 
@@ -194,25 +206,25 @@ fn read_fru_data_error_paths() {
 #[test]
 fn write_then_read_back_changes_the_ram_store() {
     let mut c = ctx();
-    let r = storage(
-        &mut c,
-        WRITE_FRU_DATA,
-        &[0x00, 0xC0, 0x00, 0xAA, 0xBB, 0xCC],
-    );
+    let [lo, hi] = le(FREE_AT);
+    let [before_lo, before_hi] = le(FREE_AT - 1);
+    let r = storage(&mut c, WRITE_FRU_DATA, &[0x00, lo, hi, 0xAA, 0xBB, 0xCC]);
     assert_eq!((r.cc, r.data), (OK, vec![3]), "count written, 1-based");
-    let r = storage(&mut c, READ_FRU_DATA, &[0x00, 0xBF, 0x00, 5]);
+    let r = storage(&mut c, READ_FRU_DATA, &[0x00, before_lo, before_hi, 5]);
     assert_eq!((r.cc, r.data), (OK, vec![5, 0x00, 0xAA, 0xBB, 0xCC, 0x00]));
     // The longest write a 32-byte request frame carries: 25 data bytes, 3 of them the FRU ID and
-    // the offset, so 22 bytes to write. Offset C8h is in the unused (00h) part of the area.
+    // the offset, so 22 bytes to write. The offset is in the unused (00h) part of the area.
     let long: Vec<u8> = (1..=22).collect();
-    let mut request = vec![0x00, 0xC8, 0x00];
+    let [long_lo, long_hi] = le(FREE_AT + 8);
+    let mut request = vec![0x00, long_lo, long_hi];
     request.extend_from_slice(&long);
     assert_eq!(storage(&mut c, WRITE_FRU_DATA, &request).data, vec![22]);
-    let r = storage(&mut c, READ_FRU_DATA, &[0x00, 0xC8, 0x00, 22]);
+    let r = storage(&mut c, READ_FRU_DATA, &[0x00, long_lo, long_hi, 22]);
     assert_eq!(&r.data[1..], &long[..]);
     // A write to the last byte of the area.
+    let [last_lo, last_hi] = le(fru::SIZE - 1);
     assert_eq!(
-        storage(&mut c, WRITE_FRU_DATA, &[0x00, 0xFF, 0x00, 0x5A]).data,
+        storage(&mut c, WRITE_FRU_DATA, &[0x00, last_lo, last_hi, 0x5A]).data,
         vec![1]
     );
     assert_eq!(c.fru.bytes()[fru::SIZE - 1], 0x5A);
@@ -228,12 +240,14 @@ fn write_fru_data_error_paths() {
     }
     expect_err(storage(&mut c, WRITE_FRU_DATA, &[1, 0, 0, 7]), OUT_OF_RANGE);
     // Beyond the area, also across its end.
+    let [size_lo, size_hi] = le(fru::SIZE);
+    let [last_lo, last_hi] = le(fru::SIZE - 1);
     expect_err(
-        storage(&mut c, WRITE_FRU_DATA, &[0, 0x00, 0x01, 7]),
+        storage(&mut c, WRITE_FRU_DATA, &[0, size_lo, size_hi, 7]),
         OUT_OF_RANGE,
     );
     expect_err(
-        storage(&mut c, WRITE_FRU_DATA, &[0, 0xFF, 0x00, 7, 8]),
+        storage(&mut c, WRITE_FRU_DATA, &[0, last_lo, last_hi, 7, 8]),
         OUT_OF_RANGE,
     );
     assert_eq!(
@@ -248,7 +262,8 @@ fn only_an_accepted_write_fru_data_marks_the_store_dirty() {
     let mut c = ctx();
     assert!(!c.fru.is_dirty());
     // Refused writes (length, ID, range) leave it clean.
-    for refused in [&[0, 0, 0][..], &[1, 0, 0, 7], &[0, 0x00, 0x01, 7]] {
+    let [size_lo, size_hi] = le(fru::SIZE);
+    for refused in [&[0, 0, 0][..], &[1, 0, 0, 7], &[0, size_lo, size_hi, 7]] {
         storage(&mut c, WRITE_FRU_DATA, refused);
         assert!(!c.fru.is_dirty(), "request {refused:?}");
     }

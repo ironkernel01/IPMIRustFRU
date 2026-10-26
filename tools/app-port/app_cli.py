@@ -10,7 +10,8 @@ request, `OK ...` or `ERR <CODE> <text>`; see the module comment of crates/ipmc-
 By default each request gets a tag (`#t0001 ...`); the IPMC echoes it at the start of the answer,
 and the client discards an answer with another tag (a late answer of an earlier request). The
 exit status is 0 when every request got an `OK` answer, 1 when one got `ERR` or no answer, and 2
-when a request is longer than the IPMC accepts.
+when a request, tag included, is longer than the IPMC accepts (it is not sent; in the prompt the
+line is refused and the prompt goes on).
 """
 
 import argparse
@@ -48,23 +49,44 @@ class SerialTransport:
         self._serial.close()
 
 
+class LineTooLong(ValueError):
+    """A request, tag included, is longer than the IPMC accepts (nothing was written)."""
+
+
 class Client:
     """Sends request lines through a transport and returns the matching answer lines."""
+
+    # Length of the tag text in front of a request: `#`, the prefix, four hex digits, a blank.
+    TAG_LEN = len(f"#{app_settings.TAG_PREFIX}0000 ")
 
     def __init__(self, transport, use_tags=app_settings.TAGS_DEFAULT):
         self._transport = transport
         self._use_tags = use_tags
         self._counter = 0
+        # Requests refused as too long (not sent); the exit status is 2 when any.
+        self.refused = 0
 
     def _next_tag(self):
         self._counter = (self._counter + 1) % app_settings.TAG_COUNTER_MODULUS
         return f"{app_settings.TAG_PREFIX}{self._counter:04x}"
 
+    @classmethod
+    def encoded_len(cls, line, use_tags):
+        """Bytes of the request as it goes out, tag included, without the line end."""
+        return len(line) + (cls.TAG_LEN if use_tags else 0)
+
     def request(self, line):
         """Sends `line` and returns the answer line (tag included), or None on timeout.
 
-        With tags on, a line that starts with another tag is an old answer and is skipped.
+        Raises LineTooLong, before anything is written, when the whole request (tag included)
+        is longer than the IPMC accepts. With tags on, a line that starts with another tag is
+        an old answer and is skipped.
         """
+        if self.encoded_len(line, self._use_tags) > app_settings.line_max():
+            raise LineTooLong(
+                f"a request is longer than {app_settings.line_max()} bytes"
+                f"{' with its tag' if self._use_tags else ''}"
+            )
         tag = self._next_tag() if self._use_tags else None
         text = f"#{tag} {line}" if tag else line
         self._transport.write(text.encode("ascii") + REQUEST_END)
@@ -88,7 +110,13 @@ def run_requests(client, lines, out=print):
     all_ok = True
     for line in lines:
         out(f"> {line}")
-        answer = client.request(line)
+        try:
+            answer = client.request(line)
+        except LineTooLong as error:
+            out(f"< (not sent: {error})")
+            client.refused += 1
+            all_ok = False
+            continue
         out(f"< {answer if answer is not None else '(no answer)'}")
         all_ok = is_ok(answer) and all_ok
     return all_ok
@@ -128,9 +156,13 @@ def parse_args(argv=None):
 
 def main(argv=None, transport_factory=SerialTransport):
     args = parse_args(argv)
-    longest = max((len(r) for r in args.requests), default=0)
+    longest = max((Client.encoded_len(r, not args.no_tags) for r in args.requests), default=0)
     if longest > app_settings.line_max():
-        print(f"a request is longer than {app_settings.line_max()} bytes", file=sys.stderr)
+        print(
+            f"a request is longer than {app_settings.line_max()} bytes"
+            f"{'' if args.no_tags else ' with its tag'}",
+            file=sys.stderr,
+        )
         return 2
     transport = transport_factory(args.port, args.baud, args.timeout)
     try:
@@ -141,6 +173,8 @@ def main(argv=None, transport_factory=SerialTransport):
             ok = run_interactive(client)
     finally:
         transport.close()
+    if client.refused:
+        return 2
     return 0 if ok else 1
 
 

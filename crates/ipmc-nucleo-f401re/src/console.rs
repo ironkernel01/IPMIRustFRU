@@ -7,14 +7,15 @@
 //   SYS  : STATUS, RESET, VERSION      LED : ON, OFF, BLINK [HZ], AUTO, STATUS
 //   IPMB : ADDR, STATS, STATE
 //   SENSORS : SHOW, SDR, TRACE {OFF|EVENTS|ALL}     POWER : ON, OFF, CLEAR, STATUS
-//   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, RESTORE
+//   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, FIELDS, GET [FIELD], and with IPMC_FRU_CONSOLE_WRITE 1
+//          SET [FIELD] {VALUE...}, RESTORE
 //   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
 //   DEBUG: STATUS, LOG {ON|OFF}, DUMP {CSV|TRACE}, CLEAR, TRACE {IPMI|I2C} {ON|OFF},
 //          EVENTS {ON|OFF}, IPMI [NETFN] [CMD] {DATA...}, INJECT [BUS] {BYTES...}, CACHE {CLEAR}
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
-// IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; FRU SHOW, FRU DUMP, FRU STORE, FRU
-// RESTORE and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs.
+// IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; the FRU handlers (SHOW, DUMP, STORE,
+// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs.
 
 use core::fmt;
 
@@ -223,7 +224,7 @@ static SIM_COMMANDS: [ConsoleCommand; 4] = [
     },
 ];
 
-static FRU_COMMANDS: [ConsoleCommand; 4] = [
+static FRU_COMMANDS: [ConsoleCommand; 7] = [
     Command {
         syntax: "SHOW",
         help: "FRU image decoded: common header, board and product areas, checksums",
@@ -240,12 +241,42 @@ static FRU_COMMANDS: [ConsoleCommand; 4] = [
         handler: data_cmds::cmd_fru_store,
     },
     Command {
+        syntax: "FIELDS",
+        help: "Every FRU field with its maximum length and its current value",
+        handler: data_cmds::cmd_fru_fields,
+    },
+    Command {
+        syntax: "GET [FIELD]",
+        help: "Current value of one FRU field; FRU FIELDS lists the names",
+        handler: data_cmds::cmd_fru_get,
+    },
+    // The rows below this line are the write rows: they are in the FRU group only when
+    // IPMC_FRU_CONSOLE_WRITE is 1 (`FRU_TABLE`).
+    Command {
+        syntax: "SET [FIELD] {VALUE...}",
+        help: "Write a FRU field (no value clears a text field; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted",
+        handler: data_cmds::cmd_fru_set,
+    },
+    Command {
         syntax: "RESTORE",
         help:
             "Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted",
         handler: data_cmds::cmd_fru_restore,
     },
 ];
+
+/// FRU_READ_ROWS -- the rows of `FRU_COMMANDS` that only read (SHOW, DUMP, STORE, FIELDS, GET);
+/// the write rows (SET, RESTORE) follow them.
+const FRU_READ_ROWS: usize = 5;
+
+/// FRU_TABLE -- the table of the FRU group, chosen at compile time from IPMC_FRU_CONSOLE_WRITE:
+/// every row when it is 1, only the read rows when it is 0 (SET and RESTORE do not exist: HELP
+/// does not list them and a typed SET is an unknown command).
+static FRU_TABLE: &[ConsoleCommand] = if ipmc_defs::IPMC_FRU_CONSOLE_WRITE == 1 {
+    &FRU_COMMANDS
+} else {
+    FRU_COMMANDS.split_at(FRU_READ_ROWS).0
+};
 
 static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
     Command {
@@ -328,8 +359,8 @@ static GROUPS: [Group<Context>; 8] = [
     },
     Group {
         name: "FRU",
-        description: "FRU image, its decoded areas and the flash log",
-        commands: &FRU_COMMANDS,
+        description: "FRU image, its decoded areas, its fields and the flash log",
+        commands: FRU_TABLE,
     },
     Group {
         name: "DEBUG",
@@ -342,6 +373,20 @@ static GROUPS: [Group<Context>; 8] = [
 const _: () = assert!(
     Menu::validate_tables(&TOP_COMMANDS, &GROUPS).is_ok(),
     "console command tables are invalid"
+);
+// The FRU table is valid with every row, so it is valid with the read rows alone: a row taken
+// away cannot create a duplicate or an empty group, whatever IPMC_FRU_CONSOLE_WRITE is.
+const _: () = assert!(
+    Menu::validate_tables(
+        &TOP_COMMANDS,
+        &[Group {
+            name: "FRU",
+            description: "",
+            commands: &FRU_COMMANDS,
+        }]
+    )
+    .is_ok(),
+    "FRU command table is invalid"
 );
 
 /// Console -- the console: line editor, menu and handler context.
