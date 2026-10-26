@@ -32,6 +32,10 @@
 //! settings 00h is byte-identical to one of that build (Tier-1 and Tier-2 images never write a
 //! non-zero value). A build from before the byte rejects a record whose settings are not 00h.
 //!
+//! A record from an older image size (another length field and record length) is not valid for
+//! this build: every slot is invalid, the built image loads, and the first save appends or erases.
+//! An SWD flash keeps the sector, so the saved content is dropped; a drive-copy flash erases it.
+//!
 //! A slot is valid when the commit word, the length, the version, the sequence and the CRC all
 //! check. Erased flash reads FFh. The scan reads every slot of the sector: the next record goes
 //! after the last slot that is not all FFh, so an all-FFh slot left behind by a save that failed

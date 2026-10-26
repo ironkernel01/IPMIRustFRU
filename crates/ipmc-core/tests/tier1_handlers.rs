@@ -163,44 +163,6 @@ fn read_fru_data_longest_chunk_is_23_bytes() {
     assert_eq!(&r.data[1..9], &HEADER);
 }
 
-#[test]
-fn read_fru_data_error_paths() {
-    let mut c = ctx();
-    // Length: 4 data bytes exactly.
-    for bad in [&[][..], &[0, 0, 0][..], &[0, 0, 0, 1, 1][..]] {
-        expect_err(storage(&mut c, READ_FRU_DATA, bad), BAD_CMD_LEN);
-    }
-    // FRU Device ID above 0.
-    expect_err(storage(&mut c, READ_FRU_DATA, &[1, 0, 0, 8]), OUT_OF_RANGE);
-    // Count 0 (counts are 1-based).
-    expect_err(storage(&mut c, READ_FRU_DATA, &[0, 0, 0, 0]), OUT_OF_RANGE);
-    // Offset or offset + count beyond the area.
-    let [size_lo, size_hi] = le(fru::SIZE);
-    let [near_lo, near_hi] = le(fru::SIZE - 8);
-    expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, size_lo, size_hi, 1]),
-        OUT_OF_RANGE,
-    );
-    expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, near_lo, near_hi, 16]),
-        OUT_OF_RANGE,
-    );
-    expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, 0xFF, 0xFF, 1]),
-        OUT_OF_RANGE,
-    );
-    // Inside the area but more than one response frame carries: 24 bytes plus the count byte.
-    expect_err(storage(&mut c, READ_FRU_DATA, &[0, 0, 0, 24]), CANT_RETURN);
-    expect_err(
-        storage(&mut c, READ_FRU_DATA, &[0, 0, 0, 0xFF]),
-        CANT_RETURN,
-    );
-    // The last byte of the area is readable.
-    let [last_lo, last_hi] = le(fru::SIZE - 1);
-    let r = storage(&mut c, READ_FRU_DATA, &[0, last_lo, last_hi, 1]);
-    assert_eq!((r.cc, r.data), (OK, vec![1, 0]));
-}
-
 // ---- Write FRU Data (Table 34-4) ----
 
 #[test]
@@ -230,31 +192,58 @@ fn write_then_read_back_changes_the_ram_store() {
     assert_eq!(c.fru.bytes()[fru::SIZE - 1], 0x5A);
 }
 
+/// fru_data_error_paths_refuse_with_their_completion_codes -- Read FRU Data and Write FRU Data
+/// refuse a bad length, a FRU Device ID above 0, a range past the area and a read of more than one
+/// frame carries, each with its completion code, and a refused request changes nothing.
 #[test]
-fn write_fru_data_error_paths() {
+fn fru_data_error_paths_refuse_with_their_completion_codes() {
+    let [size_lo, size_hi] = le(fru::SIZE);
+    let [near_lo, near_hi] = le(fru::SIZE - 8);
+    let [last_lo, last_hi] = le(fru::SIZE - 1);
+    // (command, request data, completion code)
+    let rows: Vec<(u8, Vec<u8>, u8)> = vec![
+        // Read, length: 4 data bytes exactly.
+        (READ_FRU_DATA, vec![], BAD_CMD_LEN),
+        (READ_FRU_DATA, vec![0, 0, 0], BAD_CMD_LEN),
+        (READ_FRU_DATA, vec![0, 0, 0, 1, 1], BAD_CMD_LEN),
+        // Read, FRU Device ID above 0, and count 0 (counts are 1-based).
+        (READ_FRU_DATA, vec![1, 0, 0, 8], OUT_OF_RANGE),
+        (READ_FRU_DATA, vec![0, 0, 0, 0], OUT_OF_RANGE),
+        // Read, offset or offset + count beyond the area.
+        (READ_FRU_DATA, vec![0, size_lo, size_hi, 1], OUT_OF_RANGE),
+        (READ_FRU_DATA, vec![0, near_lo, near_hi, 16], OUT_OF_RANGE),
+        (READ_FRU_DATA, vec![0, 0xFF, 0xFF, 1], OUT_OF_RANGE),
+        // Read, inside the area but more than one response frame carries: 24 bytes plus the
+        // count byte.
+        (READ_FRU_DATA, vec![0, 0, 0, 24], CANT_RETURN),
+        (READ_FRU_DATA, vec![0, 0, 0, 0xFF], CANT_RETURN),
+        // Write, length: at least one data byte after the three header bytes.
+        (WRITE_FRU_DATA, vec![], BAD_CMD_LEN),
+        (WRITE_FRU_DATA, vec![0], BAD_CMD_LEN),
+        (WRITE_FRU_DATA, vec![0, 0], BAD_CMD_LEN),
+        (WRITE_FRU_DATA, vec![0, 0, 0], BAD_CMD_LEN),
+        // Write, FRU Device ID above 0, and beyond the area, also across its end.
+        (WRITE_FRU_DATA, vec![1, 0, 0, 7], OUT_OF_RANGE),
+        (WRITE_FRU_DATA, vec![0, size_lo, size_hi, 7], OUT_OF_RANGE),
+        (
+            WRITE_FRU_DATA,
+            vec![0, last_lo, last_hi, 7, 8],
+            OUT_OF_RANGE,
+        ),
+    ];
     let mut c = ctx();
     let before = c.fru.bytes().to_vec();
-    // Length: at least one data byte after the three header bytes.
-    for bad in [&[][..], &[0][..], &[0, 0][..], &[0, 0, 0][..]] {
-        expect_err(storage(&mut c, WRITE_FRU_DATA, bad), BAD_CMD_LEN);
+    for (cmd, request, code) in rows {
+        expect_err(storage(&mut c, cmd, &request), code);
     }
-    expect_err(storage(&mut c, WRITE_FRU_DATA, &[1, 0, 0, 7]), OUT_OF_RANGE);
-    // Beyond the area, also across its end.
-    let [size_lo, size_hi] = le(fru::SIZE);
-    let [last_lo, last_hi] = le(fru::SIZE - 1);
-    expect_err(
-        storage(&mut c, WRITE_FRU_DATA, &[0, size_lo, size_hi, 7]),
-        OUT_OF_RANGE,
-    );
-    expect_err(
-        storage(&mut c, WRITE_FRU_DATA, &[0, last_lo, last_hi, 7, 8]),
-        OUT_OF_RANGE,
-    );
     assert_eq!(
         c.fru.bytes(),
         &before[..],
         "a refused write changes nothing"
     );
+    // The last byte of the area is readable.
+    let r = storage(&mut c, READ_FRU_DATA, &[0, last_lo, last_hi, 1]);
+    assert_eq!((r.cc, r.data), (OK, vec![1, 0]));
 }
 
 #[test]

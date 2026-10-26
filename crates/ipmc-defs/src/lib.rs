@@ -184,10 +184,10 @@ const _: () = assert!(
 // status line, 200 the longest the console prints. The relations to IPMB_MSG_MAX are guarded
 // beside the type (capture.rs).
 // RAM budget: the log is 16 KB at most because the RAM of the STM32F401 is 96 KB and the statics
-// (this log, the UART rings, the FRU image) share it with the stack. The firmware reserves 32 KB
-// for the stack (`_stack_reserve` in memory.x, measured on the release ELF with the log at 16384;
-// the method and the numbers are in that file) and link.x fails the build when the statics leave
-// less. The IpmbLink temporary in `take` was measured at 16.6 KB whatever the log size.
+// (this log, the UART rings, the FRU image) share it with the stack. The firmware reserves 35 KB
+// for the stack (`_stack_reserve` in memory.x, measured on the release ELF; the method and the
+// numbers are in that file) and link.x fails the build when the statics leave less. The
+// IpmbLink temporary in `take` was measured at 16.6 KB whatever the log size.
 const _: () = assert!(
     IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 16384 && IPMC_LOG_SIZE.is_power_of_two(),
     "IPMC_LOG_SIZE must be a power of two, 1024..=16384 (the usable size is one byte less)"
@@ -355,11 +355,31 @@ const _: () = assert!(
 /// Longest FRU string: the type/length byte of an 8-bit ASCII field holds the length in its
 /// low 6 bits (IPMI Platform Management FRU Information Storage Definition 1.0, section 13).
 const FRU_STRING_MAX: usize = 63;
-/// fru_string_guard -- expands to one compile-time check that the named string define fits a
-/// FRU field: `fru_string_guard!(X)` becomes
+/// printable_ascii -- every byte of `text` is 20h..=7Eh (a define string is printable ASCII, no
+/// control byte, no byte above 7Eh; the FRU type/length byte and the SDR ID string carry it as
+/// 8-bit ASCII).
+const fn printable_ascii(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] < 0x20 || bytes[i] > 0x7E {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// fru_string_guard -- expands to the compile-time checks that the named string define is
+/// printable ASCII and fits a FRU field: `fru_string_guard!(X)` becomes
+/// `const _: () = assert!(printable_ascii(X), ..);` and
 /// `const _: () = assert!(X.len() <= FRU_STRING_MAX, "X is longer than 63 bytes ...");`.
 macro_rules! fru_string_guard {
     ($name:ident) => {
+        const _: () = assert!(
+            printable_ascii($name),
+            concat!(stringify!($name), " must be printable ASCII (20h..=7Eh)")
+        );
         const _: () = assert!(
             $name.len() <= FRU_STRING_MAX,
             concat!(
@@ -456,6 +476,18 @@ const _: () = assert!(
     IPMC_FRU_PAUSE_WAIT_MS >= 20 && IPMC_FRU_PAUSE_WAIT_MS <= 200,
     "IPMC_FRU_PAUSE_WAIT_MS must be 20..=200"
 );
+// The urgent save waits longer than the T5 response deadline of 227 ms (VITA 46.11 Table 4.1.1-1).
+const _: () = assert!(
+    IPMC_URGENT_LINK_WAIT_MS >= 228 && IPMC_URGENT_LINK_WAIT_MS <= 1_000,
+    "IPMC_URGENT_LINK_WAIT_MS must be 228..=1000"
+);
+// A pending Cold Reset runs after at most IPMC_RESET_WAIT_MS: the urgent save's link wait, its
+// pause wait and one sector erase (500 ms at most, 16 KB sector, DS10086 Table 45) fit inside it
+// with the response and the save to spare, or the reset would cut the save short.
+const _: () = assert!(
+    IPMC_RESET_WAIT_MS > IPMC_URGENT_LINK_WAIT_MS + IPMC_FRU_PAUSE_WAIT_MS + 500,
+    "IPMC_RESET_WAIT_MS must exceed IPMC_URGENT_LINK_WAIT_MS + IPMC_FRU_PAUSE_WAIT_MS + 500 (the DS10086 Table 45 sector erase maximum, 16 KB sector)"
+);
 
 // ---- SDR ID strings ----
 
@@ -466,6 +498,10 @@ const SDR_NAME_MAX: usize = 16;
 /// sdr_name_guard -- one compile-time check that the named define is a legal SDR ID string.
 macro_rules! sdr_name_guard {
     ($name:ident) => {
+        const _: () = assert!(
+            printable_ascii($name),
+            concat!(stringify!($name), " must be printable ASCII (20h..=7Eh)")
+        );
         const _: () = assert!(
             $name.len() >= SDR_NAME_MIN && $name.len() <= SDR_NAME_MAX,
             concat!(

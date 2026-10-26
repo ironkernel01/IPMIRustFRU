@@ -286,7 +286,7 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
                 // again once the ring has room. RTS deasserts only when DR holds an unread
                 // byte, so a sender with a byte already in flight can still overrun by one
                 // byte: the overrun counter counts it and the application port answers the
-                // line `ERR LINE_DAMAGED` (ipmc-app).
+                // line `ERROR LINE_DAMAGED` (ipmc-app).
                 regs.cr1().modify(|_, w| w.rxneie().disabled());
                 self.rx_stalled.set(true);
             } else {
@@ -566,6 +566,12 @@ pub fn write(port: Port, bytes: &[u8]) -> usize {
         copied += n;
     }
     copied
+}
+
+/// tx_pending -- bytes of `port` still wait in the TX ring or in the shift register (false before
+/// `init`). Never waits.
+pub fn tx_pending(port: Port) -> bool {
+    with_port(port, |u| !u.tx_idle()).unwrap_or(false)
 }
 
 /// tx_free -- bytes the TX ring of `port` takes now (0 before `init`).

@@ -183,6 +183,39 @@ pub struct DeviceIdentity {
     pub aux_firmware: [u8; 4],
 }
 
+/// DEVICE_ID_LEN -- Get Device ID response data length (IPMI v2.0 Table 20-2, bytes 2..16).
+pub const DEVICE_ID_LEN: usize = 15;
+
+impl DeviceIdentity {
+    /// response_data -- the Get Device ID response data after the completion code: device ID,
+    /// device revision, firmware revision 1 and 2, IPMI version, additional device support,
+    /// manufacturer ID x3 (LSB first), product ID x2 (LSB first), auxiliary firmware revision
+    /// x4. The one place the layout is written: the command handler and the application port
+    /// test host both take it from here.
+    pub const fn response_data(&self) -> [u8; DEVICE_ID_LEN] {
+        let [pid_lo, pid_hi] = self.product_id.to_le_bytes();
+        let [mfr0, mfr1, mfr2] = self.manufacturer_id;
+        let [aux0, aux1, aux2, aux3] = self.aux_firmware;
+        [
+            self.device_id,
+            self.device_revision,
+            self.firmware_major,
+            self.firmware_minor_bcd,
+            self.ipmi_version,
+            self.additional_support,
+            mfr0,
+            mfr1,
+            mfr2,
+            pid_lo,
+            pid_hi,
+            aux0,
+            aux1,
+            aux2,
+            aux3,
+        ]
+    }
+}
+
 /// DEVICE_IDENTITY -- the identity of this IPMC (PLAN.md section 3.7, decision 1).
 pub const DEVICE_IDENTITY: DeviceIdentity = DeviceIdentity {
     device_id: ipmc_defs::IPMC_DEVICE_ID,

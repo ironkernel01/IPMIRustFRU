@@ -114,7 +114,7 @@ class ParsingTests(unittest.TestCase):
 class TagTests(unittest.TestCase):
     def test_a_request_goes_out_with_a_tag_and_crlf_and_the_tagged_answer_returns(self):
         transport = FakeTransport(["app> #t0001 FRU SAVE", "SAVE: done", "OK #t0001"])
-        client = app_cli.Client(transport)
+        client = app_cli.Client(transport, counter_start=0)
         answer = client.request("FRU SAVE")
         self.assertEqual(answer.final, "OK #t0001")
         self.assertEqual(answer.data, [("SAVE", "done")])
@@ -122,18 +122,18 @@ class TagTests(unittest.TestCase):
 
     def test_an_answer_with_another_tag_is_skipped_with_its_data_lines(self):
         transport = FakeTransport(["GA: 0", "OK #t0009", "GA: 1", "OK #t0001"])
-        answer = app_cli.Client(transport).request("STATUS")
+        answer = app_cli.Client(transport, counter_start=0).request("STATUS")
         self.assertEqual(answer.data, [("GA", "1")])
         self.assertEqual(answer.final, "OK #t0001")
 
     def test_an_error_answer_is_matched_by_its_tag_too(self):
         transport = FakeTransport(["ERROR #t0001 UNKNOWN: unknown command 'X'; type HELP or ?"])
-        answer = app_cli.Client(transport).request("X")
+        answer = app_cli.Client(transport, counter_start=0).request("X")
         self.assertEqual((answer.ok, answer.code, answer.tag), (False, "UNKNOWN", "t0001"))
 
     def test_tags_count_up_per_request_and_fit_the_protocol_tag(self):
         transport = FakeTransport(["OK #t0001", "OK #t0002"])
-        client = app_cli.Client(transport)
+        client = app_cli.Client(transport, counter_start=0)
         client.request("A")
         client.request("B")
         self.assertEqual(transport.written, [b"#t0001 A\r\n", b"#t0002 B\r\n"])
@@ -152,13 +152,48 @@ class TagTests(unittest.TestCase):
         self.assertIsNone(app_cli.Client(FakeTransport(["GA: 1"])).request("STATUS"))
 
 
+    def test_the_tags_of_a_run_start_from_the_clock_not_from_one(self):
+        # Two runs a second apart do not share a first tag, and the tag stays inside the pattern.
+        starts = []
+        for now in (1_000_000, 1_000_001):
+            real = app_settings.time.time
+            app_settings.time.time = lambda value=now: value
+            try:
+                starts.append(app_settings.tag_counter_start())
+            finally:
+                app_settings.time.time = real
+        self.assertNotEqual(starts[0], starts[1])
+        transport = FakeTransport(["OK"])
+        client = app_cli.Client(transport, counter_start=starts[0])
+        client.request("A")
+        self.assertRegex(transport.written[0].decode("ascii"), app_cli.TAG_PATTERN)
+        self.assertNotEqual(transport.written[0], b"#t0001 A\r\n")
+
+    def test_an_untagged_error_for_a_lost_request_ends_this_requests_answer(self):
+        for code, sentence in [
+            ("LINE_DAMAGED", "3 bytes lost on the port; the line was dropped"),
+            ("BAD_CHAR", "the line holds a byte that is not printable ASCII; it was dropped"),
+            ("LINE_TOO_LONG", "the line is longer than 128 bytes; it was dropped"),
+        ]:
+            transport = FakeTransport(["GA: 0", "OK #t0009", f"ERROR {code}: {sentence}", "OK #t0001"])
+            answer = app_cli.Client(transport, counter_start=0).request("STATUS")
+            self.assertEqual((answer.ok, answer.code, answer.tag), (False, code, None), code)
+            # The next request starts after it, so a late answer is skipped by its tag.
+            self.assertEqual(transport.read_line(), "OK #t0001")
+
+    def test_an_untagged_error_of_another_code_does_not_end_the_answer(self):
+        transport = FakeTransport(["ERROR ARGS: a tag is # and 1 to 8 letters or digits", "OK #t0001"])
+        answer = app_cli.Client(transport, counter_start=0).request("STATUS")
+        self.assertEqual(answer.final, "OK #t0001")
+
+
 class LineLengthTests(unittest.TestCase):
     def test_the_tag_counts_toward_the_limit_and_nothing_is_written_when_it_is_exceeded(self):
         limit = app_settings.line_max()
         # A line that fits on its own but not with the 7-byte tag.
         line = "X" * (limit - 3)
         transport = FakeTransport(["OK #t0001"])
-        client = app_cli.Client(transport)
+        client = app_cli.Client(transport, counter_start=0)
         with self.assertRaises(app_cli.LineTooLong):
             client.request(line)
         self.assertEqual(transport.written, [])
@@ -185,7 +220,7 @@ class LineLengthTests(unittest.TestCase):
         limit = app_settings.line_max()
         lines = iter(["X" * (limit - 2), "quit"])
         transport = FakeTransport([])
-        client = app_cli.Client(transport)
+        client = app_cli.Client(transport, counter_start=0)
         printed = []
         self.assertFalse(app_cli.run_interactive(client, lambda _p: next(lines), printed.append))
         self.assertEqual(transport.written, [])
@@ -198,6 +233,57 @@ class LineLengthTests(unittest.TestCase):
 
         line = "X" * (app_settings.line_max() - 2)
         self.assertEqual(app_cli.main([line], factory), 2)
+
+
+class NonAsciiTests(unittest.TestCase):
+    def test_a_non_ascii_request_is_refused_and_nothing_is_written(self):
+        transport = FakeTransport(["OK"])
+        client = app_cli.Client(transport, use_tags=False)
+        with self.assertRaises(app_cli.NotAscii):
+            client.request("FRU SET ASSET_TAG caf\u00e9")
+        self.assertEqual(transport.written, [])
+
+    def test_run_requests_prints_the_message_and_goes_on(self):
+        transport = FakeTransport(["OK"])
+        client = app_cli.Client(transport, use_tags=False)
+        lines = []
+        self.assertFalse(app_cli.run_requests(client, ["X caf\u00e9", "INFO"], lines.append))
+        self.assertEqual(lines, ["(not sent: a request holds a character that is not ASCII)", "OK"])
+        self.assertEqual(client.refused, 1)
+
+    def test_main_returns_2_with_a_message_and_does_not_open_the_port(self):
+        def factory(*_):
+            raise AssertionError("the port must not open")
+
+        self.assertEqual(app_cli.main(["FRU SET ASSET_TAG caf\u00e9"], factory), 2)
+
+
+class SerialOpenTests(unittest.TestCase):
+    def test_opening_the_port_clears_what_arrived_before(self):
+        import sys
+        import types
+
+        calls = []
+
+        class FakeSerial:
+            def __init__(self, port, baud, timeout):
+                calls.append(("open", port, baud, timeout))
+
+            def reset_input_buffer(self):
+                calls.append(("reset_input_buffer",))
+
+        fake = types.ModuleType("serial")
+        fake.Serial = FakeSerial
+        saved = sys.modules.get("serial")
+        sys.modules["serial"] = fake
+        try:
+            app_cli.SerialTransport("COM9", 115200, 1.0)
+        finally:
+            if saved is None:
+                del sys.modules["serial"]
+            else:
+                sys.modules["serial"] = saved
+        self.assertEqual(calls, [("open", "COM9", 115200, 1.0), ("reset_input_buffer",)])
 
 
 class RunTests(unittest.TestCase):

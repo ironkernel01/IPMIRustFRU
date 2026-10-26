@@ -31,7 +31,7 @@ impl ResetGate {
     }
 
     /// poll -- true when the reset runs now. `pending` is whether a reset is requested
-    /// (`Context::pending_reset`); `egress_empty` and `fru_clean` are the two conditions. With
+    /// (`Context::pending_reset`); `egress_empty` (nothing waits to leave: the IPMB response queue and the application port output) and `fru_clean` are the two conditions. With
     /// no reset pending the first-seen time is forgotten.
     pub fn poll(
         &mut self,
@@ -51,7 +51,7 @@ impl ResetGate {
         }
         if now_ms.wrapping_sub(seen) >= RESET_WAIT_MS {
             trace.line(format_args!(
-                "Reset: after {} ms (response queued: {}, FRU unsaved: {})",
+                "Reset: after {} ms (output queued: {}, FRU unsaved: {})",
                 RESET_WAIT_MS, !egress_empty, !fru_clean
             ));
             return true;

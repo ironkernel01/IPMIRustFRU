@@ -416,7 +416,7 @@ impl Emulator {
     /// service_fru_save -- the firmware save step (`IpmbLink::service_fru_log`) on the flash
     /// copy: an accepted Write FRU Data is saved IPMC_FRU_PERSIST_DELAY_MS after it was seen, and
     /// at once while a cold reset is pending; nothing is saved while NVMRO is asserted or the
-    /// log is off (IPMC_FRU_PERSIST 0).
+    /// log is off (IPMC_FRU_PERSIST false).
     fn service_fru_save(&mut self, now_ms: u32) {
         if !FRU_PERSIST {
             return;

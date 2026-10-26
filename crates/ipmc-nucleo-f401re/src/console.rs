@@ -7,7 +7,7 @@
 //   SYS  : STATUS, RESET, VERSION      LED : ON, OFF, BLINK [HZ], AUTO, STATUS
 //   IPMB : ADDR, STATS, STATE
 //   SENSORS : SHOW, SDR, TRACE {OFF|EVENTS|ALL}     POWER : ON, OFF, CLEAR, STATUS
-//   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, FIELDS, GET [FIELD], and with IPMC_FRU_CONSOLE_WRITE 1
+//   FRU  : SHOW, DUMP {OFFSET} {COUNT}, STORE, FIELDS, GET [FIELD], and with IPMC_FRU_CONSOLE_WRITE true
 //          SET [FIELD] {VALUE...}, RESTORE
 //   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
 //   DEBUG: STATUS, LOG {ON|OFF}, DUMP {CSV|TRACE}, CLEAR, TRACE {IPMI|I2C} {ON|OFF},
@@ -251,10 +251,10 @@ static FRU_COMMANDS: [ConsoleCommand; 7] = [
         handler: data_cmds::cmd_fru_get,
     },
     // The rows below this line are the write rows: they are in the FRU group only when
-    // IPMC_FRU_CONSOLE_WRITE is 1 (`FRU_TABLE`).
+    // IPMC_FRU_CONSOLE_WRITE is true (`FRU_TABLE`).
     Command {
         syntax: "SET [FIELD] {VALUE...}",
-        help: "Write a FRU field (no value clears a text field; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted",
+        help: "Write a FRU field (no value clears a text field or the date; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted",
         handler: data_cmds::cmd_fru_set,
     },
     Command {
@@ -698,7 +698,7 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     if ipmc_defs::IPMC_APP_UART_ENABLE {
         print_uart(Port::App);
     } else {
-        out!("App UART:     off (IPMC_APP_UART_ENABLE 0)\n");
+        out!("App UART:     off (IPMC_APP_UART_ENABLE false)\n");
     }
     out!("{}\n", addr::bootloader_pin_text(ga::bootloader_pin_high()));
     Ok(())

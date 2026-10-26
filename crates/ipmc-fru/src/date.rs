@@ -5,10 +5,12 @@
 //! 11-1, 000000h = unspecified). It ends at FFFFFFh minutes, 2027-11-24 20:15, and a Chassis
 //! Manager decodes only that field, so it cannot be widened. This IPMC keeps the date in the VITA
 //! 46.11 Alternate Manufacturing Date/Time record (VITA 34h, a 32-bit minutes count, MultiRecord
-//! area; `records.rs` lays it out, `unit.rs` reads and writes it) and the standard field is always
-//! 000000h (unspecified), in the built image and after every write. The conversions below cover
-//! 1996-01-01 00:00 to 9999-12-31 23:59 with the Gregorian leap-year rule. They are `const fn`
-//! because the built image carries the default date.
+//! area; `records.rs` lays it out, `unit.rs` reads and writes it) and the standard field is
+//! 000000h (unspecified) in the built image and after every write; a nonzero standard field that a
+//! Chassis Manager wrote is the date in use (VITA 46.11 section 10.3.10). Minute 0 means
+//! unspecified, so the dates the text form accepts run from 1996-01-01 00:01 to 9999-12-31 23:59,
+//! with the Gregorian leap-year rule. The conversions below are `const fn` because the built image
+//! carries the default date.
 
 use core::fmt;
 
@@ -21,6 +23,9 @@ const EPOCH_DAYS: i64 = 9_496;
 /// STANDARD_MINUTES_MAX -- the largest value the standard 3-byte field holds (FFFFFFh minutes,
 /// 2027-11-24 20:15): why the date lives in the VITA 34h record.
 pub const STANDARD_MINUTES_MAX: u32 = 0x00FF_FFFF;
+/// MINUTES_MIN -- the first date the text form accepts: 1996-01-01 00:01. Minute 0 is
+/// "unspecified" (FRU spec Table 11-1, VITA 34h record), so no date maps to it.
+pub const MINUTES_MIN: u32 = 1;
 /// MINUTES_MAX -- the last minute the date accepts: 9999-12-31 23:59.
 pub const MINUTES_MAX: u32 = minutes_of(9999, 12, 31, 23, 59);
 
@@ -100,8 +105,8 @@ pub const fn text_of(minutes: u32) -> [u8; TEXT_LEN] {
 }
 
 /// parse_parts -- `YYYY-MM-DD<sep>HH:MM` as minutes since 1996-01-01 00:00; None for a text of
-/// another shape, a date that does not exist, a date before 1996-01-01 00:00 or after
-/// `MINUTES_MAX`. A `const fn`, so the build checks the default date with the same parser.
+/// another shape, a date that does not exist, a date before 1996-01-01 00:01 (minute 0 is
+/// "unspecified") or after `MINUTES_MAX`. A `const fn`, so the build checks the default date with the same parser.
 const fn parse_parts(bytes: &[u8], separator: u8) -> Option<u32> {
     if bytes.len() != TEXT_LEN {
         return None;
@@ -137,7 +142,7 @@ const fn parse_parts(bytes: &[u8], separator: u8) -> Option<u32> {
         return None;
     }
     let minutes = days * MINUTES_PER_DAY + hour * 60 + minute;
-    if minutes > MINUTES_MAX as i64 {
+    if minutes < MINUTES_MIN as i64 || minutes > MINUTES_MAX as i64 {
         return None;
     }
     Some(minutes as u32)
@@ -164,18 +169,18 @@ pub const fn parse_text(text: &str) -> Option<u32> {
 pub const DEFAULT_MINUTES: u32 = match parse_text(ipmc_defs::IPMC_FRU_MFG_DATE) {
     Some(minutes) => minutes,
     None => panic!(
-        "IPMC_FRU_MFG_DATE must be YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59"
+        "IPMC_FRU_MFG_DATE must be YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59 (minute 0 is unspecified)"
     ),
 };
 
-/// DateRange -- prints the accepted range, `use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to
+/// DateRange -- prints the accepted range, `use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to
 /// 9999-12-31 23:59`: the one text of the bad-date answer on every port.
 #[derive(Clone, Copy, Debug)]
 pub struct DateRange;
 
 impl fmt::Display for DateRange {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (first, last) = (text_of(0), text_of(MINUTES_MAX));
+        let (first, last) = (text_of(MINUTES_MIN), text_of(MINUTES_MAX));
         write!(
             out,
             "use YYYY-MM-DD HH:MM (UTC), {} to {}",

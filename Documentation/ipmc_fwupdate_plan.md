@@ -430,7 +430,7 @@ Starting the runtime firmware at 0x0800_8000
 ```
 
 The last line prints only on the start path (after the countdown when one runs). `Request`
-names the interface that asked (from the request words). With `IPMC_APP_UART_ENABLE 0` the
+names the interface that asked (from the request words). With `IPMC_APP_UART_ENABLE false` the
 decision and countdown lines name COM3 alone. The digest line prints the first 8 bytes (16 hex digits) of the computed digest to
 keep the line short; `INFO` and `VERIFY` print all 64 digits and the stored value. The reset
 cause texts are those of `ResetCause::text` (shared `reset_cause.rs`). `Image check` reads `not
@@ -704,7 +704,7 @@ aborts and starts again with an erase.
 
 Pacing: stop-and-wait, one record in flight. The bootloader never holds more than one line, the
 RX ring (256 bytes) holds a whole line, and the host sends nothing while the core stalls on a
-flash program, so no flow control is needed. With `IPMC_APP_UART_FLOW 1` on APP_UART, RTS/CTS
+flash program, so no flow control is needed. With `IPMC_APP_UART_FLOW true` on APP_UART, RTS/CTS
 also holds a sender that ignores the protocol; the console has no handshake lines. A sender that
 streams without waiting loses bytes during the stalls; the damaged lines fail `FORMAT` or
 `CHECKSUM` and are refused, never programmed.
@@ -919,7 +919,7 @@ runtime digest from `INFO`. The board ends with the default `ipmc-board.bin` and
 | B17 | `DEBUG BOOTLOADER`, `WAKEUP`, then `RESET` with a valid runtime and the pin open | `OK RESET`; the trace shows `Request: none`, the countdown runs and the valid runtime starts (the request was consumed) |
 | B18 | Board with sectors 2-7 erased (SWD erase or `ERASE APP` then reset) | trace `missing`, `no image`, waits; an update recovers |
 | B19 | IPMB during a session | the Aardvark sees no ACK from 82h and a free bus (SCL and SDA high) |
-| B20 | APP_UART with `IPMC_APP_UART_FLOW 1` and RTS/CTS wired | update on COM5 completes; restore the define byte for byte afterwards |
+| B20 | APP_UART with `IPMC_APP_UART_FLOW true` and RTS/CTS wired | update on COM5 completes; restore the define byte for byte afterwards |
 | B21 | SWD path (once WinUSB is installed): `gen.ps1 flash -Swd` with a changed runtime | sectors 2 onward only: the FRU unit fields written before survive, the bootloader version is unchanged |
 | B22 | Countdown entry instead of the PC10 jumper: `fwupdate.py --port COM5 wakeup`, then press the black reset button | the tool sees the countdown line, its `WAKEUP` inside the window gets `OK`; the console shows `staying in the bootloader: WAKEUP in countdown`; COM3 output stops after the countdown line ends; a full update (as B5) runs in that session |
 | B23 | As B22 on COM3 | session on COM3; COM5 silent after the countdown line ends |

@@ -19,13 +19,16 @@
 // what the TX ring takes (`uart::write`, which never waits) and keeps a cursor for the rest. While
 // output is pending the port takes no new bytes, so one request is answered at a time and the
 // output order is the request order. One pass does at most IPMC_APP_BYTES_PER_POLL bytes of
-// input and stops after one answer: formatting the longest answers (HELP, FRU FIELDS) is a few
-// hundred microseconds of work, estimated and not measured on the board, and the 111 ms the
+// input and stops after one answer. Formatting the answer is the work of that pass, estimated
+// from the code (not measured on the board; the main session measures it) at up to about 1 ms for
+// HELP or FRU FIELDS, while FRU SET and IPMI run their whole work in their pass; the 111 ms the
 // longest answer needs on the wire (1280 bytes at 115200 baud) is spent in the UART interrupt,
 // not in the main loop. The IPMB service therefore waits at most one such pass per loop turn.
 // With flow control on (IPMC_APP_UART_FLOW) and the payload CPU holding CTS closed, the output
-// stays pending and the receive ring fills; the port then counts the loss and answers the next
-// line end `LINE_DAMAGED`, as for any other lost byte.
+// stays pending and the receive ring fills; a full ring then holds the sender off (RTS
+// deasserted), so only the byte already in flight can be lost, and the port counts that loss and
+// answers the next line end `LINE_DAMAGED`. Without flow control a sender that fills the ring
+// loses bytes, with the same answer.
 //
 // Ownership: the UART driver (bsp/uart.rs) owns USART1 and its rings; this file only reads and
 // writes through its functions. The per-unit FRU fields are written through the same path as a
@@ -103,21 +106,20 @@ impl AppPort {
         if !ENABLED || !uart::is_up(Port::App) {
             return;
         }
+        self.poll_pass(link);
+        // A Cold Reset asked for from this port waits for its own answer: the link's reset gate
+        // counts the output still in `out` or in the TX ring as "not idle".
+        link.set_app_output_pending(self.sent < self.out.len() || uart::tx_pending(Port::App));
+    }
+
+    /// poll_pass -- the work of one `poll` pass, with the port up.
+    fn poll_pass(&mut self, link: &mut IpmbLink) {
         if !self.started {
             self.started = true;
             // The banner fits the empty buffer.
             let _ = banner(&LinkHost { link: &mut *link }, &mut self.out);
         }
-        // The loss is not tied to a line: the byte can be anywhere in the ring, so every byte
-        // waiting is dropped and the line editor resynchronises at the next line end.
-        let lost_now = lost_bytes();
-        let moved = lost_now.wrapping_sub(self.lost_seen);
-        if moved > 0 {
-            uart::discard_rx(Port::App);
-            self.editor.damage(moved);
-            self.lost_seen = lost_now;
-            link.log_text(format_args!("app port lost {moved} bytes, ring discarded"));
-        }
+        self.check_loss(link);
         if self.drain() {
             return;
         }
@@ -125,6 +127,10 @@ impl AppPort {
             let Some(byte) = uart::getc(Port::App) else {
                 break;
             };
+            // The UART interrupt can lose a byte while this loop runs. Looking after every byte
+            // taken and before it is served means a line completed by this byte is already
+            // marked damaged: it is answered `ERROR LINE_DAMAGED`, never run.
+            self.check_loss(link);
             let served = serve(
                 &mut self.editor,
                 byte,
@@ -149,6 +155,21 @@ impl AppPort {
             break;
         }
         self.drain();
+    }
+
+    /// check_loss -- when the port lost bytes since the last look, discards everything in the UART
+    /// RX ring and marks the editor damaged. The loss is not tied to a line: the byte can be
+    /// anywhere in the ring, so every byte waiting is dropped and the line editor resynchronises
+    /// at the next line end.
+    fn check_loss(&mut self, link: &mut IpmbLink) {
+        let lost_now = lost_bytes();
+        let moved = lost_now.wrapping_sub(self.lost_seen);
+        if moved > 0 {
+            uart::discard_rx(Port::App);
+            self.editor.damage(moved);
+            self.lost_seen = lost_now;
+            link.log_text(format_args!("app port lost {moved} bytes, ring discarded"));
+        }
     }
 
     /// drain -- copies what the TX ring takes of the pending output (never waits); true while

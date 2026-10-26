@@ -11,7 +11,9 @@ use ipmc_core::ipmb::IPMB_MAX_LEN;
 use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruField};
 
-use crate::engine::{final_line, reject, run, write_help, Args, Fail, Row, END, PROMPT};
+use crate::engine::{
+    final_line, reject, run, write_help, Args, Fail, Row, ANSWER_MAX, END, PROMPT, TAG_MAX,
+};
 use crate::host::{AppHost, SaveState};
 use crate::line::{AnswerBuf, Fed, LineEditor};
 
@@ -43,7 +45,7 @@ pub const COMMANDS: &[Row] = &[
         handler: cmd_help,
     },
     Row {
-        syntax: "?",
+        syntax: "? {COMMAND...}",
         help: "Same as HELP",
         handler: cmd_help,
     },
@@ -88,6 +90,60 @@ pub const COMMANDS: &[Row] = &[
         handler: cmd_ipmi,
     },
 ];
+
+// ---- the size of the longest answer ----
+
+/// FIELD_TEXT_MAX -- the longest text of a FRU field: 63 bytes (IPMI FRU type/length byte, 6 bits).
+/// A Chassis Manager can write a field longer than the room this IPMC reserves for it, so the
+/// worst case for the size of an answer is this, not `max_len`.
+const FIELD_TEXT_MAX: usize = 63;
+
+/// help_worst_case -- bytes of the `HELP` answer without a filter: per row two blanks, the syntax
+/// padded to the longest syntax plus two, ` - `, the help sentence and the line end.
+const fn help_worst_case() -> usize {
+    let (mut widest, mut i) = (0, 0);
+    while i < COMMANDS.len() {
+        if COMMANDS[i].syntax.len() > widest {
+            widest = COMMANDS[i].syntax.len();
+        }
+        i += 1;
+    }
+    let (mut total, mut i) = (0, 0);
+    while i < COMMANDS.len() {
+        total += 2 + (widest + 2) + 3 + COMMANDS[i].help.len() + END.len();
+        i += 1;
+    }
+    total
+}
+
+/// fields_worst_case -- bytes of the `FRU FIELDS` answer when every text field holds
+/// `FIELD_TEXT_MAX` bytes: per field the name, `: `, the value, ` (max nn)` and the line end.
+const fn fields_worst_case() -> usize {
+    let (mut total, mut i) = (0, 0);
+    while i < FruField::ALL.len() {
+        total += FruField::ALL[i].name().len() + 2 + FIELD_TEXT_MAX + " (max 63)".len() + END.len();
+        i += 1;
+    }
+    total
+}
+
+/// ECHO_WORST_CASE -- the echo of one pass of typed bytes (`IPMC_APP_BYTES_PER_POLL`), 3 bytes
+/// each at worst (a backspace echoes BS SP BS), which comes before an answer in the buffer.
+const ECHO_WORST_CASE: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL * 3;
+
+/// ANSWER_TAIL -- what follows the data lines: `OK`, a blank, `#` and a tag of `TAG_MAX` letters or
+/// digits (the longest final line), the line end, and the prompt.
+const ANSWER_TAIL: usize = "OK #".len() + TAG_MAX + END.len() + PROMPT.len();
+
+// The longest answers (the `HELP` table and `FRU FIELDS` with 63-byte values) with the echo in
+// front and the final line and prompt behind fit the answer buffer. A command added to the table,
+// a longer help sentence or a larger `IPMC_APP_BYTES_PER_POLL` that breaks this fails the build
+// here, not on a payload CPU.
+const _: () = assert!(
+    ECHO_WORST_CASE + ANSWER_TAIL + help_worst_case() <= ANSWER_MAX
+        && ECHO_WORST_CASE + ANSWER_TAIL + fields_worst_case() <= ANSWER_MAX,
+    "ANSWER_MAX is too small for the longest answer (HELP or FRU FIELDS) with the echo, the tag and the prompt"
+);
 
 // ---- the byte-to-answer step ----
 
@@ -188,11 +244,13 @@ pub fn answer_final_line<const N: usize>(out: &AnswerBuf<N>, answer_at: usize) -
 // ---- data lines and helpers ----
 
 /// data -- writes the data line `KEY: value`.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn data(out: &mut dyn Write, key: &str, value: fmt::Arguments<'_>) -> Result<(), Fail> {
     Ok(write!(out, "{key}: {value}{END}")?)
 }
 
 /// field_of -- the field named by `word`.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn field_of(word: &str) -> Result<FruField, Fail> {
     FruField::from_name(word).ok_or_else(|| {
         Fail::new(
@@ -235,6 +293,7 @@ fn field_error(error: FieldError, field: FruField) -> Fail {
 }
 
 /// stored -- the text of `field` as the host holds it now (nothing for an empty field).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn stored(host: &dyn AppHost, field: FruField) -> Result<AnswerBuf<VALUE_MAX>, Fail> {
     let mut value = AnswerBuf::new();
     host.unit_field(field, &mut value)
@@ -252,13 +311,15 @@ fn write_disabled() -> Fail {
 
 // ---- handlers ----
 
-/// cmd_help -- `HELP` and `?` print the aligned table of every command; `HELP <words>` prints the
-/// rows that start with those words.
+/// cmd_help -- `HELP` and `?` print the aligned table of every command; `HELP <words>` and
+/// `? <words>` print the rows that start with those words (MenuBuilder section 9: `?` is HELP).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_help(args: &Args<'_>, _host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     write_help(COMMANDS, args.get(0), out)
 }
 
 /// cmd_info -- `INFO` answers FIRMWARE, VERSION, TIER and PROTOCOL.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_info(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     data(out, "FIRMWARE", format_args!("{}", ipmc_defs::IPMC_FW_NAME))?;
     data(out, "VERSION", format_args!("{}", host.version()))?;
@@ -287,6 +348,7 @@ const fn health_word(health: Summary) -> &'static str {
 /// cmd_status -- `STATUS` answers IPMB_ADDRESS (`82h`), GA, FRU_STATE (`M4 FRU Active`),
 /// PAYLOAD_POWER (`on`, `off`, `fault`), HEALTH (`ok`, `fault`), NVMRO (`asserted`, `deasserted`)
 /// and UPTIME (`0d 00:17:48`).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_status(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     let status = host.status();
     let nvmro = if status.nvmro {
@@ -331,6 +393,7 @@ fn cmd_status(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> 
 }
 
 /// cmd_fru_state -- `FRU STATE` answers FRU_STATE (`M4 FRU Active`).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_fru_state(
     _args: &Args<'_>,
     host: &mut dyn AppHost,
@@ -346,6 +409,7 @@ fn cmd_fru_state(
 /// cmd_fru_fields -- `FRU FIELDS` answers one line per field, `<FIELD>: <value> (max <n>)`. An
 /// empty text field leaves nothing between the colon and blank and the parenthesis:
 /// `ASSET_TAG:  (max 24)`. MFG_DATE is `YYYY-MM-DD HH:MM` (UTC).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_fru_fields(
     _args: &Args<'_>,
     host: &mut dyn AppHost,
@@ -364,6 +428,7 @@ fn cmd_fru_fields(
 
 /// cmd_fru_get -- `FRU GET <field>` answers `<FIELD>: <value>`; an empty field leaves the value
 /// empty.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_fru_get(args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     let field = field_of(args.required(0)?)?;
     let value = stored(host, field)?;
@@ -376,12 +441,14 @@ fn cmd_fru_get(args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> 
 /// `WRITE_DISABLED` when IPMC_APP_FRU_WRITE is false. The other errors are `TOO_LONG`,
 /// `BAD_LENGTH`, `NOT_ASCII`, `NO_ROOM`, `NVMRO`, `BAD_DATE` and `FRU_IMAGE`; a refused request
 /// leaves the FRU image as it was.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_fru_set(args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     set_field(args, host, out, WRITE_ENABLED)
 }
 
 /// set_field -- `cmd_fru_set` with the write permission as a parameter, so a test reaches the
 /// `WRITE_DISABLED` answer whatever the build setting is.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 pub(crate) fn set_field(
     args: &Args<'_>,
     host: &mut dyn AppHost,
@@ -402,6 +469,7 @@ pub(crate) fn set_field(
 /// and `SAVE: pending` while a change still waits for its save (not an error: a payload CPU that
 /// wrote the unit data repeats `FRU SAVE` until it reads `done` before it removes power).
 /// `LOG_OFF` when the flash log is off.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_fru_save(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     let word = match host.save_state() {
         SaveState::Saved => "done",
@@ -417,6 +485,7 @@ fn cmd_fru_save(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
 }
 
 /// hex_byte -- one hex byte (`06`, `0x06` and `6` are the same).
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn hex_byte(word: &str) -> Result<u8, Fail> {
     ipmc_wire::hex_word(word)
         .ok_or_else(|| Fail::new("ARGS", format_args!("'{word}' is not a hex byte")))
@@ -429,12 +498,14 @@ fn hex_byte(word: &str) -> Result<u8, Fail> {
 /// `IPMI_FAILED` means it did not run (a NetFn that is odd or above 3Eh, or more data than one
 /// frame holds). While IPMC_APP_FRU_WRITE is false, Write FRU Data (`WRITE_REFUSED`) is refused
 /// with `WRITE_DISABLED`.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_ipmi(args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
     ipmi_request(args, host, out, WRITE_ENABLED)
 }
 
 /// ipmi_request -- `cmd_ipmi` with the write permission as a parameter, so a test reaches the
 /// `WRITE_DISABLED` answer whatever the build setting is.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 pub(crate) fn ipmi_request(
     args: &Args<'_>,
     host: &mut dyn AppHost,

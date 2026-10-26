@@ -4,8 +4,9 @@
 (default: crates/ipmc-defs/src/defs.rs). A value is an int (decimal, 0x hex, `_` separators
 allowed, a leading minus), a bool, a str (a "text" literal), a bare earlier NAME (resolved) or
 an enum variant (`Type::Variant`, returned as the variant name string). Everything else in the
-file is a comment, an attribute, an enum body or a blank line; any line this reader does not
-understand raises DefsError with the file and line number.
+file is a comment, an attribute, an enum body or a blank line. rustfmt wraps a long value onto
+the next line (`pub const NAME: T =` then the value indented); that form, and only that, is
+joined. Any line this reader does not understand raises DefsError with the file and line number.
 
 Command line:  python -I tools/defs.py NAME [NAME ...]   prints one value per line.
 """
@@ -21,6 +22,7 @@ _INT = re.compile(r"-?(?:0x[0-9A-Fa-f_]+|[0-9][0-9_]*)$")
 _STRING = re.compile(r'"([ -!#-\[\]-~]*)"$')  # printable ASCII, no quote, no backslash
 _VARIANT = re.compile(r"(\w+)::(\w+)$")
 _NAME = re.compile(r"[A-Z][A-Z0-9_]*$")
+_WRAPPED = re.compile(r"pub const \w+: (?:&str|bool|[ui](?:8|16|32|64)|usize|\w+) =$")
 _ENUM_OPEN = re.compile(r"pub enum \w+ \{$")
 _VARIANT_LINE = re.compile(r"\w+,$")
 
@@ -56,9 +58,19 @@ def read(path=None):
     path = Path(path) if path else DEFAULT_PATH
     values = {}
     in_enum = False
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    skip = False
+    for number, raw in enumerate(lines, 1):
+        if skip:
+            skip = False
+            continue
         where = f"{path}:{number}"
         line = raw.strip()
+        if _WRAPPED.match(line):
+            if number >= len(lines) or not lines[number].startswith("    "):
+                raise DefsError(f"{where}: a wrapped value must follow, indented: {line}")
+            line = f"{line} {lines[number].strip()}"
+            skip = True
         if not line or line.startswith("//") or line.startswith("#["):
             continue
         if in_enum:

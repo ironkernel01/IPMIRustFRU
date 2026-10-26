@@ -249,7 +249,8 @@ const fn build() -> Image {
     );
     push_alt_mfg_record(&mut img, date::DEFAULT_MINUTES);
 
-    // Common header (FRU spec Table 8-1): Internal Use, Chassis Info and MultiRecord are absent.
+    // Common header (FRU spec Table 8-1): Internal Use and Chassis Info are absent; the MultiRecord
+    // area is present (the VITA 34h record).
     img.bytes[HDR_VERSION] = FORMAT_VERSION;
     img.bytes[HDR_INTERNAL] = 0;
     img.bytes[HDR_CHASSIS] = 0;
@@ -834,10 +835,12 @@ mod tests {
 
     #[test]
     fn the_built_date_is_the_alt_record_and_the_standard_field_is_zero() {
-        // 2026-10-23 00:00: (30 years x 365 + 8 leap days) + 295 days = 11253 days x 1440
-        // minutes; the define is the text, the standard field is 000000h.
-        assert_eq!(ipmc_defs::IPMC_FRU_MFG_DATE, "2026-10-23 00:00");
-        assert_eq!(date::DEFAULT_MINUTES, 11_253u32 * 1_440);
+        // The define is the text, the date parser gives the minutes, the standard field is
+        // 000000h.
+        assert_eq!(
+            date::parse_text(ipmc_defs::IPMC_FRU_MFG_DATE),
+            Some(date::DEFAULT_MINUTES)
+        );
         let store = FruStore::new();
         let head = common_header(store.bytes()).unwrap();
         let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();

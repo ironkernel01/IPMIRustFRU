@@ -8,6 +8,7 @@
 use core::fmt::Write;
 
 use ipmc_core::fru_state::State;
+use ipmc_core::identity::{additional_support, DEVICE_IDENTITY};
 use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruField, FruStore};
 
@@ -19,6 +20,9 @@ use crate::{
     answer_final_line, banner, final_line, respond, run, serve, AnswerBuf, AppError, AppHost, Args,
     Echo, Fed, IpmiData, LineEditor, SaveState, Status, ANSWER_MAX, COMMANDS, PROMPT,
 };
+
+/// LONG_TEXT -- the longest text of a FRU field, bytes (type/length byte, 6 bits).
+const LONG_TEXT: usize = 63;
 
 /// FakeHost -- the board for the tests.
 struct FakeHost {
@@ -36,6 +40,9 @@ struct FakeHost {
     ipmi_calls: Vec<(u8, u8, Vec<u8>)>,
     /// The name `command_name` gives.
     name: Option<&'static str>,
+    /// Every text field reads as `LONG_TEXT` bytes of text: a host whose FRU image a Chassis
+    /// Manager filled with the longest values.
+    long_text: bool,
 }
 
 impl FakeHost {
@@ -48,9 +55,10 @@ impl FakeHost {
             save: SaveState::Saved,
             state: State::M4,
             forced_set_error: None,
-            ipmi_result: Ok((0, vec![0x20, 0x01, 0x02])),
+            ipmi_result: Ok((0, DEVICE_IDENTITY.response_data().to_vec())),
             ipmi_calls: Vec::new(),
             name: Some("App Get Device ID"),
+            long_text: false,
         }
     }
 }
@@ -76,6 +84,11 @@ impl AppHost for FakeHost {
     }
 
     fn unit_field(&self, f: FruField, out: &mut dyn core::fmt::Write) -> Result<(), FieldError> {
+        if self.long_text && f != FruField::MfgDate {
+            return out
+                .write_str(&"v".repeat(LONG_TEXT))
+                .map_err(|_| FieldError::TooLong);
+        }
         ipmc_fru::write_unit_field(self.store.bytes(), f, out)
     }
 
@@ -122,6 +135,15 @@ fn expected(text: &str) -> String {
         .replace("{tier}", &ipmc_defs::IPMC_TIER.to_string())
         .replace("{help}", HELP_TABLE)
         .replace("{fields}", FIELD_LINES)
+        .replace("{devid}", &hex_text(&DEVICE_IDENTITY.response_data()))
+}
+
+/// hex_text -- bytes as the `DATA:` value of an IPMI answer: two hex digits each, one blank
+/// between. The test host answers Get Device ID with the bytes the board build answers
+/// (`DEVICE_IDENTITY`), so the documented session matches the board.
+fn hex_text(bytes: &[u8]) -> String {
+    let words: Vec<String> = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+    words.join(" ")
 }
 
 /// FIELD_LINES -- the data lines of `FRU FIELDS` on the built FRU image.
@@ -143,7 +165,7 @@ PRODUCT_FILE_ID:  (max 16)
 /// HELP_TABLE -- the aligned rows of `HELP`: the syntax column is the longest syntax (28) plus
 /// two wide, then ` - `; every dash is in the same column.
 const HELP_TABLE: &str = "  HELP {COMMAND...}              - List the commands, or describe one
-  ?                              - Same as HELP
+  ? {COMMAND...}                 - Same as HELP
   INFO                           - Firmware name, version, Tier and protocol version
   STATUS                         - IPMB address, GA, FRU state, payload power, health, NVMRO, uptime
   FRU STATE                      - Operational state of FRU 0 (M0, M1, M4, M5 or M6)
@@ -213,6 +235,17 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
         "FRU SET MFG_DATE 9999-12-31 23:59",
         "MFG_DATE: 9999-12-31 23:59\nOK\n",
     ),
+    // No value clears the date; minute 0 (1996-01-01 00:00) is "unspecified", not a date.
+    ("FRU SET MFG_DATE", "MFG_DATE: unspecified\nOK\n"),
+    ("FRU SET MFG_DATE   ", "MFG_DATE: unspecified\nOK\n"),
+    (
+        "FRU SET MFG_DATE 1996-01-01 00:00",
+        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59\n",
+    ),
+    (
+        "FRU SET MFG_DATE 1996-01-01 00:01",
+        "MFG_DATE: 1996-01-01 00:01\nOK\n",
+    ),
     ("FRU SET BOARD_FILE_ID fid-9", "BOARD_FILE_ID: fid-9\nOK\n"),
     ("FRU SET BOARD_PART", "BOARD_PART: \nOK\n"),
     ("FRU SET BOARD_PART   ", "BOARD_PART: \nOK\n"),
@@ -230,11 +263,11 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ),
     (
         "FRU SET MFG_DATE yesterday",
-        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
+        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59\n",
     ),
     (
         "FRU SET MFG_DATE 2026-02-30 00:00",
-        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
+        "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59\n",
     ),
     ("FRU SET", "ERROR ARGS: usage: FRU SET [FIELD] {VALUE...}\n"),
     (
@@ -248,15 +281,15 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     // IPMI
     (
         "IPMI 06 01",
-        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+        "CC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n",
     ),
     (
         "ipmi 0x06 0x01 ff",
-        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+        "CC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n",
     ),
     (
         "IPMI 6 1",
-        "CC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n",
+        "CC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n",
     ),
     (
         "IPMI 06",
@@ -281,12 +314,21 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
         "HELP FRU SET BOARD_SERIAL",
         "  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM\nOK\n",
     ),
-    ("HELP ?", "  ?                              - Same as HELP\nOK\n"),
+    ("HELP ?", "  ? {COMMAND...}                 - Same as HELP\nOK\n"),
     (
         "HELP NOPE",
         "ERROR UNKNOWN: no command 'NOPE'; type HELP or ?\n",
     ),
-    ("? X", "ERROR ARGS: usage: ?\n"),
+    // `? <words>` is `HELP <words>` (MenuBuilder section 9).
+    ("? X", "ERROR UNKNOWN: no command 'X'; type HELP or ?\n"),
+    (
+        "? fru set",
+        "  FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM\nOK\n",
+    ),
+    (
+        "? INFO",
+        "  INFO                           - Firmware name, version, Tier and protocol version\nOK\n",
+    ),
     // unknown commands and empty requests
     (
         "BOGUS x y",
@@ -376,6 +418,7 @@ fn the_help_table_text_is_exact_and_aligned() {
 
 // ---- the engine ----
 
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn no_op(_: &Args<'_>, _: &mut dyn AppHost, _: &mut dyn Write) -> Result<(), Fail> {
     Ok(())
 }
@@ -521,6 +564,7 @@ fn arguments_split_into_words_and_a_rest_value() {
 
 #[test]
 fn a_failing_handler_takes_back_its_data_lines() {
+    #[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
     fn partial(_: &Args<'_>, _: &mut dyn AppHost, out: &mut dyn Write) -> Result<(), Fail> {
         write!(out, "KEY: value\r\n")?;
         Err(Fail::new("BROKEN", format_args!("it stopped")))
@@ -707,7 +751,7 @@ fn every_field_error_has_its_error_code_and_sentence() {
         ),
         (
             FieldError::BadDate,
-            "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59\n",
+            "ERROR BAD_DATE: use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59\n",
         ),
         (
             FieldError::Corrupt,
@@ -948,6 +992,20 @@ fn an_overlong_line_is_answered_once_when_its_end_arrives() {
 }
 
 #[test]
+fn a_line_of_blanks_is_an_empty_line() {
+    let mut editor = LineEditor::<32>::new();
+    for byte in b"  \t  " {
+        editor.push(*byte);
+    }
+    assert_eq!(editor.push(b'\r').fed, Fed::Empty);
+    // The session shows only the prompt after it, as after an empty line.
+    let text = typed::<32>(b"   \r\r");
+    let prompt_only = format!("{PROMPT}   \r\n{PROMPT}\r\n{PROMPT}");
+    assert!(text.ends_with(&prompt_only), "{text:?}");
+    assert!(!text.contains("ERROR"), "{text:?}");
+}
+
+#[test]
 fn the_editor_returns_the_text_of_the_line() {
     let mut editor = LineEditor::<32>::new();
     for byte in b"FRU GET ASSET_TAG" {
@@ -1096,6 +1154,18 @@ fn the_longest_answers_fit_the_answer_buffer_with_room_for_the_echo() {
     let long = reply(&mut host, &format!("#abcdefgh {word}"));
     assert!(long.contains(&word));
     assert!(long.len() + echo + after <= ANSWER_MAX);
+    // Every text field at 63 bytes (a host with long values): FRU FIELDS and FRU GET still fit,
+    // and no line is cut.
+    host.long_text = true;
+    for request in ["#abcdefgh FRU FIELDS", "#abcdefgh FRU GET BOARD_MFR"] {
+        let text = reply(&mut host, request);
+        assert!(text.ends_with("OK #abcdefgh\n"), "{request}: {text}");
+        assert!(text.len() + echo + after <= ANSWER_MAX, "{request}");
+    }
+    let fields = reply(&mut host, "FRU FIELDS");
+    let value = "v".repeat(LONG_TEXT);
+    assert_eq!(fields.matches(&format!(": {value} (max ")).count(), 12);
+    host.long_text = false;
     // A full frame of response data.
     host.ipmi_result = Ok((0, vec![0xAB; ipmc_core::ipmb::IPMB_RESPONSE_DATA_MAX]));
     let full = reply(&mut host, "#abcdefgh IPMI 06 01");
@@ -1156,6 +1226,7 @@ fn a_session_prints_as_the_documents_show_it() {
     let text = typed::<{ ipmc_defs::IPMC_APP_LINE_MAX }>(SESSION_INPUT).replace("\r\n", "\n");
     println!("{text}");
     let (fw, tier) = (ipmc_defs::IPMC_FW_NAME, ipmc_defs::IPMC_TIER);
+    let devid = hex_text(&DEVICE_IDENTITY.response_data());
     let want = format!(
         "IPMC application port, {fw} v0.1.0, Tier {tier}, protocol 2. Type HELP or ?.\n\
          app> HELP\n{HELP_TABLE}OK\n\
@@ -1163,7 +1234,7 @@ fn a_session_prints_as_the_documents_show_it() {
          app> FRU FIELDS\n{FIELD_LINES}OK\n\
          app> FRU SET BOARD_SERIAL 1234567890123456789012345\n\
          ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n\
-         app> IPMI 06 01\nCC: 00h\nDATA: 20 01 02\nCOMMAND: App Get Device ID\nOK\n\
+         app> IPMI 06 01\nCC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n\
          app> FRU SAVE\nSAVE: done\nOK\napp> ",
         "IPMB_ADDRESS: 82h\nGA: 1\nFRU_STATE: M4 FRU Active\nPAYLOAD_POWER: on\nHEALTH: ok\nNVMRO: deasserted\nUPTIME: 0d 00:17:48\nOK\n"
     );
@@ -1183,6 +1254,14 @@ fn the_session_in_the_crate_comment_is_what_the_code_prints() {
     let printed = typed::<{ ipmc_defs::IPMC_APP_LINE_MAX }>(input).replace("\r\n", "\n");
     // The comment shows the Tier-1 build; the banner of another build names its own Tier.
     let printed = printed.replace(&format!("Tier {},", ipmc_defs::IPMC_TIER), "Tier 1,");
+    // So does the Get Device ID answer: the Additional Device Support byte (06h of the data) is
+    // 09h in the Tier-1 build.
+    let mut tier1 = DEVICE_IDENTITY.response_data();
+    tier1[5] = additional_support(1);
+    let printed = printed.replace(
+        &hex_text(&DEVICE_IDENTITY.response_data()),
+        &hex_text(&tier1),
+    );
     let printed: Vec<&str> = printed.lines().map(str::trim_end).collect();
     assert_eq!(doc, printed);
 }

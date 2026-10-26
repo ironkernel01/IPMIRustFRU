@@ -304,7 +304,7 @@ ipmc
   POWER   ON | OFF | CLEAR | STATUS
   SIM     RAIL {N} {MV} | TEMP {DC} | FAULT {NAME} {STATE} | SHOW
   FRU     SHOW | DUMP {OFFSET} {COUNT} | STORE | FIELDS | GET [FIELD]
-          | SET [FIELD] {VALUE...} | RESTORE        (SET and RESTORE: IPMC_FRU_CONSOLE_WRITE 1)
+          | SET [FIELD] {VALUE...} | RESTORE        (SET and RESTORE: IPMC_FRU_CONSOLE_WRITE true)
   DEBUG   STATUS | LOG {STATE} | DUMP {FORMAT} | CLEAR | TRACE {WHAT} {STATE} | EVENTS {STATE}
           | IPMI [NETFN] [CMD] {DATA...} | INJECT [BUS] {BYTES...} | CACHE {ACTION}
   STATUS  (alias of SYS STATUS)
@@ -342,7 +342,7 @@ ipmc
 | 27 | cmd_fru_store | `FRU STORE` | - | - | 2 | 2 | Flash log state: records, newest sequence, free bytes, pending write, next erase |
 | 28 | cmd_fru_fields | `FRU FIELDS` | - | - | 2 | 2 | Every FRU field with its maximum length and its current value |
 | 29 | cmd_fru_get | `FRU GET [FIELD]` | FIELD | - | 3 | 3 | Current value of one FRU field; FRU FIELDS lists the names |
-| 30 | cmd_fru_set | `FRU SET [FIELD] {VALUE...}` | FIELD | VALUE... | 3 | rest | Write a FRU field (no value clears a text field; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted |
+| 30 | cmd_fru_set | `FRU SET [FIELD] {VALUE...}` | FIELD | VALUE... | 3 | rest | Write a FRU field (no value clears a text field or the date; MFG_DATE takes YYYY-MM-DD HH:MM); saved to flash after the save delay; refused while NVMRO is asserted |
 | 31 | cmd_fru_restore | `FRU RESTORE` | - | - | 2 | 2 | Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted |
 | 32 | cmd_debug_status | `DEBUG STATUS` | - | - | 2 | 2 | Debug switches, capture log use, event receiver, duplicate cache |
 | 33 | cmd_debug_log | `DEBUG LOG {STATE}` | - | STATE | 2 | 3 | Capture log ON or OFF; no argument shows its state |

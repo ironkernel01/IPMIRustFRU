@@ -43,6 +43,9 @@ use crate::line::AnswerBuf;
 /// table and `FRU FIELDS` (a test checks both against this size, with room left over).
 pub const ANSWER_MAX: usize = 1280;
 
+/// TAG_MAX -- the longest tag, letters or digits after the `#` of a request.
+pub const TAG_MAX: usize = 8;
+
 /// MAX_PARAMS -- the most parameters a row may declare.
 pub const MAX_PARAMS: usize = 4;
 
@@ -361,6 +364,7 @@ impl<'a> Args<'a> {
     /// required -- parameter `index` of a row that declares it required. The missing case cannot
     /// happen after `parse`; it is a `Fail` and not a panic so a wrong index in a handler shows
     /// as an error line.
+    #[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
     pub fn required(&self, index: usize) -> Result<&'a str, Fail> {
         self.get(index)
             .ok_or_else(|| Fail::new("ARGS", format_args!("parameter {index} is missing")))
@@ -369,6 +373,7 @@ impl<'a> Args<'a> {
 
 /// parse_tag -- splits `line` into the tag and the request. A first word that starts with `#`
 /// is the tag: 1 to 8 letters or digits after the `#`.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn parse_tag(line: &str) -> Result<(Option<&str>, &str), Fail> {
     let line = line.trim_start_matches(is_blank);
     if !line.starts_with('#') {
@@ -376,7 +381,7 @@ fn parse_tag(line: &str) -> Result<(Option<&str>, &str), Fail> {
     }
     let (word, after) = next_word(line).unwrap_or(("#", ""));
     let tag = word.strip_prefix('#').unwrap_or(word);
-    if (1..=8).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if (1..=TAG_MAX).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
         Ok((Some(tag), after.trim_start_matches(is_blank)))
     } else {
         Err(Fail::new(
@@ -427,6 +432,7 @@ fn unknown(rows: &[Row], line: &str) -> Fail {
 /// syntax of the table plus two, ` - ` and the help sentence. A filter that matches no row is
 /// `UNKNOWN`. The filter matches a row when its words equal the row's keywords as far as both
 /// go, so `FRU` lists the `FRU` rows and `FRU SET X` the row `FRU SET`.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 pub fn write_help(rows: &[Row], filter: Option<&str>, out: &mut dyn Write) -> Result<(), Fail> {
     let width = rows.iter().map(|row| row.syntax.len()).max().unwrap_or(0) + 2;
     let mut printed = 0;
@@ -462,6 +468,8 @@ fn finish<const N: usize>(
     tag: Option<&str>,
     result: Result<(), Fail>,
 ) {
+    #[allow(clippy::result_large_err)]
+    // Fail holds its sentence inline (no allocator); it is returned on the failure path only
     let result = result.and_then(|()| Ok(write!(out, "OK{}{END}", Tagged(tag))?));
     if let Err(fail) = result {
         out.truncate(mark);

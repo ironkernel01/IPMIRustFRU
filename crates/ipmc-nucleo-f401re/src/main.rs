@@ -79,7 +79,7 @@ fn main() -> ! {
         }
     }
     // The application port (APP_UART, USART1 on PCLK2) starts after the console, so a start-up
-    // failure of it can be reported on the console. With IPMC_APP_UART_ENABLE 0 USART1 is never
+    // failure of it can be reported on the console. With IPMC_APP_UART_ENABLE false USART1 is never
     // clocked and its pins stay parked.
     let app_uart_fault = if ipmc_defs::IPMC_APP_UART_ENABLE {
         bsp::uart::init(

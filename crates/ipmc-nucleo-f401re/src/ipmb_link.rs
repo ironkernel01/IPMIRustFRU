@@ -69,11 +69,10 @@ const FRU_ERASE_QUIET_MS: u32 = ipmc_defs::IPMC_FRU_ERASE_QUIET_MS;
 /// FRU_PERSIST_DELAY_MS -- quiet time before a Write FRU Data is saved (defs.rs).
 const FRU_PERSIST_DELAY_MS: u32 = ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
 /// URGENT_LINK_WAIT_MS -- longest an urgent save before a Cold Reset waits for the link to hold
-/// no accepted request and no untransmitted response before it erases anyway: the T5 response
-/// limit of 227 ms (VITA 46.11 Table 4.1.1-1) plus margin, so a request accepted just before
-/// still gets its answer out. After it the reset is imminent and the answer would be lost to
-/// the reset either way. Fixed by the specification limit, not a build tunable.
-const URGENT_LINK_WAIT_MS: u32 = 250;
+/// no accepted request and no untransmitted response before it erases anyway (defs.rs
+/// IPMC_URGENT_LINK_WAIT_MS, guarded in ipmc-defs): longer than the T5 response limit of 227 ms
+/// (VITA 46.11 Table 4.1.1-1), so a request accepted just before still gets its answer out.
+const URGENT_LINK_WAIT_MS: u32 = ipmc_defs::IPMC_URGENT_LINK_WAIT_MS;
 
 /// IpmbIo -- what the start-up code hands the link: the master, the consumer end of each bus's
 /// frame queue (None for a bus that is not fitted or whose I2C init failed) and the local fault
@@ -391,6 +390,10 @@ pub struct IpmbLink {
     ext: ipmc_ext::Active,
     /// The one decision when a pending Cold Reset runs (`service_reset` only performs it).
     reset_gate: ResetGate,
+    /// The application port still has output to send (set by `AppPort::poll` at the end of every
+    /// pass): part of the "not idle" input of the reset gate, so a Cold Reset asked for from the
+    /// application port finishes its own answer first, inside the gate's `IPMC_RESET_WAIT_MS`.
+    app_output_pending: bool,
     /// A save tried while a Cold Reset was pending failed: the normal delay applies again, so a
     /// failing flash does not stall every pass until the reset wait runs out.
     reset_save_failed: bool,
@@ -550,7 +553,7 @@ impl FlashLog for PausedErase<'_> {
 /// RestoreError -- why FRU RESTORE did not restore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestoreError {
-    /// The flash log is off (IPMC_FRU_PERSIST 0 or it did not start).
+    /// The flash log is off (IPMC_FRU_PERSIST false or it did not start).
     LogOff,
     /// NVMRO is asserted: no non-volatile write (VITA 46.11 Rule 8-3, Rec 4.1.10-1).
     Nvmro,
@@ -628,6 +631,7 @@ impl IpmbLink {
             last_rx_ms: None,
             ext: ipmc_ext::Active::default(),
             reset_gate: ResetGate::new(),
+            app_output_pending: false,
             reset_save_failed: false,
             urgent_since: None,
             urgent_forced: false,
@@ -982,6 +986,12 @@ impl IpmbLink {
         self.ipmb_stopped = true;
     }
 
+    /// set_app_output_pending -- the application port tells whether it still has output to send
+    /// (`AppPort::poll`, end of every pass); a pending Cold Reset waits for it.
+    pub fn set_app_output_pending(&mut self, pending: bool) {
+        self.app_output_pending = pending;
+    }
+
     /// service_reset -- performs `Context::pending_reset` when `ResetGate` says so (the response
     /// left and no accepted FRU write is unsaved, or IPMC_RESET_WAIT_MS passed).
     /// - Cold: one console line, the console is flushed, the requester's next sequence number is
@@ -990,7 +1000,9 @@ impl IpmbLink {
     fn service_reset(&mut self) {
         let now_ms = systick::millis();
         let request = self.dispatch.pending_reset;
-        let egress_empty = self.link.egress_empty();
+        // Nothing waits to leave: no IPMB response in the egress queue and no application port
+        // output in its buffer or TX ring.
+        let egress_empty = self.link.egress_empty() && !self.app_output_pending;
         let fru_clean = !self.fru_unsaved();
         let mut trace = LoggedTrace::new(&mut self.capture, self.ipmi_console);
         if !self.reset_gate.poll(
@@ -1006,9 +1018,10 @@ impl IpmbLink {
             Some(ResetRequest::Cold) => {
                 self.status(format_args!("Cold Reset: restarting"));
                 uart::flush(uart::Port::Console);
-                // The answer to an application port request that asked for this reset may still
-                // sit in the APP_UART TX ring. `flush` is bounded by `flush_polls`; with CTS held
-                // off the bound runs out (counted as a TX timeout) and the reset goes ahead.
+                // The gate waited for the application port output to leave (`app_output_pending`,
+                // bounded by IPMC_RESET_WAIT_MS); this flush only covers the last byte in the
+                // shift register. It is bounded by `flush_polls`; with CTS held off the bound runs
+                // out (counted as a TX timeout) and the reset goes ahead.
                 uart::flush(uart::Port::App);
                 reset_cause::keep_sequence(
                     self.link.next_request_seq(),

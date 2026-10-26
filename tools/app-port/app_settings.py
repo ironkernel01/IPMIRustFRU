@@ -8,6 +8,7 @@ sit in `app_cli.py` beside their rule.
 """
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -34,6 +35,14 @@ TAGS_DEFAULT = True
 # stays within the protocol's 8 letters or digits).
 TAG_PREFIX = "t"
 TAG_COUNTER_MODULUS = 0x1_0000
+
+
+def tag_counter_start():
+    """The counter value the first tag of a run uses. It follows the clock (seconds), so a run
+    does not repeat the tags of the run before it and a late answer of an earlier run, still in
+    the IPMC output, is not taken for an answer of this one."""
+    return int(time.time()) % TAG_COUNTER_MODULUS
+
 
 DEFS_PATH = defs.DEFAULT_PATH
 

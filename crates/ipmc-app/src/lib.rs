@@ -21,7 +21,7 @@
 //!
 //! The FRU image reserves room for those fields (the `IPMC_FRU_*_MAX` defines in defs.rs),
 //! so an update rewrites its field in place and no area moves. The manufacturing date is
-//! `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59. It lives in the VITA 46.11
+//! `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:01 to 9999-12-31 23:59. It lives in the VITA 46.11
 //! Alternate Manufacturing Date/Time record, because the standard 3-byte field of the FRU board
 //! area ends at 2027-11-24 20:15; the standard field stays 000000h (unspecified). The console
 //! `FRU` menu reads and writes the same fields through the same path.
@@ -65,9 +65,10 @@
 //!    (`final_line` is this rule in code). `OK` means the data lines are complete; `ERROR` means
 //!    ignore them (the IPMC takes its data lines back when a command fails).
 //!
-//! A payload that sends several requests without waiting matches answers to requests by the tag
-//! of the final line; it must not send a request while the prompt of the previous answer has not
-//! arrived if it also wants to keep its own echo straight.
+//! A payload sends the next request after the final line of the previous answer and matches an
+//! answer to its request by the tag. The port takes no new byte while an answer drains, so bytes
+//! sent early wait in the 256-byte receive ring (`IPMC_APP_UART_RX_BUF`); the limit is that ring
+//! filling while a long answer drains, after which bytes are lost (see "Lost bytes").
 //!
 //! # Lost bytes
 //!
@@ -75,10 +76,12 @@
 //! firmware discards every byte waiting in the receive ring and calls `LineEditor::damage`;
 //! the next line end answers `ERROR LINE_DAMAGED: <n> bytes lost on the port; the line was
 //! dropped` (no tag, because the tag may be among the lost bytes), nothing runs for it, and the
-//! lines after it run normally. Lines that were complete inside the discarded bytes get no
+//! lines after it run normally. The firmware looks at the loss counter after every byte it takes,
+//! before it serves that byte, so a line that a byte ends after a loss is a damaged line too and
+//! never runs. Lines that were complete inside the discarded bytes get no
 //! answer at all: a payload CPU treats an answer that does not arrive within its timeout as a
 //! lost request and sends it again. A payload that writes a field also compares the
-//! `FRU SET` echo with what it sent. With `IPMC_APP_UART_FLOW` 1 the IPMC deasserts RTS only
+//! `FRU SET` echo with what it sent. With `IPMC_APP_UART_FLOW` true the IPMC deasserts RTS only
 //! when the data register holds an unread byte, so a sender that has a byte in flight can still
 //! overrun by one byte; the overrun counter counts it and the line end is answered
 //! `ERROR LINE_DAMAGED`.
@@ -105,7 +108,7 @@
 //! OK
 //! app> IPMI 06 01
 //! CC: 00h
-//! DATA: 20 01 02
+//! DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00
 //! COMMAND: App Get Device ID
 //! OK
 //! app>
@@ -186,10 +189,6 @@
 //! - `commands.rs`: `COMMANDS`, the handlers, the banner, `respond` and `serve`.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
-// `Fail` holds its sentence inline (no allocator, one fixed buffer); it is returned only on the
-// failure path of a command, never in a loop, so its size costs nothing.
-#![allow(clippy::result_large_err)]
-
 /// commands -- the command table, the handlers, the banner and the byte-to-answer step.
 pub mod commands;
 /// engine -- the command engine: syntax strings, matching, arguments, HELP, the final line.
@@ -203,6 +202,8 @@ pub mod line;
 mod tests;
 
 pub use commands::{answer_final_line, banner, respond, serve, Served, COMMANDS, PROTOCOL_VERSION};
-pub use engine::{check_table, final_line, run, Args, Fail, Handler, Row, ANSWER_MAX, END, PROMPT};
+pub use engine::{
+    check_table, final_line, run, Args, Fail, Handler, Row, ANSWER_MAX, END, PROMPT, TAG_MAX,
+};
 pub use host::{AppError, AppHost, IpmiData, SaveState, Status};
 pub use line::{AnswerBuf, Echo, Edit, Fed, LineEditor};

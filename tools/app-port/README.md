@@ -29,8 +29,12 @@ $py = "tools\python-ipmi\.venv\Scripts\python.exe"
 
 Options: `--baud` (default `IPMC_APP_UART_BAUD` of `crates/ipmc-defs/src/defs.rs`), `--timeout` (seconds to
 wait for an answer line), `--no-tags` (send requests without a tag), `--raw` (a terminal, see
-below). Each request carries a tag (`#t0001 STATUS`); the IPMC puts it on the final line
-(`OK #t0001`) and the client skips an answer with another tag.
+below). Each request carries a tag (`#t5a31 STATUS`); the IPMC puts it on the final line
+(`OK #t5a31`) and the client skips an answer with another tag. The tags of a run count up from a
+value taken from the clock, so a late answer of an earlier run is not matched. An untagged
+`ERROR LINE_DAMAGED`, `BAD_CHAR` or `LINE_TOO_LONG` line (the IPMC lost the request or could not
+read it) ends the answer of the request in progress and is printed. The client clears the bytes
+waiting in the port when it opens it.
 
 The client follows the parsing rule of the protocol: skip the lines that start with `app> `
 (prompt and echo), collect `KEY: value` lines, end the answer at the first line that is `OK`,
@@ -39,7 +43,8 @@ answer. `--raw` passes every key to the port and every received byte to the scre
 terminal program (Windows console; Ctrl+] ends it).
 
 The exit status is 0 when every answer is `OK`, 1 for an `ERROR` answer or no answer, 2 for a
-request, tag included, longer than `IPMC_APP_LINE_MAX`.
+request, tag included, longer than `IPMC_APP_LINE_MAX` or holding a character that is not ASCII
+(it is not sent and a message says why).
 
 ## Settings
 

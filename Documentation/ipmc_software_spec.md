@@ -200,11 +200,11 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-015 | A payload power-on request in M6 is refused; in the commercial release build it is also refused while the FRU is activation-locked; one check serves the boot power-on, the handler hand-off and the console | Rules 4.1.5.4.5-2, 4.1.5.4.2-1 | `fru_state.rs` `check_power_on`, `ext.rs` `check_power_on` |
 | FR-016 | An invalid hardware address (even parity or GA = 0) isolates both buses and keeps the FRU in M0 | Rules 4.1.5.4.1-4, 4.1.5.4.1-5 | `addr.rs`, `link.rs` |
 | FR-017 | Startup self test of the FRU image and the SDR chain; 55h 00h or 57h with the failure bits; a failure keeps the FRU in M0; rerun after each accepted Write FRU Data | IPMI Table 20-5, Rule 4.1.5.4.1-9, Rec 8-2 | `selftest.rs` |
-| FR-018 | Write FRU Data and an application port `SET` survive a reset (`IPMC_FRU_PERSIST 1`); the FRU store is flash sector 1 alone | owner decisions 10-23-2026 and 10-25-2026 | `persist.rs`, `fru_log.rs`, `memory.x`, `link.x` |
+| FR-018 | Write FRU Data and an application port `SET` survive a reset (`IPMC_FRU_PERSIST true`); the FRU store is flash sector 1 alone | owner decisions 10-23-2026 and 10-25-2026 | `persist.rs`, `fru_log.rs`, `memory.x`, `link.x` |
 | FR-019 | No IPMC pull-ups on the IPMB lines | Rule 9.2.3-2 | `bsp/ipmb_pins.rs`, `i2c_hw.rs` |
 | FR-020 | A (netFn, cmd) the Tier-1 table does not own goes to the extension hook; the Tier-1 build has none and answers C1h | Rules 4.2-2, 4.1.1-16 | `ext.rs`, `dispatch.rs` |
 | FR-021 | A Tier-2/3 build sends requests one at a time: a response wait of `IPMB_REQ_TIMEOUT_MS` (T3), up to `IPMB_REQ_RETRIES` retries with the same sequence number, a failed transmission retried on the other bus after T6 (60 ms minimum), T4 between new requests, T9 before a sequence number is reused; a Tier-1 build sends none | Rules 4.1.1-9, 4.1.1-10, 7-4, Table 4.1.1-1 | `requester.rs`, `link.rs` |
-| FR-022 | A Cold Reset request restarts the processor once its response has left the egress queue and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.2 | `reset_gate.rs`, `ipmb_link.rs` |
+| FR-022 | A Cold Reset request restarts the processor once its response has left the egress queue, the application port output has left and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.2 | `reset_gate.rs`, `ipmb_link.rs` |
 | FR-023 | The optional speed byte of Set IPMB State sets each bus to 100 kHz (00b) or, at Tier-3 on a fitted bus, 400 kHz (01b); every other value, a reserved bit and 400 kHz below Tier-3 answer CCh with no change; every bus starts and restarts at 100 kHz | Rules 4.1.1-4.3, 4.1.1-4.4, 4.1.1-14 | `cmd/vita.rs`, `link.rs` `plan_ipmb_speed` |
 | FR-024 | A Warm Reset request (commercial release build) restarts the link state and the requester without a processor reset, once its response has left and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.3 | `reset_gate.rs`, `ipmb_link.rs`, `link.rs` `restarted` |
 | FR-025 | A Cold Reset of the payload (commercial release build) holds PAYLOAD_RST_OUT_N (PA9, open drain) low for `IPMC_PAYLOAD_RESET_PULSE_MS` without blocking the main loop; the FRU state does not change | Rule 4.1.2-9 | `reset_pulse.rs`, `sensing.rs` |
@@ -448,7 +448,7 @@ Each define has the type its consumers need:
 | choice between alternatives | enum | `MasterMode`, `TxPolicy`, `StrapSource`, `Source`, `TraceLevel` |
 
 A define that names an earlier one is an expression of it (`pub const B: usize = A;`). Because
-the types are the contract, a wrong type or a value outside its type fails to compile at the
+the types state each define's kind, a wrong type or a value outside its type fails to compile at the
 define or at its consumer, and the build needs no `[i32]` tag or `{0, 1}` guard. `lib.rs` holds
 more than 100 compile-time guards (`const _: () = assert!(..)`, written out and from the
 FRU-string, SDR-name and rail guard macros) that tie values to their rules (for example
@@ -520,7 +520,7 @@ decision 24).
 | `IPMC_MANUFACTURER_ID` | 000000h | unspecified until an IANA enterprise number is registered |
 | `IPMC_PRODUCT_ID` | 494Bh | product ID |
 | `IPMC_FRU_BOARD_*`, `IPMC_FRU_PRODUCT_*`, `IPMC_FRU_FILE_ID` (the board file ID), `IPMC_FRU_PRODUCT_FILE_ID` (empty), `IPMC_FRU_ASSET_TAG` | strings | FRU board and product area fields |
-| `IPMC_FRU_MFG_DATE` | `2026-10-23 00:00` | manufacturing date, `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59; the build checks it with the date parser of `date.rs`. It is the default of the VITA 34h record (section 6.2) |
+| `IPMC_FRU_MFG_DATE` | `2026-10-23 00:00` | manufacturing date, `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:01 to 9999-12-31 23:59; the build checks it with the date parser of `date.rs`. It is the default of the VITA 34h record (section 6.2) |
 | `IPMC_FRU_SIZE` | 512 | FRU inventory area size: the built image with every field's reserved room and the 14-byte date record (section 9.2); the flash record is 528 bytes, 31 per sector |
 | `IPMC_FRU_CONSOLE_WRITE` | `true` | true = the console `FRU` menu sets every field (`SET`) and restores the built image (`RESTORE`); false = the menu is read only (`SHOW`, `DUMP`, `STORE`, `FIELDS`, `GET`) and `SET` and `RESTORE` do not exist (not in `HELP`, a typed `SET` is an unknown command) |
 | `IPMC_FRU_PERSIST` | `true` | Write FRU Data and the application port survive reset (the flash store, sector 1 alone, 16 KB); false keeps the FRU in RAM and a reset restores the built image |
@@ -529,6 +529,7 @@ decision 24).
 | `IPMC_FRU_SCAN_CHUNK` | 64 | bytes per read when the log checks a range for erased flash (a multiple of 4, 16..=272; the buffer lives on the stack) |
 | `IPMC_FRU_ERASE_QUIET_MS` | 500 | run-time erase waits for an empty egress queue and this long without a received frame |
 | `IPMC_FRU_PAUSE_WAIT_MS` | 40 | longest wait for an IPMB slave to go idle before an erase |
+| `IPMC_URGENT_LINK_WAIT_MS` | 250 | longest wait of the urgent save before a Cold Reset for the link to hold no accepted request and no untransmitted response (228..=1000): longer than the 227 ms response deadline, so an accepted request is answered first. `IPMC_RESET_WAIT_MS` must exceed it plus `IPMC_FRU_PAUSE_WAIT_MS` plus 500 ms, the DS10086 Table 45 sector erase maximum (16 KB sector) |
 | `IPMC_PAYLOAD_MODES` | 3 | payload operational modes this payload supports, bit n = mode n (modes 0..=14, bit 0 set, bit 15 clear): 3 is modes 0 and 1. The Payload Mode sensor SDR record (sensor 7, Tier-3) carries it as its reading and assertion masks, and the commercial release build answers it in Get Payload Mode Capabilities (Table 10.2.8-1) |
 | `IPMC_SDR_*_NAME` | strings | SDR ID strings, 2..=16 bytes (locator at most 6); `IPMC_SDR_PAYLOAD_MODE_NAME` names sensor 7 (Tier-3 only) |
 
@@ -684,17 +685,22 @@ The manufacturing date is the VITA 46.11 Alternate Manufacturing Date/Time recor
 The standard 3-byte Mfg Date/Time of the Board Info Area (FRU spec Table 11-1) holds minutes
 since 1996-01-01 00:00 and ends at FFFFFFh, 2027-11-24 20:15; a Chassis Manager decodes only that
 field, so it cannot be widened. This IPMC therefore keeps the date only in the 32-bit field of the
-VITA 34h record, which covers 1996-01-01 00:00 to 9999-12-31 23:59, and leaves the standard field
+VITA 34h record, which covers 1996-01-01 00:01 to 9999-12-31 23:59, and leaves the standard field
 000000h (unspecified) in the built image and after every write. A Chassis Manager that reads only
-the standard field sees "unspecified"; one that reads the VITA record sees the date. The record
-uses the one checksum of `ipmc-wire` and the one const record builder (`Builder`).
+the standard field sees "unspecified"; one that reads the VITA record sees the date. A read
+follows VITA 46.11 section 10.3.10: when the standard field is nonzero (a Chassis Manager wrote
+it) that field is the date in use and the record is not used; only while the standard field is
+000000h is the date the record's. Minute 0 means "unspecified" in both places, so no date maps to
+it. The record uses the one checksum of `ipmc-wire` and the one const record builder (`Builder`).
 
 `crates/ipmc-fru/src/date.rs`
 
 The date text `YYYY-MM-DD HH:MM` (UTC) and the minutes count: `days_from_civil` and
 `civil_from_days` (Gregorian leap-year rule, so 2100-02-29 does not exist), `text_of`,
 `parse_text` and `DEFAULT_MINUTES`, all `const fn`, so the build parses `IPMC_FRU_MFG_DATE` with
-the same code the console and the application port use and fails on a date outside the range.
+the same code the console and the application port use and fails on a date outside the range
+(1996-01-01 00:01 to 9999-12-31 23:59; 1996-01-01 00:00 is minute 0, "unspecified", and is
+refused).
 `DateRange` prints the accepted range in the bad-date answer of both ports.
 
 `crates/ipmc-fru/src/unit.rs`
@@ -707,11 +713,15 @@ fields in the order `ALL` lists them: `BOARD_MFR`, `BOARD_PRODUCT`, `BOARD_SERIA
 back in the same order with the one field replaced, then C1h, 00h up to the area's old length and
 the zero checksum, so the area length never changes and no other area moves. The rewritten image
 is built beside the old one, passes `verify`, and only then replaces it. `MFG_DATE` changes the
-four minutes bytes of the VITA 34h record in place, rewrites its two checksums and sets the
-standard board field to 000000h (and the board checksum); a value read comes from the record when
-its checksums are good and its minutes are not 0, else it reads `unspecified`. An image without a
+four minutes bytes of the VITA 34h record in place, rewrites its two checksums (also when they
+were wrong before: a record with bad checksums accepts the write and is sound afterwards) and sets
+the standard board field to 000000h (and the board checksum), so after a write the record is the
+date in use. `MFG_DATE` with an empty value clears the date: the record minutes are 00000000h, the
+standard field 000000h and the value reads `unspecified`. A value read (`MfgDate::effective`) is
+the standard field when it is nonzero, else the record's minutes when its checksums are good and
+they are not 0, else `unspecified`. An image without a
 MultiRecord area answers `AreaMissing` to a write, one without the record `NoRoom`; the area never
-moves. The date is the text `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59. A
+moves. The date is the text `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:01 to 9999-12-31 23:59. A
 refusal leaves the image as it was: `FieldError` has `TooLong`, `BadLength` (a text of one byte is
 reserved by the type/length rule), `NotAscii`, `NoRoom` (an image a Chassis Manager wrote may
 have no spare room), `Nvmro` (the firmware checks the pin, the store cannot see it), `BadDate`,
@@ -770,7 +780,7 @@ busy, stretch timeout, line stuck, unspecified). A failure prints one line that 
 destination, the sequence number and the cause, for example `IPMB-A response to 20h seq 01h not
 delivered, address 20h not acknowledged: no device answers at 20h; resend 1 of 3 on IPMB-B`, and a
 response given up on says `dropped after N resends`; a request the requester sends prints
-`sent`, `retry n of 10` or `not delivered` lines of the same form. `IPMC_IPMI_TRACE` 0 removes
+`sent`, `retry n of 10` or `not delivered` lines of the same form. `IPMC_IPMI_TRACE` false removes
 these lines at compile time. `plan_ipmb_state` is the one rule of Set IPMB State. `BusPair`
 power-up: IPMB-A Local Control, IPMB-B isolated, both isolated when the address is unusable. `Link`
 also owns the `Requester`: `on_frame` offers each valid response to it, `next_tx` hands out a
@@ -1035,7 +1045,7 @@ last byte has left; it runs before a reset (the console and the application port
 overrun, transmit timeout and dropped lines are counted per port and printed by `SYS STATUS`. The
 interrupts run at NVIC priority 2 << 4, below the I2C slaves (1 << 4). The interrupt body runs
 inside the critical section of the port state, so an I2C interrupt that arrives meanwhile waits for
-it, a few microseconds. With `IPMC_APP_UART_FLOW` 1 the driver enables RTS/CTS in the
+it, a few microseconds. With `IPMC_APP_UART_FLOW` true the driver enables RTS/CTS in the
 peripheral (CTSE and RTSE, RM0368 19.3.14) and leaves a byte in the data register when the
 receive ring is full, so RTS stays deasserted until `getc` makes room. RTS deasserts only when the
 data register holds an unread byte, so a sender with a byte in flight can still overrun by one byte;
@@ -1107,7 +1117,7 @@ and answers.
 | `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `Documentation/captured_sdr.md` (local only) |
 | `tools/dupcheck.py` | scores every pair of Rust function bodies with identifiers normalised; fails on a production pair at or above 0.85 or a test pair at or above 0.92 |
 | `tools/capture/` | `capture2pcap.py` turns a saved `DEBUG DUMP` into a pcap file (LINKTYPE 260) and a CSV file (section 10.11); `test_capture2pcap.py` |
-| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests from the command line, an interactive prompt or a raw terminal (`--raw`) on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form); `test_app_cli.py` with a fake transport |
+| `tools/app-port/` | `app_cli.py`, the bench client of the application port (section 7.6): tagged requests (the tags start from the clock) from the command line, an interactive prompt or a raw terminal (`--raw`) on COM5, exit status 0 when every answer is `OK`; `app_settings.py` (port, answer timeout, tag form); `test_app_cli.py` with a fake transport |
 | `tools/python-ipmi/` | venv with python-ipmi and pyaardvark; `README.md` is the Tier-1 command-line reference |
 | `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `cm_events.py` (the Chassis Manager as Event Receiver: answers each Platform Event request and records its decoded fields), `test_cm_link.py` |
 | `tools/chassis-manager/` options for events | `--cm-tier 1\|2` (2: Event Receiver, answers a Platform Event with 00h; 1: not an Event Receiver, answers C1h), `--withhold-events N` (the first N Platform Event frames get no answer, retries count, so a run shows the IPMC retrying with the same sequence number), `--set-event-receiver` (sends Set Event Receiver to each IPMC found after discovery; a Tier-1 IPMC answers C1h, which is not an error), `--cold-reset-at-s T` (sends Cold Reset once to each IPMC found, T seconds into the polling) |
@@ -1268,7 +1278,7 @@ text of every command.
 | `IPMB` | `ADDR`, `STATS`, `STATE` |
 | `SENSORS` | `SHOW`, `SDR`, `TRACE {LEVEL}` |
 | `POWER` | `ON`, `OFF`, `CLEAR`, `STATUS` |
-| `FRU` | `SHOW`, `DUMP {OFFSET} {COUNT}`, `STORE`, `FIELDS`, `GET [FIELD]`; with `IPMC_FRU_CONSOLE_WRITE` 1 also `SET [FIELD] {VALUE...}`, `RESTORE` |
+| `FRU` | `SHOW`, `DUMP {OFFSET} {COUNT}`, `STORE`, `FIELDS`, `GET [FIELD]`; with `IPMC_FRU_CONSOLE_WRITE` true also `SET [FIELD] {VALUE...}`, `RESTORE` |
 | `SIM` | `RAIL {N} {MV}`, `TEMP {DC}`, `FAULT {NAME} {STATE}`, `SHOW` |
 | `DEBUG` | `STATUS`, `LOG {STATE}`, `DUMP {FORMAT}`, `CLEAR`, `TRACE {WHAT} {STATE}`, `EVENTS {STATE}`, `IPMI [NETFN] [CMD] {DATA...}`, `INJECT [BUS] {BYTES...}`, `CACHE {ACTION}` |
 
@@ -1277,12 +1287,16 @@ line each (`BOARD_SERIAL     max 24  IK-T1-000001`); `FRU GET [FIELD]` prints on
 {VALUE...}` writes a field through `IpmbLink::set_unit_field`, the path the application port
 uses (the live NVMRO check, the store's dirty mark, the delayed flash save; there is no second
 writer). The value is the words after the field name joined by single spaces; no value clears a
-text field; `MFG_DATE` takes `YYYY-MM-DD HH:MM`. The answer is `OK: <FIELD> <value as stored>;
+text field and clears the date (`OK: MFG_DATE unspecified; ...`); `MFG_DATE` takes
+`YYYY-MM-DD HH:MM`. The answer is `OK: <FIELD> <value as stored>;
 saved to flash after the save delay (FRU STORE)`, or `Error: <FIELD> <FieldError name>` with the
-maximum for `TooLong` and the date range for `BadDate`. With `IPMC_FRU_CONSOLE_WRITE` 0 the
+maximum for `TooLong` and the date range for `BadDate`. With `IPMC_FRU_CONSOLE_WRITE` false the
 `SET` and `RESTORE` rows are not in the table (the table is chosen at compile time). `FRU SHOW`
-prints the common header, both areas, a board line for the standard date (`standard field 000000h
-(unspecified); the date is in the VITA 34h record`) and a MultiRecord section with the record
+prints the common header, both areas, a board line that says which stored form is in use
+(`standard field 000000h (unspecified); the date is in the VITA 34h record`, or, when a Chassis
+Manager wrote the standard field, `standard field 302010h = <date> UTC, in use; the VITA 34h
+record is not used while the standard field is nonzero`; `FRU FIELDS`, `FRU GET MFG_DATE` and
+the application port read the same date, VITA 46.11 section 10.3.10) and a MultiRecord section with the record
 decoded (`Alternate Mfg Date/Time (VITA 34h): 2026-10-23 00:00 UTC`) and its checksum states; a
 missing record or a bad checksum shows as unspecified, not as a failure. `FRU RESTORE` answers
 `busy` and erases nothing while the link holds a request or a response (section 10.8).
@@ -1296,7 +1310,7 @@ new command line waits until it ends.
 The banner after reset prints the firmware and core versions, build profile, reset cause,
 clocks, geographic address with its source, IPMB address, the application port line (`App port:
 USART1 115200 8N1, RTS/CTS off`, or `App port:     off`), the `BOOTLOADER pin:` line and the
-self-test result (`Self test:    55h 00h (passed)`). With `IPMC_EVENTS_AT_BOOT` 0 in a build that
+self-test result (`Self test:    55h 00h (passed)`). With `IPMC_EVENTS_AT_BOOT` false in a build that
 sends events, the line `Events: off from start-up` follows. `SYS STATUS` adds the failure counters
 of both UARTs (receive overflow, transmit timeout, overrun, trace lines dropped, free transmit
 bytes).
@@ -1326,7 +1340,7 @@ ASCII, one message per line, at most `IPMC_EMU_VECTOR_LINE_MAX` characters, on 1
 | GA0..GA4, GAP, NVMRO | PC0..PC4, PC5, PC6 | morpho | `ga.rs` | input, pull-up |
 | Console TX / RX | PA2 / PA3 (USART2, AF7) | ST-LINK VCP | `uart.rs` | |
 | APP_UART TX / RX | PB6 / PB7 (USART1, AF7) | CN5-3 (D10) / CN7-21 | `uart.rs` (claim "app_uart") | TX output; RX input, pull-up |
-| APP_UART CTS / RTS | PA11 / PA12 (USART1, AF7) | CN10-14 / CN10-12 | `uart.rs` | claimed only with `IPMC_APP_UART_FLOW` 1; CTS input with pull-up (an open CTS reads "not clear to send"), RTS output |
+| APP_UART CTS / RTS | PA11 / PA12 (USART1, AF7) | CN10-14 / CN10-12 | `uart.rs` | claimed only with `IPMC_APP_UART_FLOW` true; CTS input with pull-up (an open CTS reads "not clear to send"), RTS output |
 | BOOTLOADER | PC10 | CN7-1 | `ga.rs` (claim "boot_pin") | input, pull-down; logic 1 at reset keeps the bootloader (Phase 12); read for the banner and `SYS STATUS` |
 | LD2 | PA5 | D13 | `led.rs` | output, high = on |
 | Rails 1..4 | PA0, PA1, PA4, PB0 (ADC1 ch 0, 1, 4, 8) | A0..A3 | `adc.rs` (claim "adc") | analog |
@@ -1344,7 +1358,7 @@ owning module and that table together.
 
 The application port connects the payload CPU on the same board to the IPMC over APP_UART
 (USART1, PB6 TX, PB7 RX, `IPMC_APP_UART_BAUD` 115200, 8N1; RTS/CTS on PA12/PA11 with
-`IPMC_APP_UART_FLOW` 1). There is one mode: the output is text a person reads at a terminal and a
+`IPMC_APP_UART_FLOW` true). There is one mode: the output is text a person reads at a terminal and a
 payload CPU splits with three rules. `PROTOCOL` is 2 (`PROTOCOL_VERSION`); a change that breaks an
 existing request or answer raises it, a new command does not.
 
@@ -1379,6 +1393,12 @@ Every request line gets zero or more data lines and exactly one final line:
 
 #### Parsing rule for a payload CPU
 
+A payload sends the next request after the final line of the previous answer and matches an answer
+to its request by the tag. The port takes no new byte while an answer drains, so bytes sent early
+wait in the 256-byte receive ring (`IPMC_APP_UART_RX_BUF`); the limit is that ring filling while a
+long answer drains, after which bytes are lost (counted, and the next line end is answered
+`LINE_DAMAGED`).
+
 Send the request with CR LF. Skip every line that starts
 with `app> ` (the prompt, and the prompt joined with the echo of the request). Collect the lines
 that look like `KEY: value`. The answer ends at the first line that is `OK`, starts with `OK ` or
@@ -1393,15 +1413,15 @@ follows it.
 | Syntax | Help text | Answer (data lines, then `OK`) |
 |---|---|---|
 | `HELP {COMMAND...}` | List the commands, or describe one | the aligned table of every command, or of the rows that start with the words given |
-| `?` | Same as HELP | the same |
+| `? {COMMAND...}` | Same as HELP | the same: `? <words>` is `HELP <words>` |
 | `INFO` | Firmware name, version, Tier and protocol version | `FIRMWARE`, `VERSION`, `TIER`, `PROTOCOL` |
 | `STATUS` | IPMB address, GA, FRU state, payload power, health, NVMRO, uptime | `IPMB_ADDRESS: 82h`, `GA`, `FRU_STATE: M4 FRU Active`, `PAYLOAD_POWER: on`, `HEALTH: ok`, `NVMRO: deasserted`, `UPTIME: 0d 00:17:48` |
 | `FRU STATE` | Operational state of FRU 0 (M0, M1, M4, M5 or M6) | `FRU_STATE: M4 FRU Active` |
 | `FRU FIELDS` | Every FRU field: current value and maximum length | one line per field, `<FIELD>: <value> (max <n>)`; an empty text field is `<FIELD>:  (max <n>)` (two blanks between the colon and the parenthesis); `MFG_DATE` is `YYYY-MM-DD HH:MM` (UTC) |
 | `FRU GET [FIELD]` | One FRU field | `<FIELD>: <value>` |
-| `FRU SET [FIELD] {VALUE...}` | Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM | `<FIELD>: <value as stored>` |
+| `FRU SET [FIELD] {VALUE...}` | Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM | `<FIELD>: <value as stored>`; `MFG_DATE: unspecified` after a clear |
 | `FRU SAVE` | Whether the FRU image is in flash (a change saves itself after the save delay) | `SAVE: done`, or `SAVE: pending` while a change waits (not an error) |
-| `IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally (hex bytes); nothing goes on the IPMB | `CC: 00h`, `DATA: 20 01 02` (empty after the colon-space when there is none), `COMMAND: App Get Device ID` (no line when the build has no name for it) |
+| `IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally (hex bytes); nothing goes on the IPMB | `CC: 00h`, `DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00` (empty after the colon-space when there is none), `COMMAND: App Get Device ID` (no line when the build has no name for it) |
 
 Syntax strings: leading keywords in capitals, then `[NAME]` for a required parameter, `{NAME}` for
 an optional one and `{NAME...}` for the rest of the line as one value (last only). The
@@ -1426,7 +1446,7 @@ same table):
 | `BOARD_SERIAL` | Board Info, serial number | 24 |
 | `BOARD_PART` | Board Info, part number | 24 |
 | `BOARD_FILE_ID` | Board Info, FRU file ID | 16 |
-| `MFG_DATE` | the VITA 34h record, manufacturing date and time, written as `YYYY-MM-DD HH:MM` (UTC, 1996-01-01 00:00 to 9999-12-31 23:59); reads `unspecified` without a set, sound record | 16 |
+| `MFG_DATE` | the VITA 34h record, manufacturing date and time, written as `YYYY-MM-DD HH:MM` (UTC, 1996-01-01 00:01 to 9999-12-31 23:59); reads the standard board field when it is nonzero (a Chassis Manager wrote it), else the record, else `unspecified` (no record, a bad checksum or minute 0) | 16 |
 | `PRODUCT_MFR` | Product Info, manufacturer | 24 |
 | `PRODUCT_NAME` | Product Info, product name | 32 |
 | `PRODUCT_PART` | Product Info, part or model number | 24 |
@@ -1440,7 +1460,8 @@ reruns the self test; the dirty mark and the quiet time of `IPMC_FRU_PERSIST_DEL
 change to the flash, as for a Write FRU Data from the Chassis Manager, so a payload CPU that wrote
 fields repeats `FRU SAVE` until it reads `SAVE: done` before it removes power. The text of a field
 is the rest of the line with the blanks at both ends removed, so blanks inside the value stay.
-`FRU SET` with no value clears a text field.
+`FRU SET` with no value clears a text field, and `FRU SET MFG_DATE` with no value clears the date
+(`MFG_DATE: unspecified`).
 
 #### Error answers
 
@@ -1456,7 +1477,7 @@ The codes; each has its own sentence:
 | `BAD_LENGTH`, `NOT_ASCII` | a text of one byte (a type/length field holds 0 or at least 2 bytes); a value that is not printable ASCII |
 | `NO_ROOM` | the rewritten fields do not fit the area (an image a Chassis Manager wrote may have no spare room) |
 | `NVMRO` | the NVMRO pin is asserted; nothing is written |
-| `BAD_DATE` | the date text is malformed or out of range (`use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59`) |
+| `BAD_DATE` | the date text is malformed or out of range (`use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59`) |
 | `FRU_IMAGE` | the area is missing or damaged, or the rewritten image would fail `verify` |
 | `WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is false and the request is `FRU SET` or an `IPMI` Write FRU Data; nothing runs |
 | `LINE_DAMAGED` | `<n> bytes lost on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring, and the next line end is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
@@ -1471,10 +1492,14 @@ The firmware formats the echo, the answer and the prompt into one buffer of
 `drain`); the main loop never waits for the UART. While output is pending the port takes no new
 byte, so one request is answered at a time, in order. A pass takes at most
 `IPMC_APP_BYTES_PER_POLL` bytes and ends after one answer, so the IPMB service waits at most for
-the formatting of one answer (a few hundred microseconds for the longest, `HELP` and `FRU FIELDS`;
-an estimate, not a bench measurement); the 1280 bytes need 111 ms on the wire at 115200 baud,
+the formatting of one answer (estimated from the code at up to about 1 ms for `HELP` or `FRU FIELDS`;
+`FRU SET` and `IPMI` run their whole work in that pass; an estimate, to be measured on the board); the 1280 bytes need 111 ms on the wire at 115200 baud,
 spent in the UART interrupt. Every request line and the final line of every answer go into the
-capture log as `app request <line>` and `app answer <line>` (section 10.11).
+capture log as `app request <line>` and `app answer <line>` (section 10.11). The port looks at
+its loss counter before the first byte of a pass and after every byte it takes, before the byte is
+served: a loss that happens during the pass marks the line the byte ends as damaged, so a request
+that lost a byte never runs. A Cold Reset asked for on this port waits for its own answer: the
+output left in the buffer or the transmit ring keeps the reset gate from going (section 8.2).
 
 #### A session
 
@@ -1485,7 +1510,7 @@ for the Tier-1 build and the test host's FRU image; typed text follows `app> `:
 IPMC application port, ipmc-nucleo-f401re v0.1.0, Tier 1, protocol 2. Type HELP or ?.
 app> HELP
   HELP {COMMAND...}              - List the commands, or describe one
-  ?                              - Same as HELP
+  ? {COMMAND...}                 - Same as HELP
   INFO                           - Firmware name, version, Tier and protocol version
   STATUS                         - IPMB address, GA, FRU state, payload power, health, NVMRO, uptime
   FRU STATE                      - Operational state of FRU 0 (M0, M1, M4, M5 or M6)
@@ -1523,7 +1548,7 @@ app> FRU SET BOARD_SERIAL 1234567890123456789012345
 ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters
 app> IPMI 06 01
 CC: 00h
-DATA: 20 01 02
+DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00
 COMMAND: App Get Device ID
 OK
 app> FRU SAVE
@@ -1587,16 +1612,18 @@ performs the reset.
 
 1. Each pass `IpmbLink::service_reset` calls `ResetGate::poll(pending, now_ms, egress_empty,
    fru_clean, trace)`. The gate returns true when the egress queue is empty (the response left
-   the board or was dropped) and the FRU store holds no unsaved change, or when
+   the board or was dropped), the application port has no output left (its buffer and TX ring are
+   empty, so a reset asked for on that port finishes its own answer first) and the FRU store holds
+   no unsaved change, or when
    `IPMC_RESET_WAIT_MS` has passed since it first saw the request; in the second case one trace
    line says what was still open.
 2. While a reset is pending the FRU save runs at once (`service_fru_log`): no persist delay and no
-   wait for a quiet bus, because the IPMB is about to go away. The erase waits, up to 250 ms (the T5 limit of 227 ms plus margin, `URGENT_LINK_WAIT_MS`),
+   wait for a quiet bus, because the IPMB is about to go away. The erase waits, up to 250 ms (longer than the T5 limit of 227 ms, `IPMC_URGENT_LINK_WAIT_MS`),
    for the link to hold no accepted request and no untransmitted response, and runs anyway after
    that (one console line says so); the erase itself is bounded (at most 500 ms, covered by
    `IPMC_RESET_WAIT_MS`). A failed attempt returns to the normal delay, so
    a failing flash does not stall every pass until the wait runs out.
-3. When the gate says go, one console line goes out and the console and the application port are flushed (each bounded by its flush bound; with CTS held off the bound runs out and the reset goes ahead).
+3. When the gate says go, one console line goes out and the console and the application port are flushed (each bounded by its flush bound; the application port output normally left already, because the gate waited for it; with CTS held off the gate's `IPMC_RESET_WAIT_MS` runs out and the reset goes ahead).
    `reset_cause::keep_sequence` stores the next request sequence number and the mask of the
    sequence numbers sent inside T9 (`Link::recent_request_seqs`) in four `.uninit` words, which
    start-up code does not touch, the last a check word over the other three. `reset_cause::system_reset` then requests SYSRESETREQ, so the banner after the
@@ -1726,7 +1753,7 @@ output and prints that; FRU Control still answers 00h. The emulator models the p
    dispatch Context (self test runs; a stored image replaces the built one and the self test runs
    on it).
 10. Banner (the application port line and the `BOOTLOADER pin:` line included), the
-    `APP_UART not started` line when it applies, the events setting (`IPMC_EVENTS_AT_BOOT` 0
+    `APP_UART not started` line when it applies, the events setting (`IPMC_EVENTS_AT_BOOT` false
     makes the IPMC send itself Set Event Receiver FFh and print `Events: off from start-up`; a
     build without event messages answers C1h and prints nothing), sensor start (payload power
     requested when `IPMC_POWER_AT_BOOT` is 1 and the power-on check,
@@ -1789,7 +1816,7 @@ regions and `link.x` places the sections:
 
 | Region | Base | Size | Contents |
 |---|---:|---:|---|
-| `RAM` | `0x2000_0000` | 96 KB | statics and stack; `_stack_reserve` (32 KB, `memory.x`) must stay free above the statics |
+| `RAM` | `0x2000_0000` | 96 KB | statics and stack; `_stack_reserve` (35 KB, `memory.x`) must stay free above the statics |
 | System memory | `0x1FFF_7A2A`..`0x1FFF_7A2F` | 6 bytes | factory VREFIN_CAL, TS_CAL1, TS_CAL2 (read by `adc.rs`) |
 
 `link.x` is the script of cortex-m-rt 0.7.7 with these differences: the vector table sits in
@@ -1817,15 +1844,15 @@ A reflash may erase the whole flash, unit fields included, and the firmware has 
 it (owner decision 10-25-2026).
 
 `link.x` asserts that the RAM from the end of the statics (`.data`, `.bss`, `.uninit`) to the top of RAM
-is at least `_stack_reserve`, 32 KB; the error names `IPMC_LOG_SIZE` and the four UART buffer
-defines. The 32 KB come from the release ELF at `IPMC_LOG_SIZE` 16384, the largest the guard
-allows (`arm-none-eabi-objdump -d`: the frame of each function from its push list and `sub sp`,
-summed along the longest call chain, indirect menu-handler calls added by hand): start-up 25,744
-bytes (`main` 8,232 + `IpmbLink::take` 16,600 + `Link::with_first_request_seq` 840 + `memcpy` 72),
-run time 11,932 bytes (`main` 8,232 + the menu 816 + the deepest console handler, `FRU RESTORE`
-over `Persist::save`, 2,884), and 540 bytes of interrupt nesting (SysTick 108, I2C event 80,
-USART 40 and three 104-byte exception frames) on top of either path. The largest, 26,284 bytes,
-plus a margin of about 25 percent for calls through trait objects, rounds up to 32 KB. The
+is at least `_stack_reserve`, 35 KB; the error names `IPMC_LOG_SIZE` and the four UART buffer
+defines. The 35 KB come from the release ELF of 10-26-2026 (`arm-none-eabi-objdump -d`: the frame
+of each function from its push list and `sub sp`, summed along the longest call chain, indirect
+calls followed by hand): start-up 27,408 bytes (`main` 9,864 + `IpmbLink::take` 16,616 +
+`Link::with_first_request_seq` 856 + `memcpy` 72), run time 13,584 bytes (`main` 9,864 + the menu
+752 + the deepest console handler, `FRU SET` over `IpmbLink::set_unit_field`, 2,968; the
+application port paths are shorter), and 544 bytes of interrupt nesting (SysTick 120, I2C event
+72, USART 40 and three 104-byte exception frames) on top of either path. The largest, 27,952
+bytes, plus a margin of about 25 percent for calls through trait objects, rounds up to 35 KB. The
 frames of `main` and `take` do not shrink with `IPMC_LOG_SIZE` (the log lives in the static), so
 the check is on the statics. A larger frame (a new local in `main` or `take`, a larger FRU image)
 is measured again and `_stack_reserve` changes with it.
@@ -1909,6 +1936,12 @@ older record or the built image without a report, so a Tier-3 image that saved a
 downgraded in the field without a FRU check.
 The byte rides in the record with the image, so one dirty mark and one save rule cover a Write FRU
 Data and a policy-bit change; `FRU RESTORE` keeps the byte as it is.
+
+A record from an older image size (another `IPMC_FRU_SIZE`, so another length field and record
+length) is not valid for this build: every slot reads invalid, the built image loads, and the
+first save appends after the old slots or erases the sector. A flash over SWD keeps the store
+sector, so the content saved before is dropped on the first save that erases; a flash by drive copy
+erases the sector at once.
 
 ### 9.5 Device SDR repository
 
@@ -2412,10 +2445,10 @@ What goes in:
   bus faults and speed changes, resets), the lines of `DEBUG IPMI` (`console request ...`,
   `console response ...`) and the application port lines (`app request ...`, `app answer ...`).
 
-`IPMC_IPMI_TRACE` 0 removes the link and dispatcher trace lines at compile time, so they are
+`IPMC_IPMI_TRACE` false removes the link and dispatcher trace lines at compile time, so they are
 absent from the capture log as well as from the console; the frames, the status lines and the
 console and application lines stay. `DEBUG TRACE IPMI OFF` stops only the console copy: the log
-keeps the lines. `DEBUG TRACE I2C ON` (or `IPMC_I2C_TRACE_AT_BOOT` 1) prints one console line per
+keeps the lines. `DEBUG TRACE I2C ON` (or `IPMC_I2C_TRACE_AT_BOOT` true) prints one console line per
 frame, the same row `DEBUG DUMP TRACE` prints, even while the log is off.
 
 Record layout (little-endian): a 6-byte header, then the payload.
@@ -2676,7 +2709,8 @@ named constant in the owning module with its rule beside it.
 3. Run `python -I tools/sync_ipmi_commands.py` so `Documentation/ipmi_commands.md` matches
    (`cargo test` fails until it does).
 4. Add a table-driven test in `ipmc-core/tests/tier1_handlers.rs`; check the replay totals still
-   read match=46 same_cc=40 cc_diff=134 not_implemented=89, or state why they change.
+   read match=44 same_cc=42 cc_diff=134 not_implemented=89 (Tier-1 build; the Tier-3 build reads
+   66/46/197/0), or state why they change.
 
 ### 12.4 Adding an application port command
 
@@ -2790,7 +2824,7 @@ responses sent, every master and driver error counter at 0.
 
 ### 13.5 Checks not yet run on hardware
 
-The bench wiring of APP_UART uses no handshake (`Documentation/nucleo_f401re_pinout.md`, section 7), so RTS/CTS (`IPMC_APP_UART_FLOW` 1) has not run on hardware. Scope measurement of SCL/SDA in both master modes, at 100 kHz and in FAST-MODE (the FAST-MODE periods of section 10.9 are DWT-counter measurements); clock-stretch timeout and stuck-line jumper
+The bench wiring of APP_UART uses no handshake (`Documentation/nucleo_f401re_pinout.md`, section 7), so RTS/CTS (`IPMC_APP_UART_FLOW` true) has not run on hardware. Scope measurement of SCL/SDA in both master modes, at 100 kHz and in FAST-MODE (the FAST-MODE periods of section 10.9 are DWT-counter measurements); clock-stretch timeout and stuck-line jumper
 tests; arbitration loss with a second master; start-up fault recovery with a line held low; IPMB-B
 on hardware, with events and failover and the Tier-3 rules for two buses, FAST-MODE on both buses (needs a second Aardvark, one per IPMB); the Tier-3 activation cases that need PGOOD to follow PWR_EN (a jumper from PWR_EN, PB5, to PGOOD, PB10; the emulator models it); NVMRO from the
 strap pin; heartbeat LED by eye; power and fault input jumpers; Broadcast Get Device ID through a
@@ -2815,7 +2849,7 @@ procedure and expected result of each.
 | Run-time sector erase of the FRU store | the IPMB was silent for 198 ms (console line `FRU log: erased the store sector at run time (IPMB paused 198 ms)`), against DS10086 Table 45 typical 250 ms and maximum 500 ms for a 16 KB sector at x32 programming; one erase per 60 saves, and only when the bus is quiet |
 | python-ipmi request sequence | every request goes out with sequence number 01h, so identical requests inside the duplicate-cache window (`IPMB_DUP_WINDOW_MS`) are answered from the cache, which is the IPMB rule; a bench loop varies the request |
 | `gen.ps1 console` reply | read until 600 ms of silence, at most 60 s and 131072 bytes per reply; a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud) comes back whole |
-| Capture log | `IPMC_IPMI_TRACE` 0 removes the link and dispatcher lines from the log as well as from the console |
+| Capture log | `IPMC_IPMI_TRACE` false removes the link and dispatcher lines from the log as well as from the console |
 
 <div style="page-break-after: always;"></div>
 
@@ -2871,7 +2905,7 @@ procedure and expected result of each.
 
 ### 14.5 Capture a failure and open it in Wireshark
 
-1. The log records from start-up (`IPMC_LOG_AT_BOOT` 1); `DEBUG LOG ON` starts it otherwise, and
+1. The log records from start-up (`IPMC_LOG_AT_BOOT` true); `DEBUG LOG ON` starts it otherwise, and
    `DEBUG CLEAR` empties it before a run.
 2. Reproduce the problem.
 3. Start a terminal log and type `DEBUG DUMP`; the console prints the header line, the CSV rows and
@@ -2910,7 +2944,7 @@ procedure and expected result of each.
   generation, no FRU activation control by the Chassis Manager and no subsidiary FRU. The
   commercial release build adds Tier-2 and Tier-3 (section 7.2), Tier-3 by default.
 - **Tier-3 runs on IPMB-A only on this bench.** Rule 4.1.1-1.1 asks a Tier-3 IPMC for both buses;
-  the one-Aardvark bench has IPMB-A, so a Tier-3 build with `IPMB_BUS_B_ENABLE 0` is an owner
+  the one-Aardvark bench has IPMB-A, so a Tier-3 build with `IPMB_BUS_B_ENABLE false` is an owner
   deviation. FAST-MODE is proven on IPMB-A only; the dual-bus Tier-3 build waits for the second
   Aardvark.
 - **FAST-MODE rates.** The bit-bang master reaches about 147 kHz in FAST-MODE and the hardware

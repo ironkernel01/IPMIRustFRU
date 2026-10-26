@@ -152,7 +152,7 @@ impl Sensing {
         }
     }
 
-    /// start -- requests payload power when ipmc-defs IPMC_POWER_AT_BOOT is 1 and
+    /// start -- requests payload power when ipmc-defs IPMC_POWER_AT_BOOT is true and
     /// `power_on_check` (`IpmbLink::power_on_check`) allows it; a refusal prints one line.
     pub fn start(&mut self, power_on_check: Result<(), PowerOnRefused>) {
         if !ipmc_defs::IPMC_POWER_AT_BOOT {

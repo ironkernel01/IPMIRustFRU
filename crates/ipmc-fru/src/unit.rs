@@ -10,11 +10,14 @@
 //! image a Chassis Manager wrote may have no spare room) the update is refused with `NoRoom`
 //! and the image stays as it was.
 //!
-//! The date takes and returns the text `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31
-//! 23:59. The standard 3-byte board field (minutes since 1996-01-01 00:00, FRU spec section 11)
-//! ends at 2027-11-24 20:15, so the date lives in the VITA 46.11 Alternate Manufacturing
-//! Date/Time record (VITA 34h) of the MultiRecord area, a 32-bit minutes count that a write
-//! changes in place with both checksums; the standard field is set to 000000h (unspecified).
+//! The date takes and returns the text `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:01 to 9999-12-31
+//! 23:59 (minute 0 is "unspecified"). The standard 3-byte board field (minutes since 1996-01-01
+//! 00:00, FRU spec section 11) ends at 2027-11-24 20:15, so this IPMC keeps the date in the VITA
+//! 46.11 Alternate Manufacturing Date/Time record (VITA 34h) of the MultiRecord area, a 32-bit
+//! minutes count that a write changes in place with both checksums; a write sets the standard
+//! field to 000000h (unspecified). A read follows VITA 46.11 section 10.3.10: a nonzero standard
+//! field (a Chassis Manager wrote it) is the date in use, the record only while the standard field
+//! is 000000h.
 
 use crate::date;
 use crate::records::{
@@ -164,7 +167,7 @@ pub enum FieldError {
     /// NVMRO is asserted (VITA 46.11 Rule 8-3). The store cannot see the pin: the firmware
     /// checks it before the update and reports this.
     Nvmro,
-    /// The date text is malformed or outside 1996-01-01 00:00 .. 9999-12-31 23:59 (`DateRange`).
+    /// The date text is malformed or outside 1996-01-01 00:01 .. 9999-12-31 23:59 (`DateRange`).
     BadDate,
 }
 
@@ -211,7 +214,7 @@ impl fmt::Display for FieldValue<'_> {
 
 /// parse_date -- `YYYY-MM-DD HH:MM` (UTC) as minutes since 1996-01-01 00:00. Err(BadDate) for a
 /// text of another shape, a date that does not exist (month 13, February 30, 2100-02-29), a date
-/// before 1996-01-01 00:00 and a date after 9999-12-31 23:59.
+/// before 1996-01-01 00:01 (minute 0 is unspecified) and a date after 9999-12-31 23:59.
 pub fn parse_date(text: &str) -> Result<u32, FieldError> {
     date::parse_text(text).ok_or(FieldError::BadDate)
 }
@@ -256,17 +259,22 @@ pub enum AltDate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MfgDate {
     /// The standard 3-byte board field: minutes since 1996-01-01 00:00, 0 = unspecified (what
-    /// this IPMC writes). A Chassis Manager may have written another value; it is not read for
-    /// the date.
+    /// this IPMC writes). A Chassis Manager may have written another value; when it is nonzero it
+    /// is the date in use (`effective`).
     pub standard: u32,
     /// The VITA 34h record.
     pub alt: AltDate,
 }
 
 impl MfgDate {
-    /// effective -- the date: the minutes of a sound record that are set and in range; None
-    /// (unspecified) otherwise.
+    /// effective -- the date in use, VITA 46.11 section 10.3.10: a nonzero standard field is the
+    /// date (it holds at most `date::STANDARD_MINUTES_MAX`, inside the date range); only when it
+    /// is 000000h does the date come from the minutes of a sound VITA 34h record that are set
+    /// and in range; None (unspecified) otherwise.
     pub fn effective(&self) -> Option<u32> {
+        if self.standard != 0 {
+            return Some(self.standard);
+        }
         match self.alt {
             AltDate::Minutes(minutes) if minutes != 0 && minutes <= date::MINUTES_MAX => {
                 Some(minutes)
@@ -301,8 +309,8 @@ pub fn mfg_date(image: &[u8]) -> Result<MfgDate, FieldError> {
 
 /// unit_field -- the value of `field` in `image`. Err(AreaMissing) without its area,
 /// Err(Corrupt) for a damaged area or a field list too short, Err(NotAscii) for a text field
-/// that is not printable 8-bit ASCII. The date reads from the VITA 34h record; without a sound
-/// one that is set it is `Unspecified` (`MfgDate::effective`).
+/// that is not printable 8-bit ASCII. The date is `MfgDate::effective`: the standard board field
+/// when it is nonzero, else the VITA 34h record, else `Unspecified`.
 pub fn unit_field(image: &[u8], field: FruField) -> Result<FieldValue<'_>, FieldError> {
     let (kind, index) = field.location();
     let Some(index) = index else {
@@ -409,9 +417,11 @@ fn rewrite_area(old: &Area<'_>, index: usize, value: &str) -> Result<[u8; SIZE],
 }
 
 impl FruStore {
-    /// set_unit_field -- sets `field` to `value` (text, or `YYYY-MM-DD HH:MM` for the date,
-    /// which changes the minutes of the VITA 34h record in place, rewrites both of its checksums
-    /// and sets the standard board field to 000000h). The store changes only when the whole
+    /// set_unit_field -- sets `field` to `value` (text, or `YYYY-MM-DD HH:MM` for the date, or
+    /// an empty value for no date). The date changes the minutes of the VITA 34h record in place
+    /// (00000000h for no date), rewrites both of its checksums, whether or not they were right
+    /// before, and sets the standard board field to 000000h, so the record is the date in use
+    /// after a write. The store changes only when the whole
     /// update succeeds, then it is marked dirty so the flash log saves it, as it does after
     /// Write FRU Data. The caller checks NVMRO first (VITA 46.11 Rule 8-3).
     ///
@@ -423,6 +433,7 @@ impl FruStore {
         let (kind, index) = field.location();
         let image = *self.image();
         let next = match index {
+            None if value.is_empty() => with_mfg_date(&image, 0)?,
             None => with_mfg_date(&image, parse_date(value)?)?,
             Some(index) => {
                 check_text(field, value)?;
@@ -709,7 +720,7 @@ mod tests {
     #[test]
     fn refused_values_name_their_error_and_change_nothing() {
         let too_long = "X".repeat(FruField::BoardSerial.max_len() + 1);
-        let rows: [(FruField, &str, FieldError); 11] = [
+        let rows: [(FruField, &str, FieldError); 12] = [
             (FruField::BoardSerial, &too_long, FieldError::TooLong),
             (FruField::AssetTag, &too_long, FieldError::TooLong),
             (FruField::BoardPart, "A", FieldError::BadLength),
@@ -720,6 +731,7 @@ mod tests {
             (FruField::MfgDate, "yesterday", FieldError::BadDate),
             (FruField::MfgDate, "2100-02-29 00:00", FieldError::BadDate),
             (FruField::MfgDate, "1995-12-31 23:59", FieldError::BadDate),
+            (FruField::MfgDate, "1996-01-01 00:00", FieldError::BadDate),
             (FruField::MfgDate, "9999-12-31 24:00", FieldError::BadDate),
         ];
         for (field, value, want) in rows {
@@ -836,8 +848,7 @@ mod tests {
     #[test]
     fn the_date_converts_both_ways() {
         // (text, minutes since 1996-01-01 00:00)
-        let rows: [(&str, u32); 9] = [
-            ("1996-01-01 00:00", 0),
+        let rows: [(&str, u32); 8] = [
             ("1996-01-01 00:01", 1),
             // 2000-02-29 12:00: 1461 days to 2000-01-01 (1996 is a leap year), 59 more days
             // (31 + 28) to the leap day: 1520 days x 1440 + 720 minutes.
@@ -861,6 +872,7 @@ mod tests {
         for bad in [
             "9999-12-31 24:00",  // hour 24
             "1995-12-31 23:59",  // before the origin
+            "1996-01-01 00:00",  // minute 0 is "unspecified", not a date
             "2001-02-29 00:00",  // not a leap year
             "2100-02-29 00:00",  // 2100 is not a leap year
             "2000-02-30 00:00",  // no such day
@@ -880,7 +892,7 @@ mod tests {
         assert_eq!(FieldValue::Unspecified.to_string(), "unspecified");
         assert_eq!(
             date::DateRange.to_string(),
-            "use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59"
+            "use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59"
         );
     }
 
@@ -900,9 +912,10 @@ mod tests {
         // The standard board field is 000000h, and the record reads back.
         let found = mfg_date(&image).unwrap();
         assert_eq!(found.standard, 0);
-        assert_eq!(found.alt, AltDate::Minutes(16_204_320));
-        assert_eq!(found.effective(), Some(16_204_320));
-        assert_eq!(date::DEFAULT_MINUTES, 16_204_320);
+        let default = parse_date(ipmc_defs::IPMC_FRU_MFG_DATE).unwrap();
+        assert_eq!(found.alt, AltDate::Minutes(default));
+        assert_eq!(found.effective(), Some(default));
+        assert_eq!(date::DEFAULT_MINUTES, default);
     }
 
     #[test]
@@ -942,29 +955,62 @@ mod tests {
     }
 
     #[test]
-    fn set_writes_zero_over_a_nonzero_standard_field_and_reads_ignore_it() {
-        // A Chassis Manager wrote 16204320 minutes (F74220h) into the standard field only.
+    fn a_nonzero_standard_field_is_the_date_until_a_set_writes_the_record() {
+        // VITA 46.11 section 10.3.10: a Chassis Manager wrote 16204320 minutes (F74220h) into the
+        // standard field; the record holds another date (2031-05-12 08:00).
         let mut image = board_with(&default_fields(), [0x20, 0x42, 0xF7], 17);
         let at = record_at();
-        // And the record holds 00000000h (unspecified).
-        image[at + 10..at + 14].fill(0);
+        image[at + 10..at + 14].copy_from_slice(&18_598_080u32.to_le_bytes());
         image[at + 3] = zero_checksum(&image[at + 5..at + 14]);
         image[at + 4] = zero_checksum(&image[at..at + 4]);
         let mut store = FruStore::from_image(image);
         assert_eq!(verify(store.bytes()), Ok(()));
-        assert_eq!(text(&store, FruField::MfgDate), "unspecified");
         let found = mfg_date(store.bytes()).unwrap();
         assert_eq!(
             (found.standard, found.alt),
-            (16_204_320, AltDate::Minutes(0))
+            (16_204_320, AltDate::Minutes(18_598_080))
         );
-        assert_eq!(found.effective(), None);
+        assert_eq!(found.effective(), Some(16_204_320));
+        assert_eq!(text(&store, FruField::MfgDate), "2026-10-23 00:00");
+        // A set writes the record, rezeroes the standard field, and the record is in use again.
         store
-            .set_unit_field(FruField::MfgDate, "2031-05-12 08:00")
+            .set_unit_field(FruField::MfgDate, "2031-05-12 08:30")
             .unwrap();
         let found = mfg_date(store.bytes()).unwrap();
         assert_eq!(found.standard, 0);
-        assert_eq!(found.effective(), Some(18_598_080));
+        assert_eq!(found.effective(), Some(18_598_110));
+        assert_eq!(text(&store, FruField::MfgDate), "2031-05-12 08:30");
+        // A standard field with a record that holds 00000000h still reads as the standard date.
+        let mut image = board_with(&default_fields(), [0x20, 0x42, 0xF7], 17);
+        image[at + 10..at + 14].fill(0);
+        image[at + 3] = zero_checksum(&image[at + 5..at + 14]);
+        image[at + 4] = zero_checksum(&image[at..at + 4]);
+        let store = FruStore::from_image(image);
+        assert_eq!(text(&store, FruField::MfgDate), "2026-10-23 00:00");
+    }
+
+    #[test]
+    fn an_empty_value_clears_the_date() {
+        let mut store = FruStore::new();
+        store.set_unit_field(FruField::MfgDate, "").unwrap();
+        assert!(store.is_dirty());
+        let found = mfg_date(store.bytes()).unwrap();
+        assert_eq!((found.standard, found.alt), (0, AltDate::Minutes(0)));
+        assert_eq!(found.effective(), None);
+        assert_eq!(text(&store, FruField::MfgDate), "unspecified");
+        assert_eq!(verify(store.bytes()), Ok(()));
+        // A set on a record whose checksums are wrong rewrites both of them.
+        let mut image = *FruStore::new().image();
+        let at = record_at();
+        image[at + 3] ^= 0xFF;
+        image[at + 4] ^= 0xFF;
+        let mut store = FruStore::from_image(image);
+        assert_eq!(mfg_date(store.bytes()).unwrap().alt, AltDate::BadChecksum);
+        store
+            .set_unit_field(FruField::MfgDate, "2026-10-25 08:30")
+            .unwrap();
+        assert_eq!(verify(store.bytes()), Ok(()));
+        assert_eq!(text(&store, FruField::MfgDate), "2026-10-25 08:30");
     }
 
     #[test]

@@ -35,7 +35,7 @@ impl FruLog {
             flash: None,
         };
         if !ENABLED {
-            out!("FRU log: off (IPMC_FRU_PERSIST 0), RAM only\n");
+            out!("FRU log: off (IPMC_FRU_PERSIST false), RAM only\n");
             return (log, None);
         }
         let mut flash = match Flash::new(regs) {

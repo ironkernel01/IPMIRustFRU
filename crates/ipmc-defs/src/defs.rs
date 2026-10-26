@@ -127,7 +127,7 @@ pub const IPMB_RX_QUEUE_DEPTH: usize = 4;
 /// retries of a master write on the same bus after arbitration loss, before it reports failure
 /// (0..=10)
 pub const IPMB_ARB_RETRIES: u32 = 3;
-/// response frames the egress queue holds (1..16); a full queue drops and counts
+/// response frames the egress queue holds (1..=16); a full queue drops and counts
 pub const IPMB_TXQ_DEPTH: usize = 4;
 /// consecutive bus-fault errors on one IPMB (stretch timeout, SCL or SDA stuck low, bus busy, slave
 /// BERR or TIMEOUT) before the bus is marked faulted in the IPMB Link sensor (2..=64); address and
@@ -169,7 +169,7 @@ pub const IPMB_NVMRO_FORCED: bool = false;
 /// console UART baud rate, 8N1; gen.ps1 reads it (through tools/defs.py) for COM3
 pub const IPMC_CONSOLE_BAUD: u32 = 115_200;
 /// most console bytes one main-loop pass handles; a pass also runs at most one command line, so
-/// sensor sampling and the IPMB link are serviced every iteration (1..IPMC_UART_RX_BUF); console
+/// sensor sampling and the IPMB link are serviced every iteration (1..=IPMC_UART_RX_BUF); console
 /// output is interrupt driven (IPMC_UART_TX_BUF), so it does not hold the main loop for the wire
 /// time
 pub const IPMC_CONSOLE_BYTES_PER_POLL: usize = 16;
@@ -211,7 +211,7 @@ pub const IPMC_APP_FRU_WRITE: bool = true;
 pub const IPMC_MENU_LINE_MAX: usize = 128;
 /// most whitespace-separated tokens in one console line or one command syntax
 pub const IPMC_MENU_TOKENS_MAX: usize = 40;
-/// bytes on one line of the console FRU DUMP (1..16; 16 x 3 characters plus a 6-character offset
+/// bytes on one line of the console FRU DUMP (1..=16; 16 x 3 characters plus a 6-character offset
 /// fit an 80-column console)
 pub const IPMC_FRU_DUMP_BYTES_PER_LINE: usize = 16;
 /// firmware name in the banner and SYS VERSION
@@ -329,7 +329,7 @@ pub const IPMC_FRU_PRODUCT_PART_MAX: usize = 24;
 pub const IPMC_FRU_PRODUCT_SERIAL_MAX: usize = 24;
 /// room reserved for the asset tag, bytes (2..=63)
 pub const IPMC_FRU_ASSET_TAG_MAX: usize = 24;
-/// FRU manufacturing date, YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:00 to 9999-12-31 23:59 (checked at
+/// FRU manufacturing date, YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59 (checked at
 /// compile time by ipmc-fru date.rs); the built image holds it in the VITA 46.11 Alternate
 /// Manufacturing Date/Time record (VITA 34h, a 32-bit minutes count, MultiRecord area) and leaves
 /// the standard 3-byte Mfg Date/Time field 000000h (unspecified), because that field ends at
@@ -356,6 +356,11 @@ pub const IPMC_FRU_ERASE_QUIET_MS: u32 = 500;
 /// longest wait for an IPMB slave to go idle before a run-time erase, milliseconds (20..=200); a
 /// frame in progress ends within T1 = 20 ms (VITA 46.11 Table 4.1.1-1)
 pub const IPMC_FRU_PAUSE_WAIT_MS: u32 = 40;
+/// longest wait of the urgent save before a Cold Reset for the IPMB link to hold no accepted
+/// request and no untransmitted response, milliseconds (228..=1000); longer than the 227 ms
+/// response deadline (T5, VITA 46.11 Table 4.1.1-1), so a request accepted just before is answered
+/// first; after it the erase runs anyway because the reset is imminent
+pub const IPMC_URGENT_LINK_WAIT_MS: u32 = 250;
 
 /// sensor 0: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII needs at
 /// least 2 characters; Table 43-2 allows 16)

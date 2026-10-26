@@ -49,6 +49,15 @@ class FixtureTests(unittest.TestCase):
             got, {"A": 1000, "B": 32, "C": -7, "D": False, "E": "a b", "F": 1000, "G": "Y"}
         )
 
+    def test_a_value_rustfmt_wraps_is_joined(self):
+        text = "x" * 63
+        got = parse(f'pub const A: &str =\n    "{text}";\npub const B: u32 = 2;\n')
+        self.assertEqual(got, {"A": text, "B": 2})
+        # The line numbers after a wrapped item stay right.
+        with self.assertRaises(defs.DefsError) as caught:
+            parse(f'pub const A: &str =\n    "{text}";\nlet x = 1;\n')
+        self.assertIn(":3:", str(caught.exception))
+
     def test_rejections_name_the_line(self):
         cases = [
             ("let x = 1;\n", ":1:"),
@@ -60,6 +69,9 @@ class FixtureTests(unittest.TestCase):
             ("pub enum M {\n    X(u8),\n}\n", ":2:"),
             ("pub enum M {\n    X,\n", "not closed"),
             ("pub const A: M = N::X;\n", ":1:"),
+            ("pub const A: u32 =\n", ":1:"),  # nothing follows
+            ("pub const A: u32 =\nlet x = 1;\n", ":1:"),  # not the indented form
+            ("pub const A: u32 =\n    1 + 2;\n", ":1:"),  # a continued value must still parse
         ]
         for body, part in cases:
             with self.assertRaises(defs.DefsError, msg=body) as caught:

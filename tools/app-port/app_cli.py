@@ -15,11 +15,12 @@ The parsing rule this client follows (the rule a payload CPU follows): skip line
     python app_cli.py --port COM5 --raw      # a terminal: every key goes to the port
 
 By default each request gets a tag (`#t0001 ...`); the IPMC puts it on the final line, and the
-client discards an answer with another tag (a late answer of an earlier request). The client
+client discards an answer with another tag (a late answer of an earlier request); the tags of
+a run start from the clock, so an answer of an earlier run is not matched either. The client
 prints the data lines and the final line of each answer. The exit status is 0 when every request
 got an `OK` answer, 1 when one got `ERROR` or no answer, and 2 when a request, tag included, is
-longer than the IPMC accepts (it is not sent; in the prompt the line is refused and the prompt
-goes on).
+longer than the IPMC accepts or holds a character that is not ASCII (it is not sent, a message
+says why; in the prompt the line is refused and the prompt goes on).
 """
 
 import argparse
@@ -38,6 +39,9 @@ TAG_PATTERN = re.compile(r"^#[A-Za-z0-9]{1,8} ")
 DATA_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*): (.*)$")
 # A final line: OK, or ERROR with the code and the sentence; the tag follows the first word.
 FINAL_PATTERN = re.compile(r"^(OK|ERROR)(?: #([A-Za-z0-9]{1,8}))?(?: ([A-Z][A-Z0-9_]*): (.*))?$")
+# The codes of an ERROR final line the IPMC answers without a tag because the request was lost or
+# could not be read (crates/ipmc-app/src/lib.rs): such a line ends the current request's answer.
+UNTAGGED_ERROR_CODES = ("LINE_DAMAGED", "BAD_CHAR", "LINE_TOO_LONG")
 # Ctrl+] ends --raw (the telnet escape).
 RAW_QUIT = b"\x1d"
 
@@ -49,6 +53,8 @@ class SerialTransport:
         import serial  # pylint: disable=import-outside-toplevel
 
         self._serial = serial.Serial(port, baud, timeout=timeout_s)
+        # Bytes the IPMC sent before this run (a banner, a late answer) are not ours.
+        self._serial.reset_input_buffer()
 
     def write(self, data):
         self._serial.write(data)
@@ -73,8 +79,16 @@ class SerialTransport:
         self._serial.close()
 
 
-class LineTooLong(ValueError):
+class RequestRefused(ValueError):
+    """The client does not send the request (nothing was written)."""
+
+
+class LineTooLong(RequestRefused):
     """A request, tag included, is longer than the IPMC accepts (nothing was written)."""
+
+
+class NotAscii(RequestRefused):
+    """A request holds a character that is not ASCII (the port is plain ASCII)."""
 
 
 class Answer:
@@ -111,10 +125,13 @@ class Client:
     # Length of the tag text in front of a request: `#`, the prefix, four hex digits, a blank.
     TAG_LEN = len(f"#{app_settings.TAG_PREFIX}0000 ")
 
-    def __init__(self, transport, use_tags=app_settings.TAGS_DEFAULT):
+    def __init__(self, transport, use_tags=app_settings.TAGS_DEFAULT, counter_start=None):
         self._transport = transport
         self._use_tags = use_tags
-        self._counter = 0
+        # The counter before the first tag; the first tag is the next value. Default: the clock.
+        self._counter = (
+            app_settings.tag_counter_start() if counter_start is None else counter_start
+        )
         # Requests refused as too long (not sent); the exit status is 2 when any.
         self.refused = 0
 
@@ -131,9 +148,13 @@ class Client:
         """Sends `line` and returns the Answer, or None on timeout.
 
         Raises LineTooLong, before anything is written, when the whole request (tag included)
-        is longer than the IPMC accepts. With tags on, an answer whose final line carries another
-        tag is an old answer and is skipped, data lines and all.
+        is longer than the IPMC accepts, and NotAscii when it holds a character that is not
+        ASCII. With tags on, an answer whose final line carries another tag is an old answer and
+        is skipped, data lines and all; the exception is an untagged ERROR line that says the
+        request was lost or unreadable (`UNTAGGED_ERROR_CODES`): it ends this request's answer.
         """
+        if not line.isascii():
+            raise NotAscii("a request holds a character that is not ASCII")
         if self.encoded_len(line, self._use_tags) > app_settings.line_max():
             raise LineTooLong(
                 f"a request is longer than {app_settings.line_max()} bytes"
@@ -155,6 +176,8 @@ class Client:
             answer = Answer(collected, received)
             if tag is None or answer.tag == tag:
                 return answer
+            if answer.tag is None and answer.code in UNTAGGED_ERROR_CODES:
+                return answer
             collected = []
 
 
@@ -167,7 +190,7 @@ def run_requests(client, lines, out=print):
     for line in lines:
         try:
             answer = client.request(line)
-        except LineTooLong as error:
+        except RequestRefused as error:
             out(f"(not sent: {error})")
             client.refused += 1
             all_ok = False
@@ -255,6 +278,9 @@ def parse_args(argv=None):
 
 def main(argv=None, transport_factory=SerialTransport, next_key=windows_key):
     args = parse_args(argv)
+    if not all(request.isascii() for request in args.requests):
+        print("a request holds a character that is not ASCII", file=sys.stderr)
+        return 2
     longest = max((Client.encoded_len(r, not args.no_tags) for r in args.requests), default=0)
     if longest > app_settings.line_max():
         print(

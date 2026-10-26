@@ -11,7 +11,7 @@
 // resets as AF0 NJTRST with an internal pull-up (RM0368 8.4.1, 8.4.4), which would load the
 // IPMB-B SDA line, so the reset state is not acceptable. The other three pins reset as floating
 // inputs; they are written here anyway so the state does not depend on reset defaults.
-// When IPMB_BUS_B_ENABLE is 0 the IPMB-B pins stay parked and nothing else touches them.
+// When IPMB_BUS_B_ENABLE is false the IPMB-B pins stay parked and nothing else touches them.
 
 use ipmc_core::queue::Bus;
 use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull};

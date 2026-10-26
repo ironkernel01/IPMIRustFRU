@@ -9,9 +9,6 @@
 //
 // Nothing here runs in an interrupt handler.
 
-use core::fmt::Write;
-
-use ipmc_app::AnswerBuf;
 use ipmc_fru::date::DateRange;
 use ipmc_fru::persist::RECORD_LEN;
 use ipmc_fru::records::{self as fru, AreaKind};
@@ -54,11 +51,11 @@ fn print_text(data: &[u8]) {
     }
 }
 
-/// print_mfg_date -- the manufacturing date line of the board area in FRU SHOW. The standard
-/// 3-byte field is 000000h (unspecified) by design: it ends at 2027-11-24 20:15, so the date is
-/// in the VITA 34h record (`print_multirecords`). A nonzero standard field (a Chassis Manager
-/// wrote it) is shown with its value and ignored; the next SET MFG_DATE writes it back to
-/// 000000h.
+/// print_mfg_date -- the manufacturing date line of the board area in FRU SHOW, and which stored
+/// form is in use (VITA 46.11 section 10.3.10): a nonzero standard 3-byte field (a Chassis Manager
+/// wrote it) is the date and the VITA 34h record is not used; while the field is 000000h
+/// (unspecified, what this IPMC writes) the date is in the record (`print_multirecords`). The next
+/// SET MFG_DATE writes the field back to 000000h.
 fn print_mfg_date(image: &[u8]) {
     let standard = match mfg_date(image) {
         Ok(found) => found.standard,
@@ -71,9 +68,9 @@ fn print_mfg_date(image: &[u8]) {
         out!("  Mfg date/time:     standard field 000000h (unspecified); the date is in the VITA 34h record\n");
     } else {
         out!(
-            "  Mfg date/time:     standard field {:06X}h = {} minutes since 1996-01-01 00:00 (ignored; the date is in the VITA 34h record)\n",
+            "  Mfg date/time:     standard field {:06X}h = {} UTC, in use; the VITA 34h record is not used while the standard field is nonzero\n",
             standard,
-            standard
+            FieldValue::Minutes(standard)
         );
     }
 }
@@ -254,7 +251,7 @@ pub fn cmd_fru_store(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
             if fru_log::ENABLED {
                 "did not start, see the boot lines"
             } else {
-                "IPMC_FRU_PERSIST 0"
+                "IPMC_FRU_PERSIST false"
             }
         );
         return Ok(());
@@ -348,23 +345,31 @@ fn report_field_error(field: FruField, error: FieldError) -> CmdError {
 
 /// cmd_fru_set -- `FRU SET [FIELD] {VALUE...}`: writes one field through
 /// `IpmbLink::set_unit_field`, the path the application port uses. The value is the words after
-/// the field name joined by single spaces; no value clears a text field; MFG_DATE takes
-/// `YYYY-MM-DD HH:MM` (UTC). Answers the value as stored. Refused while NVMRO is asserted.
+/// the field name joined by single spaces; no value clears a text field or the date (MFG_DATE
+/// `unspecified`); MFG_DATE takes `YYYY-MM-DD HH:MM` (UTC). Answers the value as stored. Refused while NVMRO is asserted.
 pub fn cmd_fru_set(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     let field = field_arg(args)?;
-    let mut value = AnswerBuf::<VALUE_BUF>::new();
+    // The words joined by single spaces in a local buffer: the console does not use the
+    // reference crate ipmc-app, which a customer edits.
+    let mut joined = [0u8; VALUE_BUF];
+    let mut len = 0;
     for index in 1..args.len() {
         let word = args.text_at(index)?;
-        let joined = if index > 1 {
-            value.write_str(" ")
-        } else {
-            Ok(())
-        };
-        if joined.and_then(|()| value.write_str(word)).is_err() {
+        let space = usize::from(index > 1);
+        let end = len + space + word.len();
+        let Some(slot) = joined.get_mut(len..end) else {
             return Err(report_field_error(field, FieldError::TooLong));
-        }
+        };
+        let (gap, text) = slot.split_at_mut(space);
+        gap.fill(b' ');
+        text.copy_from_slice(word.as_bytes());
+        len = end;
     }
-    if let Err(error) = ctx.ipmb.set_unit_field(field, value.as_str()) {
+    let value = joined
+        .get(..len)
+        .and_then(|bytes| core::str::from_utf8(bytes).ok())
+        .unwrap_or("");
+    if let Err(error) = ctx.ipmb.set_unit_field(field, value) {
         return Err(report_field_error(field, error));
     }
     out!("OK: {} ", field.name());

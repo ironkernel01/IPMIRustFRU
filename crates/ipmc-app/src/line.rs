@@ -188,7 +188,10 @@ impl<const N: usize> LineEditor<N> {
             self.len = 0;
             return Fed::BadChar;
         }
-        if self.len == 0 {
+        // A line of blanks only is an empty line: the prompt alone.
+        let typed = self.buf.get(..self.len).unwrap_or(&[]);
+        if typed.iter().all(|byte| *byte == b' ' || *byte == b'\t') {
+            self.len = 0;
             return Fed::Empty;
         }
         self.ready = true;
