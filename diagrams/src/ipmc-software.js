@@ -15,12 +15,21 @@ const cy = (y, h) => y + h / 2;
 // ---------------------------------------------------------------- Sheet 1
 {
   const s = pres.addSlide();
-  container(s, 0.6, 1.25, 3.3, 1.6, "Firmware workspace");
+  container(s, 0.6, 1.3, 3.15, 2.55, "Firmware workspace");
   container(s, 4.2, 0.5, 8.55, 5.1, "Root cargo workspace");
   const c1 = 4.5, c2 = 9.1, w = 3.3;
-  box(s, 0.9, 1.75, 2.7, 0.6, "ipmc-nucleo-f401re", ["STM32F401RE firmware", "main loop, BSP drivers, console"], G);
+  // application port path: payload CPU -> APP_UART -> bsp/uart.rs -> app_port.rs -> ipmc-app
+  box(s, 0.9, 0.5, 2.55, 0.38, "Payload CPU");
+  wire(s, 2.175, 0.88, 2.175, 1.6);
+  label(s, 2.275, 0.92, 1.4, "APP_UART, USART1");
+  label(s, 2.275, 1.08, 1.4, "PB6 TX / PB7 RX");
+  box(s, 0.9, 1.6, 2.55, 0.55, "bsp/uart.rs", ["one UART driver, RX/TX rings", "APP_UART and console (USART2)"], G);
+  wire(s, 2.175, 2.15, 2.175, 2.35, { start: true });
+  box(s, 0.9, 2.35, 2.55, 0.55, "app_port.rs", ["AppPort::poll, LinkHost", "implements AppHost, IPMB link"], G);
+  box(s, 0.9, 3.1, 2.55, 0.55, "ipmc-nucleo-f401re", ["STM32F401RE firmware", "main loop, BSP drivers, console"], G);
   box(s, c2, 0.85, w, 0.6, "ipmc-emu", ["x86 emulator", "replay, serve, sdr"], B);
   box(s, c2, 1.75, w, 0.6, "ipmc-sensors", ["sensor and board I/O HAL", "hal, eval, drivers, board table"], W);
+  box(s, c1, 0.85, w, 0.6, "ipmc-app", ["application port protocol, no_std", "one request line, one OK/ERR line"], W);
   box(s, c1, 1.75, w, 0.6, "ipmc-menu", ["console menu engine", "MenuBuilder rules"], W);
   box(s, c2, 2.65, w, 0.85, "ipmc-core", ["all IPMI logic", "codec, link layer, commands, SDR,", "sensors, FRU state, self test"], W);
   box(s, c2, 3.8, w, 0.6, "ipmc-fru", ["FRU records and scratchpad", "image, store, flash log"], W);
@@ -34,7 +43,17 @@ const cy = (y, h) => y + h / 2;
   wire(s, x2, 2.35, x2, 2.65);
   wire(s, x2, 3.5, x2, 3.8);
   wire(s, x2, 4.4, x2, 4.7);
-  wire(s, 3.6, 2.05, c1, 2.05);
+  // app_port.rs <-> ipmc-app (L route, two-way); firmware -> ipmc-menu (L route)
+  wire(s, 3.45, 2.625, 3.95, 2.625, { start: true, end: false });
+  wire(s, 3.95, 2.625, 3.95, 1.15, { end: false });
+  wire(s, 3.95, 1.15, c1, 1.15);
+  wire(s, 3.45, 3.375, 4.1, 3.375, { end: false });
+  wire(s, 4.1, 3.375, 4.1, 2.05, { end: false });
+  wire(s, 4.1, 2.05, c1, 2.05);
+  // ipmc-app uses ipmc-core
+  wire(s, c1 + w, 1.15, 8.45, 1.15, { end: false });
+  wire(s, 8.45, 1.15, 8.45, 2.8, { end: false });
+  wire(s, 8.45, 2.8, c2, 2.8);
   wire(s, x1, 2.35, x1, 4.7);
   wire(s, x1, 6.1, x1, 5.3, { dash: "dash" });
   label(s, x1 + 0.1, 5.75, 1.5, "build.rs reads");
@@ -42,12 +61,12 @@ const cy = (y, h) => y + h / 2;
   wire(s, 7.2, 3.7, 7.2, 4.7);
   wire(s, 8.4, 3.7, 8.4, 6.1, { dash: "dash" });
   label(s, 8.5, 5.75, 1.6, "#[path] mount, when found");
-  notes(s, 0.6, 3.2, 3.4, 3.4, [
+  notes(s, 0.6, 3.95, 3.5, 2.8, [
     "Every crate reads ipmi_defs.h values through ipmc-defs only; those arrows are not drawn.",
-    "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). ipmc-defs build.rs finds the extension folder and decides whether ipmc-ext mounts it; without the folder ipmc-ext holds NoExtension and the build is Tier-1.",
-    "ipmc-nucleo-f401re uses ipmc-core, ipmc-fru, ipmc-menu, ipmc-sensors (feature stm32f401) and ipmc-defs. ipmc-emu uses ipmc-core, ipmc-fru, ipmc-sensors, ipmc-wire and ipmc-defs. ipmc-sensors uses ipmc-core and ipmc-defs. ipmc-core uses ipmc-fru, ipmc-wire and ipmc-defs. ipmc-fru uses ipmc-wire and ipmc-defs. ipmc-menu uses ipmc-defs. Arrows that would cross are not drawn.",
-    "The firmware crate is excluded from the root workspace and builds on its own (thumbv7em-none-eabihf).",
-    "ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs and ipmc-menu are no_std with forbid(unsafe_code). ipmc-sensors allows unsafe only in drivers/stm32f401.",
+    "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). The ipmc-defs build.rs finds the extension folder; without it ipmc-ext holds NoExtension and the build is Tier-1.",
+    "ipmc-nucleo-f401re uses ipmc-core, -fru, -app, -menu, -sensors (feature stm32f401) and -defs. ipmc-emu uses core, fru, sensors, wire and defs. ipmc-app uses core, fru, wire and defs. ipmc-sensors uses core and defs. ipmc-core uses fru, wire and defs. ipmc-fru uses wire and defs. ipmc-menu uses defs. Arrows that would cross are not drawn.",
+    "The firmware crate builds on its own (thumbv7em-none-eabihf). ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs, ipmc-menu and ipmc-app are no_std with forbid(unsafe_code); ipmc-sensors allows unsafe only in drivers/stm32f401.",
+    "ipmc-app touches no hardware; app_port.rs implements its AppHost trait over the IPMB link, which reaches the ipmc-core dispatcher and the ipmc-fru store. The console and APP_UART share bsp/uart.rs. The payload CPU is board hardware. ipmc-emu does not build ipmc-app.",
   ]);
   legend(s, 0.6, 6.85, LEG, 3.0);
   frame(s);
