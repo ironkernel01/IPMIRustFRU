@@ -1,12 +1,12 @@
 # ipmc-menu: Command Menu Engine
 
-Revision 10-23-2026
+Revision 10-25-2026
 
 ## 1. Title and Overview
 
 `ipmc-menu` is the command-line menu engine for the IPMC project. It implements the
 `MenuBuilder.md` rules (command table of `FUNCTION:COMMAND:DESCRIPTION`, case-insensitive exact
-keywords, `[REQUIRED]` and `{OPTIONAL}` parameters, explicit match signalling, aligned help) in
+keywords, `[REQUIRED]` and `{OPTIONAL}` parameters, explicit match signalling, help in fixed columns) in
 Rust, extended to tiers: commands are grouped into sub-menus, each with its own table.
 
 The crate is `no_std`, has no dependencies, uses no heap and contains no `unsafe` code. The
@@ -17,8 +17,8 @@ Limits (named constants in `lib.rs`):
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `MENU_LINE_MAX` | 80 (`IPMC_MENU_LINE_MAX` in ipmi_defs.h) | Longest input line in bytes. A longer line is rejected with `LineTooLong`, never truncated. |
-| `MENU_TOKENS_MAX` | 8 (`IPMC_MENU_TOKENS_MAX` in ipmi_defs.h) | Most tokens in a line or in a syntax string. More is `TooManyTokens` (line) or `SyntaxTooLong` (table). |
+| `MENU_LINE_MAX` | 128 (`IPMC_MENU_LINE_MAX` in ipmi_defs.h) | Longest input line in bytes. A longer line is rejected with `LineTooLong`, never truncated. |
+| `MENU_TOKENS_MAX` | 40 (`IPMC_MENU_TOKENS_MAX` in ipmi_defs.h) | Most tokens in a line or in a syntax string. More is `TooManyTokens` (line) or `SyntaxTooLong` (table). |
 
 Input path: the firmware reads UART bytes and feeds each to `LineEditor::push_byte`, which
 returns an event (echo this byte, erase one character, line complete, line too long). The
@@ -71,7 +71,9 @@ flowchart TD
     F -- No --> Z2["Err FirstTokenNotKeyword"]
     F -- Yes --> G{"Non-optional after an optional?"}
     G -- Yes --> Z3["Err OptionalNotLast"]
-    G -- No --> H{"More than MENU_TOKENS_MAX tokens?"}
+    G -- No --> G2{"Any token after a rest token?"}
+    G2 -- Yes --> Z9["Err RestNotLast"]
+    G2 -- No --> H{"More than MENU_TOKENS_MAX tokens?"}
     H -- Yes --> Z4["Err SyntaxTooLong"]
     H -- No --> I{"First keyword HELP, ?, UP or .. ?"}
     I -- Yes --> Z5["Err ReservedKeyword"]
@@ -128,7 +130,7 @@ flowchart TD
 
 Rules:
 
-- A matched handler ends dispatch, whether it returns `Ok` or `Err`. A command that does not
+- A matched handler ends dispatch, with an `Ok` or an `Err` result. A command that does not
   match never runs and never ends dispatch, whatever a handler would have returned.
 - Inside a group, that group's table is tried first, so its commands work without the prefix.
 - A full command (`SENSORS SHOW`) works from any level and does not change the current group.
@@ -137,6 +139,28 @@ Rules:
 - `HELP`, `?`, `UP` and `..` are reserved at every level and only act alone on the line.
 
 ## 5. Token Matching Detail
+
+### Syntax strings
+
+A command's `syntax` is its keywords and parameters, separated by whitespace. The first token is a
+keyword. The engine classifies each token by its first byte:
+
+| Token | Kind | Meaning |
+|---|---|---|
+| `NAME` | keyword | matched against the typed word, ignoring case, exact length |
+| `[NAME]` | required parameter | the word must be present; it goes into `Args` |
+| `{NAME}` | optional parameter | the word may be absent; it goes into `Args` when present |
+| `{NAME...}` | rest | zero or more remaining words; every word from this position on goes into `Args` |
+
+Rules the table validation enforces: a required token never follows an optional or rest token, a
+`{NAME...}` token is the last token of its syntax (`RestNotLast` otherwise), a parameter has a
+non-empty name (`{...}` is `MalformedToken`), and the syntax has at most `MENU_TOKENS_MAX` tokens.
+A rest token counts as one token for `max_tokens` and accepts any number of words up to the line
+limit, so `DEBUG IPMI [NETFN] [CMD] {DATA...}` takes `DEBUG IPMI 06 01` and `DEBUG IPMI 2C 40 03 01`
+alike. The handler reads the words with `Args::len` and `Args::get(index)`; parameter positions
+count from the first parameter token, 0 being `[NETFN]` in the example.
+
+### The matcher
 
 `match_command` is the only matcher. It returns a `Match` value, so the match signal is explicit
 and independent of any handler return code.
@@ -152,6 +176,8 @@ flowchart TD
     E -- Yes --> F{"Equal ignoring case,<br/>same length?"}
     F -- No --> Z2["No: keyword mismatch"]
     F -- Yes --> H["Next token"]
+    D -- "Rest" --> RS["Store every word from i on in Args"]
+    RS --> K
     D -- "Required or Optional" --> G{"words i present?"}
     G -- Yes --> I["Store words i in Args"]
     G -- No --> H
@@ -163,7 +189,8 @@ flowchart TD
     K -- Yes --> Z4["Yes with Args; run_table calls the handler"]
 ```
 
-`min_tokens` is keywords plus required parameters; `max_tokens` adds the optional parameters.
+`min_tokens` is keywords plus required parameters; `max_tokens` adds the optional parameters. With
+a rest token the upper bound is the line limit instead.
 Because optional parameters come last, every keyword and required position lies below
 `min_tokens`, so a word count inside the range means every required parameter is present.
 
@@ -277,6 +304,8 @@ ipmc
   POWER   ON | OFF | CLEAR | STATUS
   SIM     RAIL {N} {MV} | TEMP {DC} | FAULT {NAME} {STATE} | SHOW
   FRU     SHOW | DUMP {OFFSET} {COUNT} | STORE | RESTORE
+  DEBUG   STATUS | LOG {STATE} | DUMP {FORMAT} | CLEAR | TRACE {WHAT} {STATE} | EVENTS {STATE}
+          | IPMI [NETFN] [CMD] {DATA...} | INJECT [BUS] {BYTES...} | CACHE {ACTION}
   STATUS  (alias of SYS STATUS)
   RESET   (alias of SYS RESET)
 ```
@@ -288,16 +317,16 @@ ipmc
 | 3 | cmd_version | `SYS VERSION` | - | - | 2 | 2 | Firmware and core library versions |
 | 4 | cmd_led_on | `LED ON` | - | - | 2 | 2 | LD2 on |
 | 5 | cmd_led_off | `LED OFF` | - | - | 2 | 2 | LD2 off |
-| 6 | cmd_led_blink | `LED BLINK [HZ]` | HZ | - | 3 | 3 | LD2 blink; the limits print with LED STATUS, other rates are rejected |
+| 6 | cmd_led_blink | `LED BLINK [HZ]` | HZ | - | 3 | 3 | LD2 blink at the given rate in Hz; the limits print with LED STATUS |
 | 7 | cmd_led_auto | `LED AUTO` | - | - | 2 | 2 | LD2 back to the heartbeat / IPMB activity pattern |
-| 8 | cmd_led_status | `LED STATUS` | - | - | 2 | 2 | LD2 mode and rate |
+| 8 | cmd_led_status | `LED STATUS` | - | - | 2 | 2 | LD2 mode, rate and the accepted blink rate limits |
 | 9 | cmd_ipmb_addr | `IPMB ADDR` | - | - | 2 | 2 | Geographic address, IPMB address, parity and NVMRO with their sources |
 | 10 | cmd_ipmb_stats | `IPMB STATS` | - | - | 2 | 2 | Per-bus receive, error, transmit, resend and replay counters |
 | 11 | cmd_ipmb_state | `IPMB STATE` | - | - | 2 | 2 | Per-bus fitted, mode and enable state, the transmit policy and the link sensor bytes |
 | 12 | cmd_status | `STATUS` | - | - | 1 | 1 | Alias of SYS STATUS |
 | 13 | cmd_reset | `RESET` | - | - | 1 | 1 | Alias of SYS RESET |
-| 14 | cmd_sensors_show | `SENSORS SHOW` | - | - | 2 | 2 | Rails, die temperature, inputs, power state, FRU state, the readings of sensors 0 to 6 and their Get Sensor Reading data bytes |
-| 15 | cmd_sensors_trace | `SENSORS TRACE {LEVEL}` | - | LEVEL | 2 | 3 | Sensor trace level OFF, EVENTS (changes) or ALL (changes and samples); no argument shows it |
+| 14 | cmd_sensors_show | `SENSORS SHOW` | - | - | 2 | 2 | Rails, die temperature, inputs, power state, FRU state, Tier-1 readings and their data bytes |
+| 15 | cmd_sensors_trace | `SENSORS TRACE {LEVEL}` | - | LEVEL | 2 | 3 | Sensor trace level OFF, EVENTS (changes) or ALL (changes and samples) |
 | 16 | cmd_power_on | `POWER ON` | - | - | 2 | 2 | Assert PWR_EN and wait for PGOOD |
 | 17 | cmd_power_off | `POWER OFF` | - | - | 2 | 2 | Release PWR_EN and clear a latched fault |
 | 18 | cmd_power_clear | `POWER CLEAR` | - | - | 2 | 2 | Clear a latched power fault |
@@ -311,6 +340,23 @@ ipmc
 | 26 | cmd_fru_dump | `FRU DUMP {OFFSET} {COUNT}` | - | OFFSET, COUNT | 2 | 4 | Hex dump of the FRU image; default offset 0 and the rest of the area |
 | 27 | cmd_fru_store | `FRU STORE` | - | - | 2 | 2 | Flash log state: records, newest sequence, free bytes, pending write, next erase |
 | 28 | cmd_fru_restore | `FRU RESTORE` | - | - | 2 | 2 | Save the built FRU image as a new log record and put it back; refused while NVMRO is asserted |
+| 29 | cmd_debug_status | `DEBUG STATUS` | - | - | 2 | 2 | Debug switches, capture log use, event receiver, duplicate cache |
+| 30 | cmd_debug_log | `DEBUG LOG {STATE}` | - | STATE | 2 | 3 | Capture log ON or OFF; no argument shows its state |
+| 31 | cmd_debug_dump | `DEBUG DUMP {FORMAT}` | - | FORMAT | 2 | 3 | Print the capture log: CSV (default) or TRACE; any key stops it |
+| 32 | cmd_debug_clear | `DEBUG CLEAR` | - | - | 2 | 2 | Empty the capture log |
+| 33 | cmd_debug_trace | `DEBUG TRACE {WHAT} {STATE}` | - | WHAT, STATE | 2 | 4 | Console trace: IPMI (request, link and event lines) or I2C (one line per frame), ON or OFF |
+| 34 | cmd_debug_events | `DEBUG EVENTS {STATE}` | - | STATE | 2 | 3 | Event messages ON (receiver 20h) or OFF (receiver FFh) |
+| 35 | cmd_debug_ipmi | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | NETFN, CMD | DATA... | 4 | rest | Run one IPMI request locally, as from 20h; nothing goes on the bus |
+| 36 | cmd_debug_inject | `DEBUG INJECT [BUS] {BYTES...}` | BUS | BYTES... | 3 | rest | Hand a whole IPMB frame to the link as if received on bus A or B |
+| 37 | cmd_debug_cache | `DEBUG CACHE {ACTION}` | - | ACTION | 2 | 3 | Duplicate cache: no argument shows the entries, CLEAR empties it |
+
+`rest` in the Max column means any number of words up to `MENU_TOKENS_MAX`: the last token is a
+`{NAME...}` token (section 5). The DEBUG words are hex bytes, typed as `06`, `0x06` or `6`; the
+handlers parse them with `ipmc_wire::hex_word` and report `'<word>' is not a hex byte` for another
+form. `DEBUG DUMP` prints a header line, then the rows over the following main-loop passes, then
+`# end of capture`; a received byte other than a line feed stops it with `# dump stopped`, and a new
+command line waits until it ends. The record formats are in the software specification, section
+10.11.
 
 Groups:
 
@@ -323,6 +369,7 @@ Groups:
 | `POWER` | Payload power enable |
 | `SIM` | Simulated sensor inputs |
 | `FRU` | FRU image, its decoded areas and the flash log |
+| `DEBUG` | Test switches, the IPMB capture log and local IPMI requests |
 
 Further groups are added by the phases that own them; each is
 a `Group` value with its own table, and the engine needs no change.
@@ -336,6 +383,10 @@ OK: LED blink 2.00 Hz
 ipmc/led> ..
 ipmc> sys version
 ipmc-nucleo-f401re v0.1.0 (ipmc-core v0.1.0)
+ipmc> debug ipmi 06 01
+-> CC 00h, 15 bytes: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00 (App Get Device ID)
+ipmc> debug log
+Capture log:     on, 8191 bytes, used 1204, 41 records, 0 overwritten
 ipmc> frobnicate
 Error: unknown command 'frobnicate'
 Type HELP or ?
