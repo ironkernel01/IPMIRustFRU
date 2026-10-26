@@ -34,14 +34,14 @@ fn line(out: &mut dyn TextOut, label: &str, body: impl FnOnce(&mut dyn TextOut))
     out.put(CRLF);
 }
 
-/// banner -- `ipmc-boot v0.1.0 (sector 0)`, `(sector 0, field)` in the field image.
+/// banner -- `ipmc-boot v0.1.0 (sectors 0-1)`, `(sectors 0-1, field)` in the field image.
 pub fn banner(out: &mut dyn TextOut, version: &str, field: bool) {
     line(out, "ipmc-boot v", |out| {
         out.put(version);
         out.put(if field {
-            " (sector 0, field)"
+            " (sectors 0-1, field)"
         } else {
-            " (sector 0)"
+            " (sectors 0-1)"
         });
     });
 }
@@ -287,14 +287,14 @@ mod tests {
             decision(out, &Decision::Start, true);
             starting(out);
         });
-        let want = "ipmc-boot v0.1.0 (sector 0)\r\n\
+        let want = "ipmc-boot v0.1.0 (sectors 0-1)\r\n\
 Reset cause:    power-on\r\n\
 BOOTLOADER pin: 0\r\n\
 Request:        none\r\n\
-Runtime image:  header at 0x0800_8200: found, v0.1.0, 111668 bytes, flags 00h\r\n\
+Runtime image:  header at 0x0800_C200: found, v0.1.0, 111668 bytes, flags 00h\r\n\
 Image check:    SHA-256 1f3a09c27b54e6d8 match, 81 ms\r\n\
 Decision:       starting the runtime\r\n\
-Starting the runtime firmware at 0x0800_8000\r\n";
+Starting the runtime firmware at 0x0800_C000\r\n";
         assert_eq!(out, want);
     }
 
@@ -307,7 +307,7 @@ Starting the runtime firmware at 0x0800_8000\r\n";
             result: Ok(()),
         };
         let rows: [(String, &str); 20] = [
-            (text(|o| banner(o, "0.1.0", true)), "ipmc-boot v0.1.0 (sector 0, field)\r\n"),
+            (text(|o| banner(o, "0.1.0", true)), "ipmc-boot v0.1.0 (sectors 0-1, field)\r\n"),
             (text(|o| pin(o, true)), "BOOTLOADER pin: 1 (forced)\r\n"),
             (
                 text(|o| request(o, Some(Interface::Console))),
@@ -319,27 +319,27 @@ Starting the runtime firmware at 0x0800_8000\r\n";
             ),
             (
                 text(|o| runtime_image(o, &Report { header: None, computed: None, result: Err(ImageError::Missing) })),
-                "Runtime image:  header at 0x0800_8200: missing\r\n",
+                "Runtime image:  header at 0x0800_C200: missing\r\n",
             ),
             (
                 text(|o| runtime_image(o, &Report { header: None, computed: None, result: Err(ImageError::BadMagic) })),
-                "Runtime image:  header at 0x0800_8200: bad magic\r\n",
+                "Runtime image:  header at 0x0800_C200: bad magic\r\n",
             ),
             (
                 text(|o| runtime_image(o, &Report { header: Some(header(0, 0)), computed: None, result: Err(ImageError::BadHeader(HeaderField::Vectors)) })),
-                "Runtime image:  header at 0x0800_8200: bad header (vector address)\r\n",
+                "Runtime image:  header at 0x0800_C200: bad header (vector address)\r\n",
             ),
             (
                 text(|o| runtime_image(o, &Report { header: Some(header(0, 0)), computed: None, result: Err(ImageError::BadVectorTable) })),
-                "Runtime image:  header at 0x0800_8200: bad vector table\r\n",
+                "Runtime image:  header at 0x0800_C200: bad vector table\r\n",
             ),
             (
                 text(|o| runtime_image(o, &mismatch)),
-                "Runtime image:  header at 0x0800_8200: found, v0.1.0, 111668 bytes, flags 00h\r\n",
+                "Runtime image:  header at 0x0800_C200: found, v0.1.0, 111668 bytes, flags 00h\r\n",
             ),
             (
                 text(|o| runtime_image(o, &flagged)),
-                "Runtime image:  header at 0x0800_8200: found, v0.1.0, 300 bytes, flags 03h\r\n",
+                "Runtime image:  header at 0x0800_C200: found, v0.1.0, 300 bytes, flags 03h\r\n",
             ),
             (
                 text(|o| image_check(o, &mismatch, 7)),
@@ -435,7 +435,10 @@ Starting the runtime firmware at 0x0800_8000\r\n";
                 text(|o| bootloader(o, "0.1.0")),
                 "Bootloader:     ipmc-boot v0.1.0\r\n".into(),
             ),
-            (text(|o| build(o, false)), "Build:          bench\r\n".into()),
+            (
+                text(|o| build(o, false)),
+                "Build:          bench\r\n".into(),
+            ),
             (text(|o| build(o, true)), "Build:          field\r\n".into()),
             (
                 text(|o| port(o, "CLI", 115_200, false)),

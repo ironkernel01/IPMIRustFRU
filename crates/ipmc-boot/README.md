@@ -1,11 +1,11 @@
 # ipmc-boot
 
-The library of the sector-0 bootloader (Documentation/ipmc_boot_plan.md): the flash geometry and
+The library of the bootloader (sectors 0-1) (Documentation/ipmc_boot_plan.md): the flash geometry and
 region policy, the runtime image header and its check, the boot request words, the start decision
 and countdown, the start-up trace text, the Intel HEX parser and the `LOAD` state machine. It is
 `no_std`, `forbid(unsafe_code)`, panic free and host-tested; it uses no `core::fmt`.
 
-The crate has no firmware binary. The sector-0 binary `ipmc-boot` is built from the F401 crate
+The crate has no firmware binary. The bootloader binary `ipmc-boot` is built from the F401 crate
 `crates/ipmc-nucleo-f401re` (`src/boot/`, linker script `boot.x`, profile `boot`), because every
 STM32F401 specific file lives there:
 

@@ -18,7 +18,7 @@ fn main() {
     // Each linker script belongs to one binary.
     println!("cargo:rustc-link-arg-bin=ipmc-nucleo-f401re=-Tlink.x");
     println!("cargo:rustc-link-arg-bin=ipmc-boot=-Tboot.x");
-    // Sector 0 holds 16 KB: the linker folds identical functions (memclr4/memclr8, memcpy4/memcpy8
+    // Sectors 0-1 hold 32 KB: the linker folds identical functions (memclr4/memclr8, memcpy4/memcpy8
     // and equal generic instances) into one. No code compares function addresses.
     println!("cargo:rustc-link-arg-bin=ipmc-boot=--icf=all");
     for script in ["link.x", "memory.x", "boot.x", "flash_map.x"] {

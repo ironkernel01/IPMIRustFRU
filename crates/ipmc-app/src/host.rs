@@ -132,4 +132,10 @@ pub trait AppHost {
     /// save_state -- whether the FRU image in RAM is in the flash log. The firmware reads the
     /// store's dirty mark and the flash log's pending flag.
     fn save_state(&self) -> SaveState;
+
+    /// request_bootloader -- asks for a restart into the bootloader (the `BOOTLOADER` command). The
+    /// firmware records the request for the bootloader (interface: application port) and asks for
+    /// a Cold Reset; the reset runs after the answer has left the port and an accepted FRU write
+    /// is saved (`IpmbLink::request_bootloader`), so this call returns at once.
+    fn request_bootloader(&mut self);
 }

@@ -4,8 +4,8 @@ Host update tool for the IPMC bootloader (`crates/ipmc-boot`). It wakes the boot
 (CLI) port or the application (APP) port, erases the runtime firmware sectors, loads an Intel HEX file
 record by record, verifies the image and starts it.
 
-An update erases sectors 2 to 7 (the runtime firmware) only. The FRU store (sector 1) and the
-bootloader (sector 0) stay.
+An update erases sectors 3 to 7 (the runtime firmware) only. The FRU store (sector 2) and the
+bootloader (sectors 0-1) stay.
 
 ## Setup
 
@@ -45,13 +45,15 @@ Examples:
 
 `--enter` first opens `--enter-port` at the baud rate of that runtime port, sends the entry command
 (`DEBUG BOOTLOADER` on the CLI, `BOOTLOADER` on the APP port), prints the answer and closes the port.
+The console answers `Restarting into the bootloader` (and `Payload power drops at the reset` while
+payload power is on); the APP port answers `BOOTLOADER: restarting` then `OK`.
 
 ## What update does
 
 1. Reads the file (Intel HEX types 00, 01, 04, 05; 02 and 03 are refused) and builds the memory image
    with FFh in gaps.
 2. Pre-check, refused before anything is sent, with one line naming the rule: every byte inside
-   0x08008000..0x08080000; header magic, format, size, length (multiple of 4, 0x240 to 491520), vector
+   0x0800C000..0x08080000; header magic, format, size, length (multiple of 4, 0x240 to 475136), vector
    table address; vector word 0 (8-byte aligned, SRAM) and word 1 (odd, inside the code); the SHA-256
    recomputed with `hashlib` equals the stored digest. `--no-precheck` skips it.
 3. `ERASE APP` and `CONFIRM`, `LOAD`.
@@ -64,7 +66,7 @@ Examples:
 
 Exit codes: 0 success, 1 a refusal or an `ERR` answer, 2 usage, 3 a timeout.
 
-Time: about 30 to 85 s for today's image at 115200 baud (the six-sector erase takes up to 8 s of it).
+Time: about 30 to 85 s for today's image at 115200 baud (the five-sector erase takes up to 6 s of it).
 
 ## Field procedure
 

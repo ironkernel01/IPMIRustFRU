@@ -136,9 +136,17 @@ mod tests {
             .chain(u32::MAX - 1_000..=u32::MAX)
             .chain((0..2_000u32).map(|n| n.wrapping_mul(2_654_435_761)));
         let times: std::vec::Vec<u32> = times.collect();
-        let rates = (0..=ipmc_defs::IPMC_LED_RATE_MAX_CHZ)
-            .step_by(13)
-            .chain([1, 100, 200, 1000, 5000, 99_999, 100_000, 100_001, u32::MAX]);
+        let rates = (0..=ipmc_defs::IPMC_LED_RATE_MAX_CHZ).step_by(13).chain([
+            1,
+            100,
+            200,
+            1000,
+            5000,
+            99_999,
+            100_000,
+            100_001,
+            u32::MAX,
+        ]);
         for chz in rates {
             for &now in &times {
                 assert_eq!(phase(now, chz), old(now, chz), "{now} ms {chz} chz");

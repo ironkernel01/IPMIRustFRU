@@ -90,6 +90,11 @@ pub const COMMANDS: &[Row] = &[
         help: "Run one IPMI request locally (hex bytes); nothing goes on the IPMB",
         handler: cmd_ipmi,
     },
+    Row {
+        syntax: "BOOTLOADER",
+        help: "Restart into the bootloader; payload power drops at the reset",
+        handler: cmd_bootloader,
+    },
 ];
 
 // ---- the size of the longest answer ----
@@ -509,6 +514,19 @@ fn cmd_fru_save(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
         }
     };
     data(out, "SAVE", format_args!("{word}"))
+}
+
+/// cmd_bootloader -- `BOOTLOADER` answers `BOOTLOADER: restarting`; the board restarts into the
+/// bootloader after the answer has left the port (the host asks for the reset). The application
+/// port is silent from the reset on, until the bootloader's `RUN` starts the runtime again.
+#[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
+fn cmd_bootloader(
+    _args: &Args<'_>,
+    host: &mut dyn AppHost,
+    out: &mut dyn Write,
+) -> Result<(), Fail> {
+    host.request_bootloader();
+    data(out, "BOOTLOADER", format_args!("restarting"))
 }
 
 /// hex_byte -- one hex byte (`06`, `0x06` and `6` are the same).

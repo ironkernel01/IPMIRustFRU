@@ -123,7 +123,7 @@ pub(crate) fn hex_image(image: &[u8], size: usize) -> Vec<String> {
 pub(crate) fn good_image() -> Vec<u8> {
     let mut bytes: Vec<u8> = (0..70_000).map(|i| (i * 13 + 5) as u8).collect();
     bytes[0..4].copy_from_slice(&0x2001_8000u32.to_le_bytes());
-    bytes[4..8].copy_from_slice(&0x0800_8341u32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&(APP_START + 0x341).to_le_bytes());
     bytes[0x200..0x240].copy_from_slice(&placeholder([0, 1, 0], 0));
     patch(&mut bytes).unwrap();
     bytes

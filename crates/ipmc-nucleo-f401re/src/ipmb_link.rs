@@ -27,6 +27,7 @@
 use core::fmt;
 
 use cortex_m::peripheral::{DCB, DWT, NVIC};
+use ipmc_boot::request::{self, Interface};
 use ipmc_core::addr::{self, AddrInfo};
 use ipmc_core::dispatch::{Context as DispatchContext, PowerRequest, ResetRequest};
 use ipmc_core::ext::{self, Extension};
@@ -44,7 +45,7 @@ use ipmc_log::{CaptureTrace, DefaultLog, Dir, FrameStatus, Kind, LogState, Recor
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
-use crate::bsp::{fault, ga, reset_cause, systick, uart};
+use crate::bsp::{boot_request, fault, ga, reset_cause, systick, uart};
 use crate::console::{ConsoleTrace, Context};
 use crate::drivers::flash::Flash;
 use crate::drivers::i2c_hw::{self, I2cError, I2cPeripheral, RxConsumer};
@@ -395,6 +396,9 @@ pub struct IpmbLink {
     ext: ipmc_ext::Active,
     /// The one decision when a pending Cold Reset runs (`service_reset` only performs it).
     reset_gate: ResetGate,
+    /// The interface that asked for a restart into the bootloader (`request_bootloader`); the
+    /// Cold Reset it asked for writes the request words just before the processor restarts.
+    boot_request: Option<Interface>,
     /// The application port still has output to send (set by `AppPort::poll` at the end of every
     /// pass): part of the "not idle" input of the reset gate, so a Cold Reset asked for from the
     /// application port finishes its own answer first, inside the gate's `IPMC_RESET_WAIT_MS`.
@@ -631,6 +635,7 @@ impl IpmbLink {
             last_rx_ms: None,
             ext: ipmc_ext::Active::default(),
             reset_gate: ResetGate::new(),
+            boot_request: None,
             app_output_pending: false,
             reset_save_failed: false,
             urgent_since: None,
@@ -993,6 +998,16 @@ impl IpmbLink {
         self.app_output_pending = pending;
     }
 
+    /// request_bootloader -- a restart into the bootloader, asked for by `interface` (the console
+    /// command `DEBUG BOOTLOADER`, the application port command `BOOTLOADER`): a Cold Reset
+    /// through the one reset path (`service_reset`: the answer has left, an accepted FRU write is
+    /// saved, or IPMC_RESET_WAIT_MS passed), with the boot request words written immediately
+    /// before the processor restarts.
+    pub fn request_bootloader(&mut self, interface: Interface) {
+        self.boot_request = Some(interface);
+        self.dispatch.pending_reset = Some(ResetRequest::Cold);
+    }
+
     /// service_reset -- performs `Context::pending_reset` when `ResetGate` says so (the response
     /// left and no accepted FRU write is unsaved, or IPMC_RESET_WAIT_MS passed).
     /// - Cold: one console line, the console is flushed, the requester's next sequence number is
@@ -1028,6 +1043,9 @@ impl IpmbLink {
                     self.link.next_request_seq(),
                     self.link.recent_request_seqs(now_ms),
                 );
+                if let Some(interface) = self.boot_request {
+                    boot_request::write(request::encode(interface));
+                }
                 reset_cause::system_reset();
             }
             Some(ResetRequest::Warm) => self.warm_reset(now_ms),

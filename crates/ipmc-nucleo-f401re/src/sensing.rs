@@ -76,6 +76,12 @@ pub struct Sensing {
 }
 
 impl Sensing {
+    /// payload_power_on -- PWR_EN is asserted: the payload has power (`DEBUG BOOTLOADER` says so
+    /// before it restarts the processor, which releases PWR_EN).
+    pub fn payload_power_on(&self) -> bool {
+        self.io.is_enabled()
+    }
+
     /// new -- builds the routers over the hardware backends and the simulators at their
     /// ipmc-defs start values. `adc` is None when no group uses the ADC, `io` is None when no
     /// group uses the board pins; an ADC that refused to start is kept as a fault to show.

@@ -2,12 +2,12 @@
    (Documentation/ipmc_boot_plan.md section 2).
 
    Both linker scripts include it: memory.x (the runtime, through link.x) and boot.x (the
-   sector-0 bootloader). The numbers are RM0368 Table 5 (STM32F401xE, 512 KB: sectors 0-3 are
+   bootloader in sectors 0-1). The numbers are RM0368 Table 5 (STM32F401xE, 512 KB: sectors 0-3 are
    16 KB, sector 4 is 64 KB, sectors 5-7 are 128 KB) and the owner's layout:
 
-     BOOT    sector 0     0x0800_0000..0x0800_3FFF   16 KB   the bootloader (SWD or the drive copy)
-     STORE   sector 1     0x0800_4000..0x0800_7FFF   16 KB   the FRU flash store, nothing else
-     APP     sectors 2-7  0x0800_8000..0x0807_FFFF  480 KB   the runtime: vector table at the
+     BOOT    sectors 0-1  0x0800_0000..0x0800_7FFF   32 KB   the bootloader (SWD or the drive copy)
+     STORE   sector 2     0x0800_8000..0x0800_BFFF   16 KB   the FRU flash store, nothing else
+     APP     sectors 3-7  0x0800_C000..0x0807_FFFF  464 KB   the runtime: vector table at the
                                                              start, the image header at +0x200
      NOINIT  RAM          0x2000_0000..0x2000_00FF  256 B    the boot request (offset 0) and the
                                                              runtime's .uninit (offset 0x10)
@@ -24,9 +24,9 @@
    file check the order of the regions. */
 MEMORY
 {
-  BOOT   : ORIGIN = 0x08000000, LENGTH = 32K    /* sector 0: the bootloader */
-  STORE  : ORIGIN = 0x08004000, LENGTH = 16K    /* sector 1: the FRU flash store */
-  APP    : ORIGIN = 0x08008000, LENGTH = 480K   /* sectors 2-7: the runtime */
+  BOOT   : ORIGIN = 0x08000000, LENGTH = 32K    /* sectors 0-1: the bootloader */
+  STORE  : ORIGIN = 0x08008000, LENGTH = 16K    /* sector 2: the FRU flash store */
+  APP    : ORIGIN = 0x0800C000, LENGTH = 464K   /* sectors 3-7: the runtime */
   NOINIT : ORIGIN = 0x20000000, LENGTH = 256    /* boot request (offset 0), runtime .uninit (offset 0x10) */
   RAM    : ORIGIN = 0x20000100, LENGTH = 96K - 256
 }
@@ -38,7 +38,7 @@ __app_vectors = ORIGIN(APP);
 __app_header = ORIGIN(APP) + 0x200;
 __boot_request = ORIGIN(NOINIT);
 
-ASSERT(1 == 1, "
+ASSERT(ORIGIN(BOOT) + LENGTH(BOOT) == ORIGIN(STORE), "
 ERROR(ipmc): flash_map.x: STORE does not follow BOOT");
 
 ASSERT(ORIGIN(STORE) + LENGTH(STORE) == ORIGIN(APP), "

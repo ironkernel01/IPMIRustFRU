@@ -17,8 +17,8 @@ use ipmc_defs::{FIELD_BUILD, IPMC_BOOT_PROMPT, IPMC_FWU_LOAD_IDLE_S};
 /// MS_PER_S -- milliseconds per second.
 const MS_PER_S: u32 = 1000;
 /// ERASE_PROMPT_APP, ERASE_PROMPT_FRU -- the question before `CONFIRM`.
-const ERASE_PROMPT_APP: &str = "Erase sectors 2-7 (runtime firmware)? Type CONFIRM";
-const ERASE_PROMPT_FRU: &str = "Erase sector 1 (FRU flash store)? Type CONFIRM";
+const ERASE_PROMPT_APP: &str = "Erase sectors 3-7 (runtime firmware)? Type CONFIRM";
+const ERASE_PROMPT_FRU: &str = "Erase sector 2 (FRU flash store)? Type CONFIRM";
 
 /// BootHw -- what the session needs from the board: the flash (erase, program, read) and a
 /// millisecond clock that keeps counting through a flash stall (SysTick with the stall catch-up
@@ -496,15 +496,15 @@ mod tests {
         let rows: [(&str, &str, &str, &[u8]); 2] = [
             (
                 "ERASE APP",
-                "Erase sectors 2-7 (runtime firmware)? Type CONFIRM",
+                "Erase sectors 3-7 (runtime firmware)? Type CONFIRM",
                 "APP",
-                &[2, 3, 4, 5, 6, 7],
+                &[3, 4, 5, 6, 7],
             ),
             (
                 "erase fru",
-                "Erase sector 1 (FRU flash store)? Type CONFIRM",
+                "Erase sector 2 (FRU flash store)? Type CONFIRM",
                 "FRU",
-                &[1],
+                &[2],
             ),
         ];
         for (line, question, name, sectors) in rows {
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn record_mode_lines() {
-        let data = record_line(0x8000, 0, &[1, 2, 3, 4]);
+        let data = record_line(0xC000, 0, &[1, 2, 3, 4]);
         let mut damaged = data.clone();
         damaged.replace_range(9..11, "FF");
         // errors leave record mode on, an empty line is ignored
@@ -760,11 +760,11 @@ mod tests {
         bench.text("ERASE FRU");
         bench.text("CONFIRM");
         let want = crlf(&[
-            "ipmc-boot v0.1.0 (sector 0)",
+            "ipmc-boot v0.1.0 (sectors 0-1)",
             "Reset cause:    power-on",
             "BOOTLOADER pin: 0",
             "Request:        none",
-            "Runtime image:  header at 0x0800_8200: missing",
+            "Runtime image:  header at 0x0800_C200: missing",
             "Image check:    not run",
             "Stored digest:  none",
             "Decision:       staying in the bootloader: no image, waiting for WAKEUP on CLI or APP",
@@ -787,11 +787,13 @@ mod tests {
         assert_eq!(hex, stored);
         let length = check(&bench.ram).header.unwrap().length;
         let want = crlf(&[
-            "ipmc-boot v0.1.0 (sector 0)",
+            "ipmc-boot v0.1.0 (sectors 0-1)",
             "Reset cause:    power-on",
             "BOOTLOADER pin: 0",
             "Request:        none",
-            &format!("Runtime image:  header at 0x0800_8200: found, v0.1.0, {length} bytes, flags 00h"),
+            &format!(
+                "Runtime image:  header at 0x0800_C200: found, v0.1.0, {length} bytes, flags 00h"
+            ),
             &format!("Image check:    SHA-256 {hex} match, 4 ms"),
             &format!("Stored digest:  {hex}"),
             "Decision:       staying in the bootloader: no image, waiting for WAKEUP on CLI or APP",

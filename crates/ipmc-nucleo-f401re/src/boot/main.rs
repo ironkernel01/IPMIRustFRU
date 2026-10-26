@@ -1,4 +1,4 @@
-// main.rs - ipmc-boot, the sector-0 bootloader of the NUCLEO-F401RE (Documentation/
+// main.rs - ipmc-boot, the bootloader (sectors 0-1) of the NUCLEO-F401RE (Documentation/
 // ipmc_boot_plan.md). Every decision (image check, boot request, start decision, countdown,
 // the command session, trace text) is the `ipmc-boot` crate; this binary is the hardware glue.
 //

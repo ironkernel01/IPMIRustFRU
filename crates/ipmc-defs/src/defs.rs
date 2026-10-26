@@ -364,7 +364,7 @@ pub const IPMC_FRU_MFG_DATE: &str = "2026-10-23 00:00";
 /// (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru
 /// persist.rs) is 16 bytes longer than this
 pub const IPMC_FRU_SIZE: usize = 512;
-/// true = Write FRU Data survives reset (FRU image kept in the flash store, sector 1 alone, 16 KB);
+/// true = Write FRU Data survives reset (FRU image kept in the flash store, sector 2 alone, 16 KB);
 /// false = RAM only, a reset restores the built image
 pub const IPMC_FRU_PERSIST: bool = true;
 /// quiet time after the last Write FRU Data before the image is saved to flash, milliseconds

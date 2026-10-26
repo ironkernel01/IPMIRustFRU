@@ -30,16 +30,16 @@ static TABLE: [Sector; 8] = SECTORS;
 
 pub const FLASH_START: u32 = 0x0800_0000;
 pub const FLASH_END: u32 = 0x0808_0000;
-/// BOOT -- sector 0, the bootloader.
+/// BOOT -- sectors 0 and 1, the bootloader.
 pub const BOOT_START: u32 = 0x0800_0000;
-pub const BOOT_END: u32 = 0x0800_4000;
-/// STORE -- sector 1, the FRU flash store.
-pub const STORE_START: u32 = 0x0800_4000;
-pub const STORE_END: u32 = 0x0800_8000;
-/// APP -- sectors 2 to 7, the runtime firmware.
-pub const APP_START: u32 = 0x0800_8000;
+pub const BOOT_END: u32 = 0x0800_8000;
+/// STORE -- sector 2, the FRU flash store.
+pub const STORE_START: u32 = 0x0800_8000;
+pub const STORE_END: u32 = 0x0800_C000;
+/// APP -- sectors 3 to 7, the runtime firmware.
+pub const APP_START: u32 = 0x0800_C000;
 pub const APP_END: u32 = 0x0808_0000;
-/// APP_LEN_MAX -- bytes of the APP region (491 520).
+/// APP_LEN_MAX -- bytes of the APP region (475 136).
 pub const APP_LEN_MAX: u32 = APP_END - APP_START;
 /// RAM: NOINIT 0x2000_0000..0x2000_0100 (boot request at offset 0), the rest above.
 pub const RAM_START: u32 = 0x2000_0000;
@@ -62,19 +62,19 @@ impl Target {
         }
     }
 
-    /// sectors -- the sectors the target erases, in erase order: FRU is sector 1; APP is sectors
-    /// 2..=7 with sector 2 first (it holds the vector table and the header).
+    /// sectors -- the sectors the target erases, in erase order: FRU is sector 2; APP is sectors
+    /// 3..=7 with sector 3 first (it holds the vector table and the header).
     pub fn sectors(self) -> &'static [Sector] {
         let range = match self {
-            Target::Fru => 1..2,
-            Target::App => 2..8,
+            Target::Fru => 2..3,
+            Target::App => 3..8,
         };
         TABLE.get(range).unwrap_or(&[])
     }
 }
 
 /// load_allowed -- true when every byte of addr..addr+len lies inside APP (the only LOAD target:
-/// owner 10-26-2026, nothing in the bootloader programs sector 0 or sector 1). Overflow-safe;
+/// owner 10-26-2026, nothing in the bootloader programs sectors 0 to 2). Overflow-safe;
 /// len 0 is false.
 pub fn load_allowed(addr: u32, len: u32) -> bool {
     len > 0 && addr >= APP_START && addr.checked_add(len).is_some_and(|end| end <= APP_END)
@@ -105,12 +105,12 @@ const _: () = assert!(
 );
 const _: () = assert!(
     BOOT_START == SECTORS[0].start
-        && BOOT_END == SECTORS[1].start
-        && STORE_START == SECTORS[1].start
-        && STORE_END == SECTORS[2].start
-        && APP_START == SECTORS[2].start
+        && BOOT_END == SECTORS[2].start
+        && STORE_START == SECTORS[2].start
+        && STORE_END == SECTORS[3].start
+        && APP_START == SECTORS[3].start
         && APP_END == SECTORS[7].start + SECTORS[7].len,
-    "BOOT, STORE and APP must be sector 0, sector 1 and sectors 2-7 of SECTORS"
+    "BOOT, STORE and APP must be sectors 0-1, sector 2 and sectors 3-7 of SECTORS"
 );
 
 #[cfg(test)]
@@ -143,8 +143,8 @@ mod tests {
 
     #[test]
     fn target_sectors_and_names() {
-        let fru: [u8; 1] = [1];
-        let app: [u8; 6] = [2, 3, 4, 5, 6, 7];
+        let fru: [u8; 1] = [2];
+        let app: [u8; 5] = [3, 4, 5, 6, 7];
         for (target, name, numbers) in [
             (Target::Fru, "FRU", &fru[..]),
             (Target::App, "APP", &app[..]),
@@ -153,6 +153,6 @@ mod tests {
             assert_eq!(got, numbers);
             assert_eq!(target.name(), name);
         }
-        assert_eq!(APP_LEN_MAX, 491_520);
+        assert_eq!(APP_LEN_MAX, 475_136);
     }
 }

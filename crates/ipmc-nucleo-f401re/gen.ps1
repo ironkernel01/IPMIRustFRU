@@ -1,4 +1,4 @@
-# gen.ps1 - build, flash and console helper for the NUCLEO-F401RE images: the sector-0 bootloader
+# gen.ps1 - build, flash and console helper for the NUCLEO-F401RE images: the bootloader (sectors 0-1)
 # (ipmc-boot) and the runtime firmware (ipmc-nucleo-f401re). Layout and build: Documentation/
 # ipmc_boot_plan.md 2, 3.5 and 5.
 #   .\gen.ps1 build                  build both images and the board image (steps below)
@@ -27,28 +27,28 @@
 # Build steps (the files are in target\thumbv7em-none-eabihf\release unless noted; <sfx> is the
 # -eval and -field suffix):
 #   1. cargo build --profile boot --bin ipmc-boot (IPMC_EVAL=0); objcopy -O binary --gap-fill 0xFF to
-#      ipmc-boot<sfx>.bin; fwimage size (fails above 16 384 bytes, warns above 12 288).
+#      ipmc-boot<sfx>.bin; fwimage size (fails above 32 768 bytes, warns above 24 576).
 #   2. cargo build --release --bin ipmc-nucleo-f401re (Tier23, Eval and Field as above).
 #   3. objcopy -O binary --gap-fill 0xFF of the runtime ELF to ipmc-nucleo-f401re<sfx>.app.img (the
-#      bytes from 0x0800_8000; the ELF holds nothing below it).
+#      bytes from 0x0800_C000; the ELF holds nothing below it).
 #   4. fwimage patch: fills the image length and the SHA-256 digest into the header placeholder
 #      and writes the 64 header bytes (app_header<sfx>.bin).
 #   5. objcopy --update-section .app_header=... gives the patched ELF ipmc-nucleo-f401re<sfx>.elf;
 #      the image is made from it again and fwimage check runs the bootloader's own image check on
 #      it (a failure stops the build).
 #   6. objcopy -O ihex of the patched ELF: ipmc-nucleo-f401re<sfx>.hex (the file for LOAD).
-#   7. fwimage combine: ipmc-board<sfx>.bin = the bootloader at 0, FFh to 0x8000, the runtime image.
+#   7. fwimage combine: ipmc-board<sfx>.bin = the bootloader at 0, FFh to 0xC000 (the rest of BOOT and all of STORE), the runtime image.
 #   8. Each file with its size; arm-none-eabi-size of both ELFs.
 # No runtime-only .bin is written: the ST-LINK drive programs a .bin from 0x0800_0000, so it would
 # land on the bootloader.
 # Flash paths. What each writes and erases:
-#   Drive copy (ipmc-board<sfx>.bin): everything. The bootloader (sector 0), the FRU store (sector
-#     1, written as FFh: the unit's FRU image and settings are erased, the owner accepts that) and
-#     the runtime (sectors 2-7) are written; the board resets into the new bootloader.
+#   Drive copy (ipmc-board<sfx>.bin): everything. The bootloader (sectors 0-1), the FRU store (sector
+#     2, written as FFh: the unit's FRU image and settings are erased, the owner accepts that) and
+#     the runtime (sectors 3-7) are written; the board resets into the new bootloader.
 #   SWD (-Swd), openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program <ELF> verify"
-#     ... reset exit: only the sectors the ELF covers. The patched runtime ELF covers sectors 2
+#     ... reset exit: only the sectors the ELF covers. The patched runtime ELF covers sectors 3
 #     onward (the bootloader and the FRU store keep their content); with -Bootloader the
-#     bootloader ELF (sector 0) is programmed as well. OpenOCD is on PATH through winget (xPack),
+#     bootloader ELF (sectors 0-1) is programmed as well. OpenOCD is on PATH through winget (xPack),
 #     and the ST-LINK debug interface needs the WinUSB driver (bound with Zadig, owner action).
 #     A SWD program that starts and fails is an error, never a silent fallback. -Swd never falls
 #     back to the drive copy, -Drive never uses OpenOCD; both together are refused. The script
@@ -251,8 +251,8 @@ function Invoke-OpenOcd([string[]]$OcdCommands) {
     }
 }
 
-# SWD: openocd programs the patched runtime ELF (sectors 2 onward only; the bootloader and the
-# FRU store sector keep their content), and with -Bootloader the bootloader ELF (sector 0),
+# SWD: openocd programs the patched runtime ELF (sectors 3 onward only; the bootloader and the
+# FRU store sector keep their content), and with -Bootloader the bootloader ELF (sectors 0-1),
 # verifies, resets the target and exits. Returns $true when programmed, $false when OpenOCD could
 # not open the probe (the caller decides whether that is an error); any other failure throws.
 function Invoke-SwdFlash {

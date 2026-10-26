@@ -1,7 +1,7 @@
 //! persist.rs - keeps the FRU scratchpad on flash: the stored record, the load at boot, the save
 //! after a Write FRU Data, the one-sector log and the dirty/delay rule.
 //!
-//! The firmware implements `FlashLog` over one erase sector (the 16 KB sector 1 of the
+//! The firmware implements `FlashLog` over one erase sector (the 16 KB sector 2 of the
 //! STM32F401RE, RM0368 Table 5, `STORE_START`..`STORE_LEN`); everything else is here and runs on
 //! the host in the tests. The log is that one sector. A save appends one record to it; when the
 //! next record does not fit, the save erases the sector and writes the newest image as the first
@@ -107,9 +107,9 @@ const _: () = assert!(OFF_IMAGE == OFF_SETTINGS + 1);
 /// IPMC_FRU_SCAN_CHUNK, guarded in ipmc-defs: a multiple of 4, 16..=272).
 const BLANK_CHUNK: usize = ipmc_defs::IPMC_FRU_SCAN_CHUNK;
 
-/// STORE_START -- first byte of the store sector: sector 1 of the STM32F401RE (RM0368 Table 5).
-pub const STORE_START: u32 = 0x0800_4000;
-/// STORE_LEN -- bytes of the store sector: sector 1 is 16 KB (RM0368 Table 5).
+/// STORE_START -- first byte of the store sector: sector 2 of the STM32F401RE (RM0368 Table 5).
+pub const STORE_START: u32 = 0x0800_8000;
+/// STORE_LEN -- bytes of the store sector: sector 2 is 16 KB (RM0368 Table 5).
 pub const STORE_LEN: u32 = 16 * 1024;
 /// RECORDS_PER_SECTOR -- whole records the sector holds before a save erases it.
 pub const RECORDS_PER_SECTOR: usize = STORE_LEN as usize / RECORD_LEN;
@@ -119,7 +119,7 @@ pub const RECORDS_PER_SECTOR: usize = STORE_LEN as usize / RECORD_LEN;
 pub enum RegionError {
     /// The region start is not on a 16 KB boundary.
     NotSectorAligned,
-    /// The region does not start at the store sector (RM0368 Table 5, sector 1).
+    /// The region does not start at the store sector (RM0368 Table 5, sector 2).
     Shifted,
     /// The region is shorter than the sector.
     TooShort,
@@ -136,9 +136,9 @@ impl RegionError {
     pub const fn text(self) -> &'static str {
         match self {
             RegionError::NotSectorAligned => "the store region is not sector-aligned",
-            RegionError::Shifted => "the store region is not flash sector 1",
-            RegionError::TooShort => "the store region is shorter than sector 1",
-            RegionError::TooLong => "the store region is longer than sector 1",
+            RegionError::Shifted => "the store region is not flash sector 2",
+            RegionError::TooShort => "the store region is shorter than sector 2",
+            RegionError::TooLong => "the store region is longer than sector 2",
             RegionError::VectorsReachIn => "the bootloader reaches into the store region",
             RegionError::ProgramInside => "the runtime starts inside the store region",
         }
@@ -146,7 +146,7 @@ impl RegionError {
 }
 
 /// store_region_ok -- checks the linker's store region `start..end` against the sector the log
-/// erases: it must be exactly sector 1 (`STORE_START`, `STORE_LEN`, aligned to its size), the
+/// erases: it must be exactly sector 2 (`STORE_START`, `STORE_LEN`, aligned to its size), the
 /// bootloader must end at or before `start` (`boot_end`) and the runtime must start at or
 /// after `end` (`app_start`), so an erase of the store never touches code. Returns the region
 /// length. The firmware passes the values of the linker symbols (flash_map.x: `__boot_end` and

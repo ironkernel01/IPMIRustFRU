@@ -84,9 +84,11 @@ impl Editors {
         [(Port::Console, PortId::Cli), (Port::App, PortId::App)]
             .into_iter()
             .find(|&(port, _)| {
-                drain(port, self.of(port), |event| {
-                    matches!(event, EditEvent::Line(line) if is_wakeup(line))
-                })
+                drain(
+                    port,
+                    self.of(port),
+                    |event| matches!(event, EditEvent::Line(line) if is_wakeup(line)),
+                )
             })
             .map(|(_, id)| id)
     }
@@ -94,11 +96,7 @@ impl Editors {
 
 /// drain -- pushes the bytes waiting on `port` into `editor` and hands each event to `on`, which
 /// returns true to stop. Returns whether `on` stopped it.
-fn drain(
-    port: Port,
-    editor: &mut LineEditor,
-    mut on: impl FnMut(EditEvent<'_>) -> bool,
-) -> bool {
+fn drain(port: Port, editor: &mut LineEditor, mut on: impl FnMut(EditEvent<'_>) -> bool) -> bool {
     while let Some(byte) = uart::getc(port) {
         if on(editor.push_byte(byte)) {
             return true;

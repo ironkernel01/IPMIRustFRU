@@ -1,8 +1,8 @@
 /* memory.x - the memory regions of the runtime (cortex-m-rt looks for this file name): the
    flash and RAM map of flash_map.x, the one place of every address, and the stack reservation.
    link.x (this crate's own script) places the sections: the vector table at the start of APP
-   (0x0800_8000), the image header at 0x0800_8200, then the program. Nothing of the runtime
-   shares BOOT (sector 0, the bootloader) or STORE (sector 1): the FRU log (crates/ipmc-fru
+   (0x0800_C000), the image header at 0x0800_C200, then the program. Nothing of the runtime
+   shares BOOT (sectors 0-1, the bootloader) or STORE (sector 2): the FRU log (crates/ipmc-fru
    persist.rs) erases and programs the store, so no code shares it.
    Peers: flash_map.x (the regions), link.x (placement and asserts), src/drivers/flash.rs (the
    store check at start-up). */
@@ -10,7 +10,7 @@ INCLUDE flash_map.x
 
 /* Stack reservation: the RAM that must stay free above the statics (.data, .bss) for the
    stack. link.x asserts that RAM from the end of the statics to the top of RAM holds at least
-   this much. (.uninit sits in NOINIT, outside RAM, since the relink to 0x0800_8000.) Measured on the release ELF of 10-26-2026 (the default build; the frames do not
+   this much. (.uninit sits in NOINIT, outside RAM, since the relink to 0x0800_C000.) Measured on the release ELF of 10-26-2026 (the default build; the frames do not
    depend on IPMC_LOG_SIZE, the log lives in the static) with arm-none-eabi-objdump -d, every
    function's frame = its push list + vpush + `sub sp`, summed along the longest call chain,
    indirect calls (menu and application port handlers, trait objects) followed by hand:

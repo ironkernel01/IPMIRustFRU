@@ -1,8 +1,8 @@
 [build]
 target = "thumbv7em-none-eabihf"
 # Two linker scripts in the crate root, each passed by build.rs to one binary: link.x (the runtime
-# `ipmc-nucleo-f401re`, derived from cortex-m-rt 0.7.7's link.x.in) and boot.x (the sector-0
+# `ipmc-nucleo-f401re`, derived from cortex-m-rt 0.7.7's link.x.in) and boot.x (the bootloader
 # bootloader `ipmc-boot`). Both include flash_map.x, the one place of every address. The linker
 # finds them in the crate root (build.rs puts it on the search path) before the copy cortex-m-rt
-# writes to its build output. The bootloader takes sector 0, the FRU flash store sector 1, and the
-# runtime sectors 2 to 7 from 0x0800_8000.
+# writes to its build output. The bootloader takes sectors 0 and 1, the FRU flash store sector 2, and the
+# runtime sectors 3 to 7 from 0x0800_C000.

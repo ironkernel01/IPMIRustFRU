@@ -2,8 +2,8 @@
 // (`ImageSource`), and the session of the next brief erases and programs it (`FlashOps`).
 //
 // Ownership: `FlashImage` owns the library's `FlashRegs` (the FLASH peripheral). The register
-// layer refuses sector 0 and every address below 0x0800_4000 on its own; the region policy
-// (`ipmc_boot::geometry`, which allows sectors 2-7 only) sits on top of it.
+// layer refuses sectors 0 and 1 and every address below 0x0800_8000 on its own; the region policy
+// (`ipmc_boot::geometry`, which allows sectors 3-7 only) sits on top of it.
 
 use ipmc_boot::{FlashOps, ImageSource};
 use ipmc_fru::persist::FlashError;

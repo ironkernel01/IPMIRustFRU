@@ -1,4 +1,4 @@
-//! text - numbers as text without `core::fmt`: the bootloader must fit 16 KB, and the number
+//! text - numbers as text without `core::fmt`: the bootloader must fit 32 KB, and the number
 //! writers here are the only way a number reaches a UART.
 
 /// TextOut -- where the bootloader's text goes (a UART in the firmware, a String in tests).
@@ -60,7 +60,7 @@ pub fn put_hex_bytes(out: &mut dyn TextOut, bytes: &[u8]) {
     }
 }
 
-/// put_addr -- a flash or RAM address as `0x0800_8000` (upper case digits, underscore between
+/// put_addr -- a flash or RAM address as `0x0800_C000` (upper case digits, underscore between
 /// the halves).
 pub fn put_addr(out: &mut dyn TextOut, addr: u32) {
     out.put("0x");
@@ -139,9 +139,9 @@ mod tests {
     #[test]
     fn address_and_version_rows() {
         let mut out = String::new();
-        put_addr(&mut out, 0x0800_8200);
+        put_addr(&mut out, 0x0800_C200);
         out.push(' ');
         put_version(&mut out, [0, 1, 20, 0]);
-        assert_eq!(out, "0x0800_8200 v0.1.20");
+        assert_eq!(out, "0x0800_C200 v0.1.20");
     }
 }

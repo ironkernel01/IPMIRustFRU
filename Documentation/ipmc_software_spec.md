@@ -30,7 +30,7 @@
    (the capture file is local only; on a fresh clone the capture tests skip with a message).
 2. Firmware build and flash (NUCLEO-F401RE on USB):
    `powershell -ExecutionPolicy Bypass -File crates/ipmc-nucleo-f401re/gen.ps1 flash`.
-   `flash` builds the bootloader (sector 0) and the runtime (from sector 2) and copies the board
+   `flash` builds the bootloader (sectors 0-1) and the runtime (from sector 3) and copies the board
    image `ipmc-board.bin` to the drive; `flash -Swd` programs the patched runtime ELF over SWD
    instead (section 12.1; the two paths treat the FRU store differently, section 9.1).
    The console is COM3 at 115200 8N1; `gen.ps1 console "sys status"` sends one command and prints
@@ -201,7 +201,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-015 | A payload power-on request in M6 is refused; in the commercial release build it is also refused while the FRU is activation-locked; one check serves the boot power-on, the handler hand-off and the console | Rules 4.1.5.4.5-2, 4.1.5.4.2-1 | `fru_state.rs` `check_power_on`, `ext.rs` `check_power_on` |
 | FR-016 | An invalid hardware address (even parity or GA = 0) isolates both buses and keeps the FRU in M0 | Rules 4.1.5.4.1-4, 4.1.5.4.1-5 | `addr.rs`, `link.rs` |
 | FR-017 | Startup self test of the FRU image and the SDR chain; 55h 00h or 57h with the failure bits; a failure keeps the FRU in M0; rerun after each accepted Write FRU Data | IPMI Table 20-5, Rule 4.1.5.4.1-9, Rec 8-2 | `selftest.rs` |
-| FR-018 | Write FRU Data and an application port `SET` survive a reset (`IPMC_FRU_PERSIST true`); the FRU store is flash sector 1 alone | owner decisions 10-23-2026 and 10-25-2026 | `persist.rs`, `fru_log.rs`, `memory.x`, `link.x` |
+| FR-018 | Write FRU Data and an application port `SET` survive a reset (`IPMC_FRU_PERSIST true`); the FRU store is flash sector 2 alone | owner decisions 10-23-2026 and 10-25-2026 | `persist.rs`, `fru_log.rs`, `memory.x`, `link.x` |
 | FR-019 | No IPMC pull-ups on the IPMB lines | Rule 9.2.3-2 | `drivers/ipmb_pins.rs`, `i2c_hw.rs` |
 | FR-020 | A (netFn, cmd) the Tier-1 table does not own goes to the extension hook; the Tier-1 build has none and answers C1h | Rules 4.2-2, 4.1.1-16 | `ext.rs`, `dispatch.rs` |
 | FR-021 | A Tier-2/3 build sends requests one at a time: a response wait of `IPMB_REQ_TIMEOUT_MS` (T3), up to `IPMB_REQ_RETRIES` retries with the same sequence number, a failed transmission retried on the other bus after T6 (60 ms minimum), T4 between new requests, T9 before a sequence number is reused; a Tier-1 build sends none | Rules 4.1.1-9, 4.1.1-10, 7-4, Table 4.1.1-1 | `requester.rs`, `link.rs` |
@@ -268,7 +268,7 @@ the private Tier-2/3 extension enters the build.
 | `ipmc-menu` | `no_std` library, no dependencies besides `ipmc-defs` | the console menu engine (MenuBuilder rules, tiered groups) |
 | `ipmc-app` | `no_std` library, `forbid(unsafe_code)`, no allocator | the application port protocol: line assembler, command table `COMMANDS`, handlers, and the `AppHost` trait through which the firmware gives the protocol its view of the board (section 6.8) |
 | `ipmc-emu` | host `std` binary and library | the x86 emulator: vector reader, `Emulator`, capture replay (also the Event Receiver), real-time `serve`, SDR dump |
-| `ipmc-nucleo-f401re` | one crate, `no_std`: a library and the runtime binary, its own cargo workspace | the library (`src/lib.rs`, `src/bsp/`) is the board support both images use (the runtime firmware and the sector-0 bootloader `ipmc-boot`, `src/boot/`): clock, UART driver, LED, SysTick, DWT cycle counter, strap pins and NVMRO, reset cause, FLASH register layer, boot request words, fault handlers, `static_slot`, the `out!` console macro; the binary (`src/main.rs`, `src/drivers/`) is the runtime: start-up, the hardware only the runtime uses (IPMB masters, I2C slaves, IPMB and board pins, the FRU store driver), console, the application port transport, composition of the crates above |
+| `ipmc-nucleo-f401re` | one crate, `no_std`: a library and the runtime binary, its own cargo workspace | the library (`src/lib.rs`, `src/bsp/`) is the board support both images use (the runtime firmware and the bootloader `ipmc-boot` (sectors 0-1), `src/boot/`): clock, UART driver, LED, SysTick, DWT cycle counter, strap pins and NVMRO, reset cause, FLASH register layer, boot request words, fault handlers, `static_slot`, the `out!` console macro; the binary (`src/main.rs`, `src/drivers/`) is the runtime: start-up, the hardware only the runtime uses (IPMB masters, I2C slaves, IPMB and board pins, the FRU store driver), console, the application port transport, composition of the crates above |
 
 ### Layering rules
 
@@ -316,7 +316,7 @@ the private Tier-2/3 extension enters the build.
   validates against a read-only view and leaves the change for `Link::poll`, which applies it
   before the response is queued.
 - The FRU flash store (`ipmc-fru/src/persist.rs`) is an append-only log in one sector (flash
-  sector 1, 16 KB, 31 records of 528 bytes) with a commit word programmed last and a CRC-32 per
+  sector 2, 16 KB, 31 records of 528 bytes) with a commit word programmed last and a CRC-32 per
   record; the highest sequence number wins at boot, and a power cut at any word of an append
   leaves the previous record loadable. The save that finds the sector full erases it and writes
   the newest image first (owner decision 10-25-2026, no second copy): a power cut between that
@@ -526,7 +526,7 @@ decision 24).
 | `IPMC_FRU_MFG_DATE` | `2026-10-23 00:00` | manufacturing date, `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:01 to 9999-12-31 23:59; the build checks it with the date parser of `date.rs`. It is the default of the VITA 34h record (section 6.2) |
 | `IPMC_FRU_SIZE` | 512 | FRU inventory area size: the built image with every field's reserved room and the 14-byte date record (section 9.2); the flash record is 528 bytes, 31 per sector |
 | `IPMC_FRU_CONSOLE_WRITE` | `true` | true = the console `FRU` menu sets every field (`SET`) and restores the built image (`RESTORE`); false = the menu is read only (`SHOW`, `DUMP`, `STORE`, `FIELDS`, `GET`) and `SET` and `RESTORE` do not exist (not in `HELP`, a typed `SET` is an unknown command) |
-| `IPMC_FRU_PERSIST` | `true` | Write FRU Data and the application port survive reset (the flash store, sector 1 alone, 16 KB); false keeps the FRU in RAM and a reset restores the built image |
+| `IPMC_FRU_PERSIST` | `true` | Write FRU Data and the application port survive reset (the flash store, sector 2 alone, 16 KB); false keeps the FRU in RAM and a reset restores the built image |
 | `IPMC_FRU_BOARD_MFR_MAX`, `IPMC_FRU_BOARD_PRODUCT_MAX`, `IPMC_FRU_BOARD_SERIAL_MAX`, `IPMC_FRU_BOARD_PART_MAX`, `IPMC_FRU_BOARD_FILE_ID_MAX`, `IPMC_FRU_PRODUCT_MFR_MAX`, `IPMC_FRU_PRODUCT_NAME_MAX`, `IPMC_FRU_PRODUCT_PART_MAX`, `IPMC_FRU_PRODUCT_VERSION_MAX`, `IPMC_FRU_PRODUCT_SERIAL_MAX`, `IPMC_FRU_ASSET_TAG_MAX`, `IPMC_FRU_PRODUCT_FILE_ID_MAX` | 24, 32, 24, 24, 16, 24, 32, 24, 16, 24, 24, 16 | room the built areas reserve for each text field, bytes, whatever the default string's length (the serial numbers 17..=63, so that a MAC address text fits; the others 2..=63; each default must fit). An update up to this length rewrites its field in place and no area moves. The product version default must equal the crate's major.minor; a value written later is not checked against it |
 | `IPMC_FRU_PERSIST_DELAY_MS` | 1000 | quiet time after the last write before a save |
 | `IPMC_FRU_SCAN_CHUNK` | 64 | bytes per read when the log checks a range for erased flash (a multiple of 4, 16..=272; the buffer lives on the stack) |
@@ -751,7 +751,7 @@ and stays 00h in a Tier-1 and Tier-2 build.
 
 `crates/ipmc-fru/src/persist.rs` (tests in `persist/tests.rs`)
 
-The FRU store is one flash sector (sector 1, 16 KB, `STORE_START` and `STORE_LEN`) behind the
+The FRU store is one flash sector (sector 2, 16 KB, `STORE_START` and `STORE_LEN`) behind the
 `FlashLog` trait (`sector_len`, `read`, `program`, `erase`, `millis`). `Persist::boot` scans the
 sector and loads the valid record with the highest sequence number; it erases nothing when it
 finds one, because the sector holds the only copy. A sector that is not blank and holds no valid
@@ -1038,13 +1038,13 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/drivers/ipmb_master.rs` | the `IpmbMaster` trait (with `speed` and `set_speed`), `MasterError`, counters, `SelectedMaster` chosen at compile time by `IPMB_MASTER_MODE` |
 | `src/drivers/ipmb_common.rs` | the cycle-counter use (`now` and `start_cycle_counter` come from `bsp/cycles.rs`), `Deadline`, `wait_for`, `wait_bus_free` (tBUF, slave idle, stuck-BUSY signature), `write_retrying` (arbitration retries inside one T2 + T1 budget) |
 | `src/drivers/ipmb_pins.rs` | claims PB8, PB9, PA8, PB4 and parks them as floating inputs (PB4 resets with a pull-up that would load IPMB-B SDA) |
-| `src/drivers/flash.rs` | the FRU store driver (`Flash`, the `FlashLog` implementation): sector 1 only, the range `map`, at start-up compares the linker symbols with the sector (`store_region_ok`) and refuses to start the store unless the region is exactly sector 1, the bootloader ends before it and the runtime starts after it; built over `FlashRegs` |
-| `src/bsp/flash_regs.rs` | `FlashRegs`, the FLASH peripheral's owner: `erase_sector` (sectors 1 to 7), `program_words` (PSIZE x32), `program_bytes` (PSIZE x8), `read`; refuses sector 0 and every address below `0x0800_4000` (`Err(Range)`) so no caller can reach the bootloader sector; refuses erase and program while NVMRO is asserted; bounded BSY polls per sector size |
+| `src/drivers/flash.rs` | the FRU store driver (`Flash`, the `FlashLog` implementation): sector 2 only, the range `map`, at start-up compares the linker symbols with the sector (`store_region_ok`) and refuses to start the store unless the region is exactly sector 2, the bootloader ends before it and the runtime starts after it; built over `FlashRegs` |
+| `src/bsp/flash_regs.rs` | `FlashRegs`, the FLASH peripheral's owner: `erase_sector` (sectors 2 to 7), `program_words` (PSIZE x32), `program_bytes` (PSIZE x8), `read`; refuses sectors 0 and 1 and every address below `0x0800_8000` (`Err(Range)`) so no caller can reach the bootloader sectors; refuses erase and program while NVMRO is asserted; bounded BSY polls per sector size |
 | `src/bsp/cycles.rs` | the DWT cycle counter: `now`, `start_cycle_counter` |
 | `src/bsp/boot_request.rs` | the four boot request words at `__boot_request` (the start of NOINIT), raw `read`, `write` and `clear` (their meaning is `ipmc_boot::request`) |
 | `flash_map.x`, `memory.x`, `link.x`, `boot.x` | the one flash and RAM map (BOOT, STORE, APP, NOINIT, RAM), the runtime region file and stack reservation, the runtime section placement and image asserts, and the bootloader script (section 9.1) |
-| `src/app_header.rs` | the runtime image header static (`.app_header`, 64 bytes at `0x0800_8200`) and `image_line`, the banner text read back from flash |
-| `src/boot/` | the bootloader binary `ipmc-boot`: `main.rs` (start-up order of the bootloader, section 8.3), `start.rs` (the start sequence and the one `asm!` jump), `countdown.rs` (the boot countdown line and digits), `flash_image.rs` (`ImageSource` and `FlashOps` over `FlashRegs`), `console.rs` (text to both ports); `bsp/clock.rs` `restore_reset_state` is the clock part of the hand-over |
+| `src/app_header.rs` | the runtime image header static (`.app_header`, 64 bytes at `0x0800_C200`) and `image_line`, the banner text read back from flash |
+| `src/boot/` | the bootloader binary `ipmc-boot`: `main.rs` (start-up order of the bootloader, section 8.3), `start.rs` (the start sequence and the one `asm!` jump), `countdown.rs` (the boot countdown line and digits), `serve.rs` (the two line editors, the WAKEUP rule, the session loop and the `BootHw` implementation), `flash_image.rs` (`ImageSource` and `FlashOps` over `FlashRegs`), `console.rs` (text to both ports); `bsp/clock.rs` `restore_reset_state` is the clock part of the hand-over |
 | `src/bsp/ga.rs` | strap pins PC0..PC6 with pull-ups, raw level read, live NVMRO sample; PC10 BOOTLOADER (input, pull-down, owner `boot_pin`, printed in the banner and `SYS STATUS`) |
 | `src/bsp/systick.rs` | 1 ms tick, `millis`, `seconds`, `catch_up` (adds the time the core stalled on a flash erase, measured with the DWT counter) |
 | `src/bsp/uart.rs` | the one UART driver of both ports (`Port::Console` on USART2, PA2/PA3; `Port::App` on USART1, PB6/PB7 and optional PA11/PA12), interrupt driven in both directions; described below the table |
@@ -1477,6 +1477,7 @@ after that echo, so the echo of a request such as `OK` is not taken for its answ
 | `FRU SET [FIELD] {VALUE...}` | Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM | `<FIELD>: <value as stored>`; `MFG_DATE: unspecified` after a clear |
 | `FRU SAVE` | Whether the FRU image is in flash (a change saves itself after the save delay) | `SAVE: done`, or `SAVE: pending` while a change waits (not an error) |
 | `IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally (hex bytes); nothing goes on the IPMB | `CC: 00h`, `DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00` (empty after the colon-space when there is none), `COMMAND: App Get Device ID` (no line when the build has no name for it) |
+| `BOOTLOADER` | Restart into the bootloader; payload power drops at the reset | `BOOTLOADER: restarting`; the restart follows the answer (section 8.3); the port is silent until the bootloader starts the runtime again |
 
 Syntax strings: leading keywords in capitals, then `[NAME]` for a required parameter, `{NAME}` for
 an optional one and `{NAME...}` for the rest of the line as one value (last only). The
@@ -1583,6 +1584,7 @@ APP> HELP
   FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
   FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
   IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
+  BOOTLOADER                     - Restart into the bootloader; payload power drops at the reset
 OK
 APP> STATUS
 IPMB_ADDRESS: 82h
@@ -1793,16 +1795,70 @@ output and prints that; FRU Control still answers 00h. The emulator models the p
 
 ### 8.3 Start-up order (`main.rs`)
 
-The runtime, linked at `0x0800_8000`, does not start at a reset by itself: the
-bootloader in sector 0 starts first (section 9.1). It reads the reset cause without clearing it,
+The runtime, linked at `0x0800_C000`, does not start at a reset by itself: the
+bootloader in sectors 0-1 starts first (section 9.1). It reads the reset cause without clearing it,
 starts the clock and the console, prints its start-up trace on the console (banner, reset cause,
 `BOOTLOADER pin:`, `Request:`, `Runtime image:`, `Image check:` with the SHA-256 time,
-`Decision:`, `Starting the runtime firmware at 0x0800_8000`), checks the runtime image, and
+`Decision:`, `Starting the runtime firmware at 0x0800_C000`), checks the runtime image, and
 starts it with the sequence of design 6.4: flush, interrupts off, peripheral resets, clock tree
 back to the reset state, VTOR, MSP and the branch. With a boot countdown (`IPMC_BOOT_COUNTDOWN`,
 3 s on the bench image, 0 on the field image) the bootloader prints the countdown line and one
 digit a second before the start. The steps below then run as from a reset; the runtime clears
 and reports the reset cause itself.
+
+#### The bootloader session
+
+The session is the `Session` state machine of `crates/ipmc-boot` (`session.rs`, the command table
+in `commands.rs`) over the trait `BootHw` (the flash and a millisecond clock); the binary
+`src/boot/serve.rs` moves bytes between the UART rings, the `LineEditor`s of `ipmc-menu` and the
+session. A stay and the boot countdown listen on both ports (APP_UART only with
+`IPMC_APP_UART_ENABLE`), one `LineEditor` each. Nothing is echoed before the choice; a line whose
+one token is `WAKEUP` in any letter case chooses its port, every other line gets no answer. The
+chosen port answers `OK` and the prompt `IPMC_BOOT_PROMPT`; the other USART is stopped (`uart::stop`:
+interrupt masked, RCC reset, clock off, state dropped, pins back to inputs without a pull) and stays
+silent until the next reset. In a countdown the digit line ends with CR LF on both ports and the
+console prints `Decision:       staying in the bootloader: WAKEUP in countdown`. The session has no
+idle timeout; `RUN`, `RESET` and a power cycle leave it.
+
+In command mode the typed characters are echoed (a backspace as BS SP BS, the line end as CR LF),
+the answer follows, then the prompt. Every command ends with one status line that starts with `OK`
+or `ERR`. Keywords are case-insensitive and exact; extra words give `ERR ARGS <command>`, an unknown
+word `ERR UNKNOWN <word>`.
+
+| Command | Answer |
+|---|---|
+| `WAKEUP` | `OK` |
+| `HELP`, `?` | the command table, `OK` |
+| `INFO` | the start-up record of this reset (banner, reset cause, pin, request, runtime image, `Image check:` with all 64 digest digits and the time of a fresh check, `Stored digest:`, decision), then `Bootloader:`, `Build:` (`bench` or `field`), `Port:` (name, baud, `8N1 RTS/CTS on\|off`) and `Erased:` (`none`, `FRU`, `APP`, `FRU APP`), `OK` |
+| `ERASE APP`, `ERASE FRU` | `Erase sectors 3-7 (runtime firmware)? Type CONFIRM` or `Erase sector 2 (FRU flash store)? Type CONFIRM`, `OK PENDING` |
+| `CONFIRM` | runs the pending erase: `OK ERASED <APP\|FRU> <ms> ms`, `ERR FLASH <fault>`, `ERR NVMRO`; nothing pending: `ERR NOTHING_PENDING` |
+| `LOAD` | `OK LOAD APP: send records` and record mode; without a completed `ERASE APP` in this session `ERR NOT_ERASED erase APP first` |
+| `VERIFY` | `OK VERIFY valid SHA-256 <64 hex> <ms> ms`, or `ERR IMAGE <reason> computed <64 hex\|none> stored <64 hex\|none>` |
+| `RUN` | image check; valid: `OK RUN`, flush, the start sequence; else `ERR IMAGE <reason>` |
+| `RESET` | `OK RESET`, flush, SYSRESETREQ |
+
+After `OK PENDING` the next non-empty line must be `CONFIRM`; any other line gives `ERR CANCELLED`
+and is not run. `ERASE APP` erases sector 2 first, so a power cut leaves no image. An erase or a
+program stalls the core; the host sends nothing until the answer. In record mode nothing is echoed
+and no prompt is printed between records: each line that starts with `:` is one Intel HEX record
+(`Loader::record`) and gets `OK` or an `ERR` line, and the loader stays in record mode after an
+error; an accepted record retriggers the LED activity blink. The 01 record runs the image check and
+answers `OK END <n> records <b> bytes, image valid` or `ERR IMAGE <reason>`, then the prompt returns.
+A line that does not start with `:` ends record mode with `ERR ABORTED` and is not run; an empty
+line is ignored; a line that is too long gives `ERR LINE_TOO_LONG`; no line for
+`IPMC_FWU_LOAD_IDLE_S` seconds gives `ERR TIMEOUT`. While the session runs the IPMC holds neither
+IPMB bus (no service, no answer from 82h) and does not drive PWR_EN or PAYLOAD_RST_OUT_N; LD2
+blinks at `IPMC_FWU_LED_WAIT_CHZ` in command mode and shows the activity pattern while records
+load.
+
+Two commands of the runtime enter the bootloader. The console command `DEBUG BOOTLOADER` prints
+`Restarting into the bootloader` and, while PWR_EN is asserted, `Payload power drops at the
+reset`. The application port command `BOOTLOADER` answers `BOOTLOADER: restarting`. Both call
+`IpmbLink::request_bootloader(interface)`, which asks for a Cold Reset on the one reset path
+(`service_reset`: the answer has left the port, an accepted FRU write is saved, or
+`IPMC_RESET_WAIT_MS` passed). Just before the processor restarts, the four request words at
+`__boot_request` are written (`boot_request::write(request::encode(interface))`); the bootloader
+accepts them after a software reset and stays (`Decision: staying in the bootloader: requested`).
 
 1. Reset cause (first, before anything can reset again); after a software reset the kept request
    sequence numbers (`kept_sequence`).
@@ -1817,7 +1873,7 @@ and reports the reset cause itself.
 5. Sensor hardware for the groups whose source is hardware (ADC1, board GPIO).
 6. Strap pins (`ga::init`).
 7. DWT cycle counter, then the FRU log boot (`fru_log::FruLog::boot`): checks the store region
-   against the linker symbols, loads the newest valid record of sector 1, and erases the sector
+   against the linker symbols, loads the newest valid record of sector 2, and erases the sector
    only when it holds damage and no valid record and NVMRO is deasserted. It runs before the I2C
    slaves exist, because an erase stalls the core (typical 250 ms, at most 500 ms).
 8. `addr::resolve` on the raw straps; `ipmb_link::start_drivers`: the selected master takes the
@@ -1887,9 +1943,9 @@ difference):
 
 | Sector | Base | Size | Region | Contents | Written by |
 |---:|---:|---:|---|---|---|
-| 0 | `0x0800_0000` | 16 KB | `BOOT` | the bootloader `ipmc-boot`: its vector table, code and constants | SWD or the drive copy, bench only |
-| 1 | `0x0800_4000` | 16 KB | `STORE` | the FRU flash store, nothing else | the runtime store driver (sector 1 only); the bootloader erases it on `ERASE FRU` only |
-| 2, 3 | `0x0800_8000` | 2 x 16 KB | `APP` | the runtime: vector table at `0x0800_8000`, image header at `0x0800_8200`, then `.text`, `.rodata`, the `.data` load image | the bootloader (`LOAD`), SWD, the drive copy |
+| 0, 1 | `0x0800_0000` | 2 x 16 KB | `BOOT` | the bootloader `ipmc-boot`: its vector table, code and constants (32 KB) | SWD or the drive copy, bench only |
+| 2 | `0x0800_8000` | 16 KB | `STORE` | the FRU flash store, nothing else | the runtime store driver (sector 2 only); the bootloader erases it on `ERASE FRU` only |
+| 3 | `0x0800_C000` | 16 KB | `APP` | the runtime: vector table at `0x0800_C000`, image header at `0x0800_C200`, then `.text`, `.rodata`, the `.data` load image | the bootloader (`LOAD`), SWD, the drive copy |
 | 4 | `0x0801_0000` | 64 KB | `APP` | the runtime | as above |
 | 5, 6, 7 | `0x0802_0000` | 3 x 128 KB | `APP` | the runtime | as above |
 
@@ -1899,7 +1955,7 @@ difference):
 | `RAM` | `0x2000_0100` | 95.75 KB | statics and stack of whichever image runs; `_stack_reserve` (35 KB for the runtime, `memory.x`; 8 KB for the bootloader, `boot.x`) must stay free above the statics |
 | System memory | `0x1FFF_7A2A`..`0x1FFF_7A2F` | 6 bytes | factory VREFIN_CAL, TS_CAL1, TS_CAL2 (read by `adc.rs`) |
 
-Image header. The runtime links a 64-byte header at `0x0800_8200` (`src/app_header.rs`, the
+Image header. The runtime links a 64-byte header at `0x0800_C200` (`src/app_header.rs`, the
 `.app_header` section; layout, magic, fields and the image check are `ipmc_boot::header`): magic
 `IPMC`, format, size, the image length, the firmware version (the crate version), the build flags
 (bit 0 Tier-2/3 extension, bit 1 evaluation), the vector table address and the SHA-256 digest.
@@ -1915,19 +1971,19 @@ section, and asserts fail the build when the vector table or the header is not a
 the header is not 64 bytes, the vector table reaches into the header, the program starts inside
 the header, a section lies below `APP`, the image does not end inside `APP`, or `.uninit` does
 not fit `NOINIT`. `boot.x` is the same script for the bootloader: everything in `BOOT`, the RAM
-sections in `RAM`, nothing in `NOINIT`, and an assert that the image ends inside the 16 KB sector 0.
+sections in `RAM`, nothing in `NOINIT`, and an assert that the image ends inside the 32 KB `BOOT` region (sectors 0-1).
 The store is the one sector the FRU log erases and programs, so an erase never touches the
 bootloader or the program. `flash_map.x` exports `__boot_end`, `__app_vectors`, `__app_header`,
 `__boot_request`, `__fru_store_start` and `__fru_store_end`, and `link.x` exports
 `__program_start`; `Flash::new` (firmware `drivers/flash.rs`) hands the store region, `__boot_end`
 and `__app_vectors` to `ipmc_fru::persist::store_region_ok`, which refuses to start the store
-unless the region is exactly sector 1 (`STORE_START`, `STORE_LEN`), the bootloader ends before it
+unless the region is exactly sector 2 (`STORE_START`, `STORE_LEN`), the bootloader ends before it
 and the runtime starts after it. A layout that drifts apart can therefore never erase code.
 
-`gen.ps1 build` makes the images (section 12.1): `ipmc-boot.bin` (the bootloader, at most 16 384
-bytes, a warning above 12 288), the runtime ELF with its header patched, `ipmc-nucleo-f401re.hex`
+`gen.ps1 build` makes the images (section 12.1): `ipmc-boot.bin` (the bootloader, at most 32 768
+bytes, a warning above 24 576), the runtime ELF with its header patched, `ipmc-nucleo-f401re.hex`
 (the file for `LOAD`) and the board image `ipmc-board.bin`: the bootloader at offset 0, FFh up to
-`0x8000` (the rest of sector 0 and all of sector 1), the runtime from there. The objcopy calls use
+`0xC000` (the rest of `BOOT` and all of the store sector), the runtime from there. The objcopy calls use
 `--gap-fill 0xFF`, so the gaps read FFh (erased), not 00h. No runtime-only `.bin` is written: a
 drive copy programs a `.bin` from `0x0800_0000` and it would land on the bootloader. The ways to
 program the board treat the store differently:
@@ -1935,12 +1991,12 @@ program the board treat the store differently:
 | Way | What it writes | The FRU store |
 |---|---|---|
 | Drive copy of `ipmc-board.bin` to `NOD_F401RE` (`gen.ps1 flash`, `flash -Drive`) | everything: the bootloader, the store as FFh, the runtime | erased (FFh), so the stored FRU image and the unit fields go; the next start-up loads the built image |
-| SWD program of the patched runtime ELF (`gen.ps1 flash -Swd`) | the sections of the ELF only: sectors 2 onward | sector 1 is not touched and keeps its records; the bootloader stays |
-| SWD program of both ELFs (`gen.ps1 flash -Swd -Bootloader`, bench only) | sector 0 and sectors 2 onward | sector 1 is not touched |
+| SWD program of the patched runtime ELF (`gen.ps1 flash -Swd`) | the sections of the ELF only: sectors 3 onward | sector 2 is not touched and keeps its records; the bootloader stays |
+| SWD program of both ELFs (`gen.ps1 flash -Swd -Bootloader`, bench only) | sectors 0-1 and sectors 3 onward | sector 2 is not touched |
 
 A reflash may erase the whole flash, unit fields included, and the firmware has no guard against
 it (owner decision 10-25-2026). A board that holds an image of the earlier layout (the runtime
-vector table in sector 0) takes one drive copy of `ipmc-board.bin`.
+vector table in sector 0 or at `0x0800_8000`) takes one drive copy of `ipmc-board.bin`.
 
 `link.x` asserts that the RAM from the end of the statics (`.data`, `.bss`; `.uninit` is in `NOINIT`) to the top of RAM
 is at least `_stack_reserve`, 35 KB; the error names `IPMC_LOG_SIZE` and the four UART buffer
@@ -2581,6 +2637,7 @@ The DEBUG group (help text as in `console.rs`):
 | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally, as from 20h; nothing goes on the bus |
 | `DEBUG INJECT [BUS] {BYTES...}` | Hand a whole IPMB frame to the link as if received on bus A or B |
 | `DEBUG CACHE {ACTION}` | Duplicate cache: no argument shows the entries, CLEAR empties it |
+| `DEBUG BOOTLOADER` | Restart into the bootloader; payload power drops at the reset |
 
 A local request (`DEBUG IPMI`, the application port `IPMI`, the start-up events-off request) reads the live NVMRO pin first, as the main loop does, so it decides like a bus request.
 
@@ -2792,9 +2849,9 @@ capture replay (section 13.2) belong to the Tier-1 build.
 
 1. the bootloader: `cargo build --profile boot --bin ipmc-boot` (always `IPMC_EVAL=0`), then
    `ipmc-boot.bin` (`objcopy -O binary --gap-fill 0xFF`) and `fwimage size`, which fails above
-   16 384 bytes and warns above 12 288;
+   32 768 bytes and warns above 24 576;
 2. the runtime: `cargo build --release --bin ipmc-nucleo-f401re`, then
-   `ipmc-nucleo-f401re.app.img` (the bytes from `0x0800_8000`);
+   `ipmc-nucleo-f401re.app.img` (the bytes from `0x0800_C000`);
 3. `fwimage patch` writes the image length and the SHA-256 digest into the header
    (`app_header.bin`), `objcopy --update-section .app_header=...` gives the patched ELF
    `ipmc-nucleo-f401re.elf`, the image is made from it again and `fwimage check` runs the
@@ -2990,7 +3047,7 @@ procedure and expected result of each.
 1. Reset; the bootloader starts the runtime (section 8.3); `reset_cause::take` reads RCC_CSR; the clock reaches 84 MHz.
 2. Pins claimed, console up, application port up, IPMB pins parked, strap pins read: GA forced
    to 01h, IPMB 82h.
-3. `FruLog::boot`: the store region is checked against sector 1 and the sector is scanned; the
+3. `FruLog::boot`: the store region is checked against sector 2 and the sector is scanned; the
    valid record with the highest sequence number is loaded, and nothing is erased.
 4. I2C1 slave armed at 7-bit address 41h (OAR1 = 4082h), general call on; I2C3 stays off.
 5. `Context::new` builds the image and SDRs, `set_fru` installs the stored image and the self test

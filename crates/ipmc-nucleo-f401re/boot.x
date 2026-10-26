@@ -1,19 +1,19 @@
-/* boot.x - the linker script of the sector-0 bootloader ipmc-boot (build.rs passes -Tboot.x for
+/* boot.x - the linker script of the bootloader ipmc-boot (sectors 0-1) (build.rs passes -Tboot.x for
    that binary alone; the runtime has link.x).
 
    Derived from link.x.in of cortex-m-rt 0.7.7 (https://github.com/rust-embedded/cortex-m,
    licensed MIT OR Apache-2.0, Copyright the Cortex-M Developers; the developer notes and the
    checks of that file are kept), through this crate's link.x. Differences from link.x:
 
-   - The whole image sits in BOOT (flash sector 0, 16 KB from 0x0800_0000): .vector_table first,
+   - The whole image sits in BOOT (flash sectors 0-1, 32 KB from 0x0800_0000): .vector_table first,
      then .text, .rodata and the .data load image. There is no .app_header and nothing in STORE
      or APP.
    - The RAM sections (.data, .bss, the stack at the top of RAM) sit in RAM, above NOINIT. No
      output section sits in NOINIT (the boot request words and the runtime's .uninit live there
      and survive the bootloader), and .uninit is empty.
    - The image must end inside BOOT: the link fails with the region overflow, and the assert
-     below names the size budget of Documentation/ipmc_boot_plan.md 3.3 (design target 12 KB,
-     hard limit 16 KB; gen.ps1 also runs `fwimage size` on ipmc-boot.bin).
+     below names the size budget of Documentation/ipmc_boot_plan.md 3.3 (design target 24 KB,
+     hard limit 32 KB; gen.ps1 also runs `fwimage size` on ipmc-boot.bin).
    - _stack_reserve: the RAM that must stay free for the stack above the statics (the UART rings
      are the largest statics).
 
@@ -247,8 +247,8 @@ ASSERT(ADDR(.vector_table) == ORIGIN(BOOT), "
 ERROR(ipmc): the vector table is not at the start of BOOT (0x0800_0000)");
 
 ASSERT(__sidata + SIZEOF(.data) <= ORIGIN(BOOT) + LENGTH(BOOT), "
-ERROR(ipmc): the bootloader image does not fit sector 0 (BOOT, 16 KB). The design target is 12 KB
-(75 %) and the hard limit 16 KB (Documentation/ipmc_boot_plan.md 3.3). Look at the sizes with
+ERROR(ipmc): the bootloader image does not fit sectors 0-1 (BOOT, 32 KB). The design target is 24 KB
+(75 %) and the hard limit 32 KB (Documentation/ipmc_boot_plan.md 3.3). Look at the sizes with
 `arm-none-eabi-nm --size-sort -S` and remove code (no core::fmt, no panic path with a message).");
 
 ASSERT(__veneer_limit <= ORIGIN(BOOT) + LENGTH(BOOT), "

@@ -1,5 +1,5 @@
-// debug_cmds.rs - the DEBUG console group: STATUS, EVENTS, IPMI, INJECT and CACHE (local IPMI
-// requests and the duplicate cache).
+// debug_cmds.rs - the DEBUG console group: STATUS, EVENTS, IPMI, INJECT, CACHE and BOOTLOADER (local
+// IPMI requests, the duplicate cache and the restart into the bootloader).
 //
 // The state lives in ipmb_link.rs (the link and the dispatch context); these handlers switch it,
 // print it and run requests through it. The logging handlers (LOG, DUMP, CLEAR, TRACE) are in
@@ -11,6 +11,7 @@
 
 use core::fmt;
 
+use ipmc_boot::request::Interface;
 use ipmc_core::dispatch::cc;
 use ipmc_core::ipmb::{self, IPMB_MAX_LEN, NETFN_SE};
 use ipmc_core::link::{LocalError, CM_ADDR8};
@@ -372,4 +373,26 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
         }
         Some(_) => Err(reported(format_args!("action is CLEAR"))),
     }
+}
+
+// ---- BOOTLOADER ----
+
+/// cmd_debug_bootloader -- `DEBUG BOOTLOADER` restarts the processor into the bootloader
+/// (Documentation/ipmc_boot_plan.md 7.1). Two lines first: the restart, and while PWR_EN is
+/// asserted that the payload loses power at the reset (the reset releases PWR_EN). The reset is
+/// the one Cold Reset path (`IpmbLink::request_bootloader`): the console is flushed, an accepted
+/// FRU write is saved first, and the request words are written just before the restart.
+pub fn cmd_debug_bootloader(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    out!(
+        "Restarting into the bootloader
+"
+    );
+    if ctx.sensing.payload_power_on() {
+        out!(
+            "Payload power drops at the reset
+"
+        );
+    }
+    ctx.ipmb.request_bootloader(Interface::Console);
+    Ok(())
 }

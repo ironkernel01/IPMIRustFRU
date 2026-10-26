@@ -39,12 +39,12 @@ pub const COMMANDS: &[Row] = &[
     row(&["INFO"], "start-up record, image check, port", Cmd::Info),
     row(
         &["ERASE", "APP"],
-        "erase sectors 2-7, the runtime firmware (then CONFIRM)",
+        "erase sectors 3-7, the runtime firmware (then CONFIRM)",
         Cmd::EraseApp,
     ),
     row(
         &["ERASE", "FRU"],
-        "erase sector 1, the FRU flash store (then CONFIRM)",
+        "erase sector 2, the FRU flash store (then CONFIRM)",
         Cmd::EraseFru,
     ),
     row(&["CONFIRM"], "run the pending erase", Cmd::Confirm),
@@ -64,7 +64,10 @@ pub fn words(line: &str) -> impl Iterator<Item = &str> + Clone {
     let mut rest = line;
     core::iter::from_fn(move || {
         let tail = rest.get(rest.bytes().position(|byte| byte != b' ')?..)?;
-        let end = tail.bytes().position(|byte| byte == b' ').unwrap_or(tail.len());
+        let end = tail
+            .bytes()
+            .position(|byte| byte == b' ')
+            .unwrap_or(tail.len());
         let (word, after) = tail.split_at_checked(end)?;
         rest = after;
         Some(word)
@@ -172,8 +175,8 @@ WAKEUP     open the session (answers OK)\r\n\
 HELP       this table\r\n\
 ?          this table\r\n\
 INFO       start-up record, image check, port\r\n\
-ERASE APP  erase sectors 2-7, the runtime firmware (then CONFIRM)\r\n\
-ERASE FRU  erase sector 1, the FRU flash store (then CONFIRM)\r\n\
+ERASE APP  erase sectors 3-7, the runtime firmware (then CONFIRM)\r\n\
+ERASE FRU  erase sector 2, the FRU flash store (then CONFIRM)\r\n\
 CONFIRM    run the pending erase\r\n\
 LOAD       receive the runtime as Intel HEX records (after ERASE APP)\r\n\
 VERIFY     check the runtime image\r\n\

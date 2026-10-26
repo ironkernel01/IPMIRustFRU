@@ -15,7 +15,7 @@ import fwu_settings
 import fwupdate
 
 PROMPT = "BOOT> "
-LOW = 0x0800_8000
+LOW = 0x0800_C000
 HEADER = 0x200  # offset of the header in the image
 
 
@@ -233,7 +233,7 @@ class HexAndPrecheckTests(unittest.TestCase):
         self.refused("", "end-of-file")
         self.refused("hello\n", "not an Intel HEX")
         self.refused(hex_text(good_image()) + fwupdate.record_line(0, 0, b"\x00") + "\n", "after the end")
-        double = hex_text(good_image(), extra=[fwupdate.record_line(0, 0x8000, b"\x11")])
+        double = hex_text(good_image(), extra=[fwupdate.record_line(0, 0xC000, b"\x11")])
         self.refused(double, "twice")
 
 
@@ -246,7 +246,7 @@ class RechunkTests(unittest.TestCase):
         self.assertEqual(records[-1][0], 1)
         data = [r for r in records if r[0] == 0]
         self.assertTrue(all(len(d) == 32 and (a & 31) == 0 for _, a, d in data))
-        self.assertNotIn(0x8300, [a for _, a, _ in data])  # all-FFh chunk skipped
+        self.assertNotIn(LOW + 0x300 & 0xFFFF, [a for _, a, _ in data])  # all-FFh chunk skipped
         self.assertEqual(len(data), 0x400 // 32 - 2)
         self.assertEqual(bytes(fwupdate.build_image(fwupdate.build_memory(records))[1]), bytes(image))
 
@@ -260,7 +260,7 @@ class RechunkTests(unittest.TestCase):
         self.assertEqual(bytes(fwupdate.build_image(fwupdate.build_memory(records))[1]), bytes(image))
         odd = fwupdate.rechunk(LOW + 4, bytearray(b"\x01" * 40))  # starts and ends inside a chunk
         data = [r for r in fwupdate.parse_records("\n".join(odd)) if r[0] == 0]
-        self.assertEqual([(a, len(d)) for _, a, d in data], [(0x8004, 28), (0x8020, 12)])
+        self.assertEqual([(a, len(d)) for _, a, d in data], [(0xC004, 28), (0xC020, 12)])
 
     def test_every_record_line_fits_the_limit(self):
         longest = max(len(line) for line in fwupdate.rechunk(LOW, good_image()))
@@ -404,6 +404,27 @@ class WakeupTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 0, out)
                 self.assertEqual(fake.written[0], command)
+
+    def test_enter_prints_the_answers_of_each_runtime_port(self):
+        # (uart, lines the runtime port sends, lines the tool prints)
+        rows = (
+            ("app", ["BOOTLOADER", "BOOTLOADER: restarting", "OK", "APP> "], ["BOOTLOADER: restarting", "OK"]),
+            (
+                "cli",
+                ["Restarting into the bootloader", "Payload power drops at the reset"],
+                ["Restarting into the bootloader", "Payload power drops at the reset"],
+            ),
+            ("cli", ["Restarting into the bootloader"], ["Restarting into the bootloader"]),
+        )
+        for uart, sent, printed in rows:
+            with self.subTest(uart, sent=sent):
+                fake = FakeBoot(preamble=sent)
+                fake._awake = False
+                code, out = run_main(
+                    fake, "--port", "COM5", "--enter", uart, "--enter-port", "COM9", "info"
+                )
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out[: len(printed)], printed)
 
     def test_usage_errors_exit_2(self):
         for argv in (["info"], ["--port", "COM5", "update"], ["--port", "COM5", "--enter", "app", "info"]):

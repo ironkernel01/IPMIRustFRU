@@ -44,6 +44,8 @@ struct FakeHost {
     /// Every text field reads as `LONG_TEXT` bytes of text: a host whose FRU image a Chassis
     /// Manager filled with the longest values.
     long_text: bool,
+    /// How often `request_bootloader` was called.
+    bootloader_requests: u32,
 }
 
 impl FakeHost {
@@ -60,6 +62,7 @@ impl FakeHost {
             ipmi_calls: Vec::new(),
             name: Some("App Get Device ID"),
             long_text: false,
+            bootloader_requests: 0,
         }
     }
 }
@@ -118,6 +121,10 @@ impl AppHost for FakeHost {
     fn save_state(&self) -> SaveState {
         self.save
     }
+
+    fn request_bootloader(&mut self) {
+        self.bootloader_requests += 1;
+    }
 }
 
 /// reply -- the answer to one request line as the lines a person sees: LF line ends, no prompt.
@@ -175,6 +182,7 @@ const HELP_TABLE: &str = "  HELP {COMMAND...}              - List the commands, 
   FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
   FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
   IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
+  BOOTLOADER                     - Restart into the bootloader; payload power drops at the reset
 ";
 
 /// REQUEST_TABLE -- (request line, answer) on a fresh `FakeHost`: FRU state M4, power on, the
@@ -279,6 +287,12 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ("FRU FIELDS", "{fields}OK\n"),
     ("FRU FIELDS X", "ERROR ARGS: usage: FRU FIELDS\n"),
     ("FRU SAVE", "SAVE: done\nOK\n"),
+    // BOOTLOADER
+    ("BOOTLOADER", "BOOTLOADER: restarting
+OK
+"),
+    ("bootloader now", "ERROR ARGS: usage: BOOTLOADER
+"),
     // IPMI
     (
         "IPMI 06 01",
@@ -400,6 +414,15 @@ fn every_request_row_gets_its_answer() {
             "request {request:?}"
         );
     }
+}
+
+#[test]
+fn bootloader_asks_the_host_once_and_a_refused_line_asks_nothing() {
+    let mut host = FakeHost::new();
+    reply(&mut host, "BOOTLOADER");
+    assert_eq!(host.bootloader_requests, 1);
+    reply(&mut host, "BOOTLOADER now");
+    assert_eq!(host.bootloader_requests, 1);
 }
 
 #[test]
@@ -826,6 +849,7 @@ fn the_uptime_has_days_hours_minutes_and_seconds() {
             fn save_state(&self) -> SaveState {
                 SaveState::Saved
             }
+            fn request_bootloader(&mut self) {}
         }
         let mut out = AnswerBuf::<ANSWER_MAX>::new();
         run(COMMANDS, "STATUS", &mut Clock(seconds), &mut out);

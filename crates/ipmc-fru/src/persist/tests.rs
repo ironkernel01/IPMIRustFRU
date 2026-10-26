@@ -860,75 +860,75 @@ fn a_settings_change_marks_the_store_dirty_and_is_saved_with_the_image() {
 }
 
 #[test]
-fn the_store_region_check_accepts_sector_1_and_names_every_other_layout() {
-    const BOOT_END: u32 = 0x0800_4000;
-    const TEXT: u32 = 0x0800_8000;
+fn the_store_region_check_accepts_sector_2_and_names_every_other_layout() {
+    const BOOT_END: u32 = 0x0800_8000;
+    const TEXT: u32 = 0x0800_C000;
     // (start, end, boot_end, app_start, expected)
     type Case = (u32, u32, u32, u32, Result<u32, RegionError>);
     let cases: [Case; 11] = [
-        (0x0800_4000, 0x0800_8000, BOOT_END, TEXT, Ok(STORE_LEN)),
-        (0x0800_4000, 0x0800_8000, 0x0800_3C00, TEXT, Ok(STORE_LEN)),
+        (0x0800_8000, 0x0800_C000, BOOT_END, TEXT, Ok(STORE_LEN)),
+        (0x0800_8000, 0x0800_C000, 0x0800_7C00, TEXT, Ok(STORE_LEN)),
+        (
+            0x0800_C000,
+            0x0801_0000,
+            BOOT_END,
+            0x0801_0000,
+            Err(RegionError::Shifted),
+        ),
+        (
+            0x0800_4000,
+            0x0800_8000,
+            BOOT_END,
+            0x0800_8000,
+            Err(RegionError::Shifted),
+        ),
         (
             0x0800_8000,
-            0x0800_C000,
-            BOOT_END,
-            0x0800_C000,
-            Err(RegionError::Shifted),
-        ),
-        (
-            0x0800_0000,
-            0x0800_4000,
-            BOOT_END,
-            0x0800_4000,
-            Err(RegionError::Shifted),
-        ),
-        (
-            0x0800_4000,
-            0x0800_7000,
+            0x0800_B000,
             BOOT_END,
             TEXT,
             Err(RegionError::TooShort),
         ),
         (
-            0x0800_4000,
-            0x0800_4000,
+            0x0800_8000,
+            0x0800_8000,
             BOOT_END,
             TEXT,
             Err(RegionError::TooShort),
         ),
         (
-            0x0800_4000,
-            0x0800_C000,
+            0x0800_8000,
+            0x0801_0000,
             BOOT_END,
-            0x0800_C000,
+            0x0801_0000,
             Err(RegionError::TooLong),
         ),
         (
-            0x0800_4200,
             0x0800_8200,
+            0x0800_C200,
             BOOT_END,
-            0x0800_8200,
+            0x0800_C200,
             Err(RegionError::NotSectorAligned),
         ),
         (
-            0x0800_4000,
             0x0800_8000,
-            0x0800_4400,
+            0x0800_C000,
+            0x0800_8400,
             TEXT,
             Err(RegionError::VectorsReachIn),
         ),
         (
-            0x0800_4000,
             0x0800_8000,
+            0x0800_C000,
             BOOT_END,
-            0x0800_6000,
+            0x0800_A000,
             Err(RegionError::ProgramInside),
         ),
         (
-            0x0800_4000,
             0x0800_8000,
+            0x0800_C000,
             BOOT_END,
-            0x0800_7FFF,
+            0x0800_BFFF,
             Err(RegionError::ProgramInside),
         ),
     ];

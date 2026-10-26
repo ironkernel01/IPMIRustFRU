@@ -120,7 +120,7 @@
 //! ```
 //!
 //! The commands are `HELP`, `?`, `INFO`, `STATUS`, `FRU STATE`, `FRU FIELDS`, `FRU GET`,
-//! `FRU SET`, `FRU SAVE` and `IPMI`. `HELP` prints the aligned list from the table (`COMMANDS`
+//! `FRU SET`, `FRU SAVE`, `IPMI` and `BOOTLOADER`. `HELP` prints the aligned list from the table (`COMMANDS`
 //! in commands.rs), so the table is the one description of what the port accepts.
 //!
 //! # Where a byte goes

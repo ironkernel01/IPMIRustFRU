@@ -24,16 +24,16 @@ import time
 import fwu_settings
 
 LINE_END = b"\r\n"
-APP_START = 0x0800_8000
+APP_START = 0x0800_C000
 APP_END = 0x0808_0000
-HEADER_ADDR = 0x0800_8200
+HEADER_ADDR = 0x0800_C200
 HEADER_SIZE = 64
 HEADER_MAGIC = 0x434D_5049
 HEADER_FORMAT = 1
 LENGTH_MIN = 0x240
-LENGTH_MAX = 491_520
-# The digest field (header +0x20..+0x40) is not hashed: 0x0800_8220..0x0800_8240 is skipped.
-HASH_GAP = (0x0800_8220, 0x0800_8240)
+LENGTH_MAX = 475_136
+# The digest field (header +0x20..+0x40) is not hashed: 0x0800_C220..0x0800_C240 is skipped.
+HASH_GAP = (0x0800_C220, 0x0800_C240)
 SRAM_LOW = 0x2000_0100
 SRAM_HIGH = 0x2001_8000
 BLANK = 0xFF
@@ -41,6 +41,10 @@ BLANK = 0xFF
 RETRY_CODES = ("FORMAT", "CHECKSUM", "LINE_TOO_LONG")
 # Runtime entry commands, by the port they are typed on.
 ENTER_COMMANDS = {"cli": "DEBUG BOOTLOADER", "app": "BOOTLOADER"}
+# Most lines read after an entry command, and the answers that end it (the app port's final `OK`
+# is tested separately).
+ENTER_LINES_MAX = 6
+ENTER_LAST_PREFIXES = ("Payload power drops", "ERROR")
 STATUS_PATTERN = re.compile(r"^(OK|ERR)(?: |$)")
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EXIT_TIMEOUT = 0, 1, 2, 3
@@ -424,12 +428,19 @@ def enter_runtime(args, factory, out):
     port = factory(args.enter_port, fwu_settings.baud_for(args.enter))
     try:
         port.write(ENTER_COMMANDS[args.enter].encode("ascii") + LINE_END)
-        for _ in range(2):
+        # The console answers `Restarting into the bootloader` and, with payload power on,
+        # `Payload power drops at the reset`; the app port answers `BOOTLOADER: restarting` then
+        # `OK` (or an `ERROR` line). The app port echoes the command first; that line is skipped.
+        command = ENTER_COMMANDS[args.enter]
+        for _ in range(ENTER_LINES_MAX):
             line = port.read_line(fwu_settings.ANSWER_TIMEOUT_S)
             if line is None:
                 break
-            if line.strip():
-                out(line.strip())
+            text = line.strip()
+            if text and text != command:
+                out(text)
+            if text == "OK" or text.startswith(ENTER_LAST_PREFIXES):
+                break
     finally:
         port.close()
 
@@ -439,11 +450,22 @@ def main(argv=None, transport_factory=SerialTransport, out=print, clock=time.mon
     args = parse_args(argv)
     start = clock()
 
+    # open_line: the progress line is written without a line end; an error ends it first, so
+    # the error stands on its own line.
+    open_line = [False]
+
     def progress(done, total, sent, rate):
         sys.stdout.write(f"\rrecords {done}/{total}  bytes {sent}  {rate:.0f} B/s ")
+        open_line[0] = done != total
         if done == total:
             sys.stdout.write("\n")
         sys.stdout.flush()
+
+    def end_progress():
+        if open_line[0]:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            open_line[0] = False
 
     try:
         lines = prepare(args, out) if args.action == "update" else None
@@ -465,9 +487,11 @@ def main(argv=None, transport_factory=SerialTransport, out=print, clock=time.mon
         finally:
             transport.close()
     except Refused as error:
+        end_progress()
         out(f"refused: {error}")
         return EXIT_REFUSED
     except BootTimeout as error:
+        end_progress()
         out(f"timeout: {error}")
         return EXIT_TIMEOUT
     out(f"done in {clock() - start:.1f} s")

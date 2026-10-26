@@ -3,18 +3,18 @@
 //
 // Ownership: this module owns the FRU store policy: which sector, the layout check and the
 // range map. The FLASH registers belong to `crate::bsp::flash_regs::FlashRegs` (erase and
-// program sequences, the sector-0 refusal), which `Flash::new` takes over.
+// program sequences, the refusal of sectors 0 and 1), which `Flash::new` takes over.
 //
 // Layout (RM0368 Table 5, STM32F401xD/E, 512 KB): sectors 0-3 are 16 KB, sector 4 is 64 KB,
 // sectors 5-7 are 128 KB. flash_map.x (included by memory.x) places:
-//   BOOT      sector 0     0x0800_0000..0x0800_3FFF   16 KB  the bootloader
-//   STORE     sector 1     0x0800_4000..0x0800_7FFF   16 KB  the FRU flash store, nothing else
-//   APP       sectors 2-7  0x0800_8000..0x0807_FFFF  480 KB  the runtime (link.x)
+//   BOOT      sectors 0-1  0x0800_0000..0x0800_7FFF   32 KB  the bootloader
+//   STORE     sector 2     0x0800_8000..0x0800_BFFF   16 KB  the FRU flash store, nothing else
+//   APP       sectors 3-7  0x0800_C000..0x0807_FFFF  464 KB  the runtime (link.x)
 // The store is the one sector this module erases and programs, so an erase never touches the
 // bootloader or the program. Peer: flash_map.x, which exports the linker symbols
 // `__fru_store_start`, `__fru_store_end`, `__boot_end` and `__app_vectors` (link.x asserts that
 // the program starts after the header). `Flash::new` checks them
-// (`ipmc_fru::persist::store_region_ok`) and refuses to start the store unless the region is exactly sector 1, the bootloader ends before
+// (`ipmc_fru::persist::store_region_ok`) and refuses to start the store unless the region is exactly sector 2, the bootloader ends before
 // it and the runtime starts after it: a layout that drifts apart can never erase code.
 //
 // An erase or a program operation stalls every flash access (timing in flash_regs.rs). The
@@ -37,9 +37,9 @@ use stm32f4::stm32f401::FLASH;
 use crate::bsp::systick;
 
 /// STORE_SECTOR_NUMBER -- the SNB value of the store sector (RM0368 3.7.2: sector number; Table 5:
-/// sector 1 is the second 16 KB sector).
-const STORE_SECTOR_NUMBER: u8 = 1;
-/// STORE_SECTOR_LEN -- bytes of the store sector (RM0368 Table 5: sector 1 is 16 KB). The number
+/// sector 2 is the third 16 KB sector).
+const STORE_SECTOR_NUMBER: u8 = 2;
+/// STORE_SECTOR_LEN -- bytes of the store sector (RM0368 Table 5: sector 2 is 16 KB). The number
 /// itself is `ipmc_fru::persist::STORE_LEN`, so the log and the driver cannot disagree.
 pub const STORE_SECTOR_LEN: usize = STORE_LEN as usize;
 /// FLASH_END -- one past the last flash byte of the STM32F401RE (512 KB from 0x0800_0000).
@@ -80,7 +80,7 @@ macro_rules! linker_address {
 /// StartError -- why the store flash cannot start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
-    /// The linked store region is not flash sector 1, or the vector table or the program
+    /// The linked store region is not flash sector 2, or the vector table or the program
     /// reaches into it (flash_map.x, link.x and this file disagree).
     Region(RegionError),
     /// The linked program reaches past the end of the flash.

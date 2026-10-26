@@ -43,6 +43,7 @@ use ipmc_app::{
     answer_final_line, banner, serve, AnswerBuf, AppError, AppHost, Fed, IpmiData, LineEditor,
     SaveState, Status, ANSWER_MAX,
 };
+use ipmc_boot::request::Interface;
 use ipmc_core::fru_state::State;
 use ipmc_core::link::LocalError;
 use ipmc_core::names::Names;
@@ -247,5 +248,9 @@ impl AppHost for LinkHost<'_> {
         } else {
             SaveState::Saved
         }
+    }
+
+    fn request_bootloader(&mut self) {
+        self.link.request_bootloader(Interface::App);
     }
 }

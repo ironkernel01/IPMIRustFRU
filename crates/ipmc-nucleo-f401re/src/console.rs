@@ -11,11 +11,12 @@
 //          SET [FIELD] {VALUE...}, RESTORE
 //   SIM  : RAIL {N} {MV}, TEMP {DC}, FAULT {NAME} {ON|OFF}, SHOW
 //   DEBUG: STATUS, LOG {ON|OFF}, DUMP {CSV|TRACE}, CLEAR, TRACE {IPMI|I2C} {ON|OFF},
-//          EVENTS {ON|OFF}, IPMI [NETFN] [CMD] {DATA...}, INJECT [BUS] {BYTES...}, CACHE {CLEAR}
+//          EVENTS {ON|OFF}, IPMI [NETFN] [CMD] {DATA...}, INJECT [BUS] {BYTES...}, CACHE {CLEAR},
+//          BOOTLOADER
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
 // IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; the FRU handlers (SHOW, DUMP, STORE,
-// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs (STATUS, EVENTS, IPMI, INJECT, CACHE) and log_cmds.rs (LOG, DUMP, CLEAR, TRACE).
+// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs (STATUS, EVENTS, IPMI, INJECT, CACHE, BOOTLOADER) and log_cmds.rs (LOG, DUMP, CLEAR, TRACE).
 
 use core::fmt;
 
@@ -280,7 +281,7 @@ static FRU_TABLE: &[ConsoleCommand] = if ipmc_defs::IPMC_FRU_CONSOLE_WRITE {
     FRU_COMMANDS.split_at(FRU_READ_ROWS).0
 };
 
-static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
+static DEBUG_COMMANDS: [ConsoleCommand; 10] = [
     Command {
         syntax: "STATUS",
         help: "Debug switches, capture log use, event receiver, duplicate cache",
@@ -325,6 +326,11 @@ static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
         syntax: "CACHE {ACTION}",
         help: "Duplicate cache: no argument shows the entries, CLEAR empties it",
         handler: debug_cmds::cmd_debug_cache,
+    },
+    Command {
+        syntax: "BOOTLOADER",
+        help: "Restart into the bootloader; payload power drops at the reset",
+        handler: debug_cmds::cmd_debug_bootloader,
     },
 ];
 

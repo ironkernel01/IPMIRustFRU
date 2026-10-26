@@ -2,16 +2,16 @@
 
    Derived from link.x.in of cortex-m-rt 0.7.7 (https://github.com/rust-embedded/cortex-m,
    licensed MIT OR Apache-2.0, Copyright the Cortex-M Developers; the developer notes and the
-   checks of that file are kept). This is the script of the runtime firmware; the sector-0
-   bootloader has boot.x. Both include flash_map.x, the one place of every address. Layout:
+   checks of that file are kept). This is the script of the runtime firmware; the bootloader
+   (sectors 0-1) has boot.x. Both include flash_map.x, the one place of every address. Layout:
 
-   - The whole image sits in APP (flash sectors 2-7, from 0x0800_8000): .vector_table at
+   - The whole image sits in APP (flash sectors 3-7, from 0x0800_C000): .vector_table at
      ORIGIN(APP), then the 64-byte .app_header at __app_header (ORIGIN(APP) + 0x200, the
      ipmc_boot::header image header), then .text, .rodata, the .data load image and veneers.
-   - BOOT (sector 0) is written by the bench only (SWD or the drive copy: the bootloader). STORE
-     (sector 1) receives no output section: the FRU flash store (crates/ipmc-fru persist.rs)
-     erases and programs it at run time. Sectors 2-7 are written by the bootloader's LOAD, by SWD
-     or by the drive copy. The runtime writes sector 1 only.
+   - BOOT (sectors 0-1) is written by the bench only (SWD or the drive copy: the bootloader). STORE
+     (sector 2) receives no output section: the FRU flash store (crates/ipmc-fru persist.rs)
+     erases and programs it at run time. Sectors 3-7 are written by the bootloader's LOAD, by SWD
+     or by the drive copy. The runtime writes sector 2 only.
    - .uninit (NOLOAD) sits in NOINIT at ORIGIN(NOINIT) + 0x10; the boot request words are the
      first 16 bytes (__boot_request), written by src/bsp/boot_request.rs and read by the
      bootloader, so no other section may use them.
@@ -251,10 +251,10 @@ ERROR(cortex-m-rt): the start of the APP region must be 4-byte aligned");
 
 /* # Image placement checks (not in cortex-m-rt) */
 ASSERT(ADDR(.vector_table) == __app_vectors, "
-ERROR(ipmc): the vector table is not at the start of APP (0x0800_8000)");
+ERROR(ipmc): the vector table is not at the start of APP (0x0800_C000)");
 
 ASSERT(ADDR(.app_header) == __app_header, "
-ERROR(ipmc): the image header is not at ORIGIN(APP) + 0x200 (0x0800_8200)");
+ERROR(ipmc): the image header is not at ORIGIN(APP) + 0x200 (0x0800_C200)");
 
 ASSERT(SIZEOF(.app_header) == 64, "
 ERROR(ipmc): the .app_header section is not 64 bytes (src/app_header.rs, ipmc_boot::header)");
@@ -271,7 +271,7 @@ ASSERT(ADDR(.vector_table) >= ORIGIN(APP) && ADDR(.app_header) >= ORIGIN(APP)
 ERROR(ipmc): an output section lies below APP, in the bootloader or the FRU flash store");
 
 ASSERT(__sidata + SIZEOF(.data) <= ORIGIN(APP) + LENGTH(APP), "
-ERROR(ipmc): the flash image does not end inside the APP region (sectors 2-7, 480 KB)");
+ERROR(ipmc): the flash image does not end inside the APP region (sectors 3-7, 464 KB)");
 
 ASSERT(__veneer_limit <= ORIGIN(APP) + LENGTH(APP), "
 ERROR(ipmc): the veneers do not end inside the APP region");

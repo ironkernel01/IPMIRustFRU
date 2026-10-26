@@ -1,5 +1,5 @@
 // main.rs - ipmc-nucleo-f401re entry point for the NUCLEO-F401RE.
-// This is the runtime firmware, linked at 0x0800_8000 (link.x, flash_map.x). The bootloader in sector 0 (src/boot/,
+// This is the runtime firmware, linked at 0x0800_C000 (link.x, flash_map.x). The bootloader in sectors 0-1 (src/boot/,
 // binary ipmc-boot) checks the image header and starts it with the state of a reset; with the
 // bootloader gone a debugger can still run it (cortex-m-rt features set-vtor and set-sp).
 // Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it

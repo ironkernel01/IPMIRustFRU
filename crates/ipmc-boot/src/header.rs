@@ -424,7 +424,7 @@ mod tests {
         want[8..12].copy_from_slice(&[0xFF; 4]);
         want[12..16].copy_from_slice(&[1, 2, 3, 0]);
         want[16..20].copy_from_slice(&[2, 0, 0, 0]);
-        want[20..24].copy_from_slice(&[0x00, 0x80, 0x00, 0x08]);
+        want[20..24].copy_from_slice(&[0x00, 0xC0, 0x00, 0x08]);
         want[32..64].copy_from_slice(&[0xFF; 32]);
         assert_eq!(placeholder([1, 2, 3], FLAG_EVAL).to_vec(), want);
     }
@@ -590,12 +590,12 @@ mod tests {
                 image(0x240, SP_OK, RESET_OK)[..0x23C].to_vec(),
                 PatchError::TooShort,
             ),
-            (vec![0; 491_524], PatchError::TooLong),
+            (vec![0; 475_140], PatchError::TooLong),
             (image(1001, SP_OK, RESET_OK), PatchError::NotAligned),
             (no_placeholder, PatchError::NoPlaceholder),
             (already, PatchError::NoPlaceholder),
             (image(1000, SP_OK + 4, RESET_OK), PatchError::BadVectorTable),
-            (image(1000, SP_OK, 0x0800_8000), PatchError::BadVectorTable),
+            (image(1000, SP_OK, APP_START), PatchError::BadVectorTable),
         ];
         for (mut bytes, want) in rows {
             assert_eq!(patch(&mut bytes), Err(want), "{}", want.name());

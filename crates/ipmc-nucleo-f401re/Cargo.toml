@@ -10,7 +10,7 @@ path = "src/lib.rs"
 name = "ipmc-nucleo-f401re"
 path = "src/main.rs"
 
-# The sector-0 bootloader (Documentation/ipmc_boot_plan.md): its own linker script boot.x and the
+# The bootloader (sectors 0-1) (Documentation/ipmc_boot_plan.md): its own linker script boot.x and the
 # profile `boot` (build.rs, gen.ps1).
 [[bin]]
 name = "ipmc-boot"
@@ -43,7 +43,7 @@ lto = true
 codegen-units = 1
 debug = true
 
-# The bootloader profile: sector 0 holds 16 KB, so size first (design 3.3). Build with
+# The bootloader profile: sectors 0-1 hold 32 KB, so size first (design 3.3). Build with
 # `cargo build --profile boot --bin ipmc-boot`.
 [profile.boot]
 inherits = "release"

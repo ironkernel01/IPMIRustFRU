@@ -14,7 +14,7 @@ const ERASED: [u8; DATA_MAX] = [0xFF; DATA_MAX];
 /// FlashOps -- the flash as the bootloader uses it. The firmware implements it over the shared
 /// register layer; the tests over a RAM model.
 pub trait FlashOps: ImageSource {
-    /// erase_sector -- erases one sector by number (never 0: the implementation refuses it too).
+    /// erase_sector -- erases one sector by number (never 0 or 1: the implementation refuses them too).
     fn erase_sector(&mut self, number: u8) -> Result<(), FlashError>;
     /// program -- writes `bytes` at `addr` (any alignment; the implementation picks word or byte
     /// writes). Does not read back.
@@ -135,7 +135,7 @@ mod tests {
                 }
             );
             assert_eq!(check(&flash).result, Ok(()), "record size {size}");
-            assert_eq!(&flash.bytes[0x8000..0x8000 + image.len()], &image[..]);
+            assert_eq!(&flash.bytes[0xC000..0xC000 + image.len()], &image[..]);
         }
     }
 
@@ -151,7 +151,7 @@ mod tests {
             Err(BootError::NotErased)
         );
         // an overlapping record at 4 bytes in
-        let overlap = record_line(0x8004, 0, &[9, 9, 9, 9]);
+        let overlap = record_line(0xC004, 0, &[9, 9, 9, 9]);
         assert_eq!(
             loader.record(&overlap, &mut flash),
             Err(BootError::NotErased)
@@ -165,7 +165,7 @@ mod tests {
         loader
             .record(&record_line(0, 0x04, &[0x08, 0x00]), &mut flash)
             .unwrap();
-        for (offset, data) in [(0x8001u16, vec![1u8, 2, 3]), (0x9003, vec![4, 5, 6, 7, 8])] {
+        for (offset, data) in [(0xC001u16, vec![1u8, 2, 3]), (0xD003, vec![4, 5, 6, 7, 8])] {
             loader
                 .record(&record_line(offset, 0, &data), &mut flash)
                 .unwrap();
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn flash_faults_and_wrong_bits_are_reported() {
-        let line = record_line(0x8000, 0, &[0x0F, 0xF0]);
+        let line = record_line(0xC000, 0, &[0x0F, 0xF0]);
         let mut flash = Ram::new();
         flash.wrong_bits = true;
         let mut loader = Loader::new();
@@ -209,7 +209,7 @@ mod tests {
         loader
             .record(&record_line(0, 0x04, &[8, 0]), &mut flash)
             .unwrap();
-        let line = record_line(0x8000, 0, &[1, 2, 3, 4]);
+        let line = record_line(0xC000, 0, &[1, 2, 3, 4]);
         let mut damaged = line.clone();
         damaged.replace_range(9..11, "FF");
         assert_eq!(
@@ -232,13 +232,13 @@ mod tests {
         let mut loader = Loader::new();
         // before any 04 record the address is 0..0xFFFF
         assert_eq!(
-            loader.record(&record_line(0x8000, 0, &[1]), &mut flash),
+            loader.record(&record_line(0xC000, 0, &[1]), &mut flash),
             Err(BootError::Range)
         );
         let rows: [(u16, u16, BootError); 4] = [
             (0x0800, 0x0000, BootError::Range),
-            (0x0800, 0x4000, BootError::Range),
-            (0x0800, 0x7FFF, BootError::Range),
+            (0x0800, 0x8000, BootError::Range),
+            (0x0800, 0xBFFF, BootError::Range),
             (0x0900, 0x0000, BootError::Range),
         ];
         for (upper, offset, want) in rows {
@@ -269,17 +269,17 @@ mod tests {
     fn erase_orders_the_sectors() {
         let mut flash = Ram::new();
         erase(Target::App, &mut flash).unwrap();
-        assert_eq!(flash.erased, [2, 3, 4, 5, 6, 7]);
+        assert_eq!(flash.erased, [3, 4, 5, 6, 7]);
         let mut flash = Ram::new();
         erase(Target::Fru, &mut flash).unwrap();
-        assert_eq!(flash.erased, [1]);
+        assert_eq!(flash.erased, [2]);
         let mut flash = Ram::new();
-        flash.erase_fault_at = Some(4);
+        flash.erase_fault_at = Some(5);
         assert_eq!(
             erase(Target::App, &mut flash),
             Err(BootError::Flash(FlashError::Timeout))
         );
-        assert_eq!(flash.erased, [2, 3]);
+        assert_eq!(flash.erased, [3, 4]);
     }
 
     #[test]

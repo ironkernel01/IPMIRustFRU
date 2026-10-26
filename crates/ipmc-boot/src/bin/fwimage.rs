@@ -15,9 +15,9 @@ use std::process::ExitCode;
 
 /// ALIGN -- the image length is padded with FFh to a multiple of this many bytes.
 const ALIGN: usize = 4;
-/// BOOT_LEN_MAX -- the BOOT region: sector 0 (16 384 bytes).
+/// BOOT_LEN_MAX -- the BOOT region: sectors 0 and 1 (32 768 bytes).
 const BOOT_LEN_MAX: usize = (BOOT_END - BOOT_START) as usize;
-/// BOOT_LEN_TARGET -- the design target: 75 % of sector 0 (12 288 bytes).
+/// BOOT_LEN_TARGET -- the design target: 75 % of sectors 0-1 (24 576 bytes).
 const BOOT_LEN_TARGET: usize = BOOT_LEN_MAX / 4 * 3;
 /// BOARD_APP_AT -- where the APP image starts in the board image.
 const BOARD_APP_AT: usize = (APP_START - BOOT_START) as usize;
@@ -38,7 +38,7 @@ fn pad_to_alignment(image: &mut Vec<u8>) {
     }
 }
 
-/// combine -- the board image: the bootloader at 0, FFh up to the APP start (0x8000), the APP
+/// combine -- the board image: the bootloader at 0, FFh up to the APP start (0xC000), the APP
 /// image from there. Refuses a bootloader above the BOOT region and an APP image above the APP
 /// region.
 fn combine(boot: &[u8], app: &[u8]) -> Result<Vec<u8>, String> {
@@ -67,14 +67,14 @@ struct Size {
     fits: bool,
 }
 
-/// size_report -- `ipmc-boot.bin: <n> bytes, <p> % of 16384`, a warning above the 12 288-byte
-/// target, and whether the image fits the 16 384-byte region.
+/// size_report -- `ipmc-boot.bin: <n> bytes, <p> % of 32768`, a warning above the 24 576-byte
+/// target, and whether the image fits the 32 768-byte region.
 fn size_report(len: usize) -> Size {
     let percent = (len * 100 + BOOT_LEN_MAX / 2) / BOOT_LEN_MAX;
     Size {
         line: format!("ipmc-boot.bin: {len} bytes, {percent} % of {BOOT_LEN_MAX}"),
         warning: (len > BOOT_LEN_TARGET).then(|| {
-            format!("warning: ipmc-boot.bin is above the {BOOT_LEN_TARGET}-byte target (75 % of sector 0)")
+            format!("warning: ipmc-boot.bin is above the {BOOT_LEN_TARGET}-byte target (75 % of sectors 0-1)")
         }),
         fits: len <= BOOT_LEN_MAX,
     }
@@ -171,12 +171,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn combine_places_the_parts_at_0_and_8000_with_ff_between() {
+    fn combine_places_the_parts_at_0_and_c000_with_ff_between() {
         let board = combine(&[1, 2, 3], &[9, 8]).unwrap();
-        assert_eq!(board.len(), 0x8000 + 2);
+        assert_eq!(board.len(), 0xC000 + 2);
         assert_eq!(&board[..3], &[1, 2, 3]);
-        assert!(board[3..0x8000].iter().all(|&b| b == 0xFF));
-        assert_eq!(&board[0x8000..], &[9, 8]);
+        assert!(board[3..0xC000].iter().all(|&b| b == 0xFF));
+        assert_eq!(&board[0xC000..], &[9, 8]);
     }
 
     #[test]
@@ -192,16 +192,16 @@ mod tests {
         // (length, percent text, warns, fits)
         let rows = [
             (0, "0 %", false, true),
-            (12_288, "75 %", false, true),
-            (12_289, "75 %", true, true),
-            (16_384, "100 %", true, true),
-            (16_385, "100 %", true, false),
+            (24_576, "75 %", false, true),
+            (24_577, "75 %", true, true),
+            (32_768, "100 %", true, true),
+            (32_769, "100 %", true, false),
         ];
         for (len, percent, warns, fits) in rows {
             let report = size_report(len);
             assert_eq!(
                 report.line,
-                format!("ipmc-boot.bin: {len} bytes, {percent} of 16384")
+                format!("ipmc-boot.bin: {len} bytes, {percent} of 32768")
             );
             assert_eq!(report.warning.is_some(), warns, "{len}");
             assert_eq!(report.fits, fits, "{len}");

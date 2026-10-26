@@ -306,7 +306,7 @@ ipmc
   FRU     SHOW | DUMP {OFFSET} {COUNT} | STORE | FIELDS | GET [FIELD]
           | SET [FIELD] {VALUE...} | RESTORE        (SET and RESTORE: IPMC_FRU_CONSOLE_WRITE true)
   DEBUG   STATUS | LOG {STATE} | DUMP {FORMAT} | CLEAR | TRACE {WHAT} {STATE} | EVENTS {STATE}
-          | IPMI [NETFN] [CMD] {DATA...} | INJECT [BUS] {BYTES...} | CACHE {ACTION}
+          | IPMI [NETFN] [CMD] {DATA...} | INJECT [BUS] {BYTES...} | CACHE {ACTION} | BOOTLOADER
   STATUS  (alias of SYS STATUS)
   RESET   (alias of SYS RESET)
 ```
@@ -353,6 +353,7 @@ ipmc
 | 38 | cmd_debug_ipmi | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | NETFN, CMD | DATA... | 4 | rest | Run one IPMI request locally, as from 20h; nothing goes on the bus |
 | 39 | cmd_debug_inject | `DEBUG INJECT [BUS] {BYTES...}` | BUS | BYTES... | 3 | rest | Hand a whole IPMB frame to the link as if received on bus A or B |
 | 40 | cmd_debug_cache | `DEBUG CACHE {ACTION}` | - | ACTION | 2 | 3 | Duplicate cache: no argument shows the entries, CLEAR empties it |
+| 41 | cmd_debug_bootloader | `DEBUG BOOTLOADER` | - | - | 2 | 2 | Restart into the bootloader; payload power drops at the reset |
 
 `rest` in the Max column means any number of words up to `MENU_TOKENS_MAX`: the last token is a
 `{NAME...}` token (section 5). The FRU group table is chosen at compile time from

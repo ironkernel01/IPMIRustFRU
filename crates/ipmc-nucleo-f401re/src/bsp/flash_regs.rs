@@ -8,7 +8,7 @@
 // only this file touches any FLASH register (the cache reset below is the one ACR access).
 //
 // Layout (RM0368 Table 5, STM32F401xD/E, 512 KB): sectors 0-3 are 16 KB, sector 4 is 64 KB,
-// sectors 5-7 are 128 KB. Sector 0 (0x0800_0000..0x0800_3FFF) belongs to the bootloader: no erase
+// sectors 5-7 are 128 KB. Sectors 0 and 1 (0x0800_0000..0x0800_7FFF) belong to the bootloader: no erase
 // or program reaches an address below `WRITE_START` (bootloader.md requirement 9), whatever the
 // caller's policy does.
 //
@@ -33,14 +33,16 @@ const KEY2: u32 = 0xCDEF_89AB;
 
 /// FLASH_START -- the first flash byte of the STM32F401RE.
 const FLASH_START: u32 = 0x0800_0000;
-/// WRITE_START -- the lowest address an erase or program may touch: the end of sector 0, the
-/// bootloader's sector (16 KB).
-pub const WRITE_START: u32 = 0x0800_4000;
+/// WRITE_START -- the lowest address an erase or program may touch: the end of sector 1, the
+/// bootloader's two sectors (32 KB).
+pub const WRITE_START: u32 = 0x0800_8000;
 /// FLASH_END -- one past the last flash byte (512 KB from 0x0800_0000).
 const FLASH_END: u32 = 0x0808_0000;
+/// FIRST_WRITABLE_SECTOR -- the first sector after the bootloader's two (WRITE_START).
+const FIRST_WRITABLE_SECTOR: u8 = 2;
 /// LAST_SECTOR -- the highest sector number (RM0368 Table 5).
 const LAST_SECTOR: u8 = 7;
-/// LAST_16K_SECTOR -- sectors 1..=3 are 16 KB.
+/// LAST_16K_SECTOR -- sectors 0..=3 are 16 KB (2 and 3 are the ones an erase may reach).
 const LAST_16K_SECTOR: u8 = 3;
 
 /// WORD_PROGRAM_MAX_US -- longest word program, 100 us (DS10086 Table 45 tprog, PSIZE x8/16/32,
@@ -65,7 +67,7 @@ const fn poll_bound(max_us: u32) -> u32 {
 /// PROGRAM_POLLS -- the BSY poll bound of one program: 100 us x 84 x 2 = 16 800 polls.
 const PROGRAM_POLLS: u32 = poll_bound(WORD_PROGRAM_MAX_US);
 /// ERASE_POLLS_16K / ERASE_POLLS_LARGE -- the BSY poll bounds of a sector erase: 500 000 us x 84
-/// x 2 = 84 000 000 polls for sectors 1..=3; 2 000 000 us x 84 x 2 = 336 000 000 for sectors
+/// x 2 = 84 000 000 polls for sectors 2 and 3; 2 000 000 us x 84 x 2 = 336 000 000 for sectors
 /// 4..=7 (both fit u32).
 const ERASE_POLLS_16K: u32 = poll_bound(SECTOR_ERASE_16K_MAX_US);
 const ERASE_POLLS_LARGE: u32 = poll_bound(SECTOR_ERASE_LARGE_MAX_US);
@@ -88,7 +90,7 @@ impl WordSize {
 }
 
 /// FlashRegs -- the FLASH peripheral's erase and program sequences (RM0368 3.5 to 3.7). Owns the
-/// peripheral. Refuses sector 0 and every address below 0x0800_4000 (the bootloader's sector;
+/// peripheral. Refuses sectors 0 and 1 and every address below 0x0800_8000 (the bootloader's sectors;
 /// bootloader.md requirement 9), so no caller can reach it through a policy bug.
 pub struct FlashRegs {
     regs: FLASH,
@@ -184,7 +186,7 @@ impl FlashRegs {
         acr.modify(|_, w| w.dcen().enabled().icen().enabled());
     }
 
-    /// erase_sector -- RM0368 3.5.3 sector erase of SNB `number` (1..=7, Table 5; sector 0 and a
+    /// erase_sector -- RM0368 3.5.3 sector erase of SNB `number` (2..=7, Table 5; sectors 0 and 1 and a
     /// number above 7 are Err(Range)): BSY clear, NVMRO sample, unlock, stale flags cleared, SER
     /// and SNB and PSIZE x32 set, STRT set, wait for BSY. The core stalls on flash until the erase
     /// ends, so the BSY loop usually sees it done on the first poll; the sector's poll bound
@@ -192,7 +194,7 @@ impl FlashRegs {
     /// gives the millisecond clock the time measured with the DWT cycle counter (0 when the
     /// counter does not run, and the clock then lags).
     pub fn erase_sector(&mut self, number: u8) -> Result<(), FlashError> {
-        if number == 0 || number > LAST_SECTOR {
+        if !(FIRST_WRITABLE_SECTOR..=LAST_SECTOR).contains(&number) {
             return Err(FlashError::Range);
         }
         let polls = if number <= LAST_16K_SECTOR {
@@ -207,7 +209,7 @@ impl FlashRegs {
         self.unlock()?;
         self.clear_stale_errors();
         self.regs.cr().modify(|_, w| {
-            // SAFETY: SNB is a 4-bit field; `number` is 1..=7, a sector number of RM0368 Table 5.
+            // SAFETY: SNB is a 4-bit field; `number` is 2..=7, a sector number of RM0368 Table 5.
             unsafe { w.snb().bits(number) }
                 .psize()
                 .psize32()
