@@ -14,6 +14,7 @@ ipmc-core = { path = "../ipmc-core" }
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-ext = { path = "../ipmc-ext" }
 ipmc-fru = { path = "../ipmc-fru" }
+ipmc-log = { path = "../ipmc-log" }
 ipmc-menu = { path = "../ipmc-menu" }
 ipmc-sensors = { path = "../ipmc-sensors", features = ["stm32f401"] }
 ipmc-wire = { path = "../ipmc-wire" }

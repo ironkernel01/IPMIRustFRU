@@ -26,14 +26,15 @@ impl Trace for NoTrace {
     fn line(&mut self, _args: Arguments) {}
 }
 
-/// RecordingTrace -- collects the lines for tests (std only).
-#[cfg(test)]
+/// RecordingTrace -- collects the lines for tests (std only; the `recording` feature gives it to
+/// other crates' tests).
+#[cfg(any(test, feature = "recording"))]
 #[derive(Default)]
 pub struct RecordingTrace {
     pub lines: Vec<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "recording"))]
 impl Trace for RecordingTrace {
     fn line(&mut self, args: Arguments) {
         self.lines.push(std::fmt::format(args));

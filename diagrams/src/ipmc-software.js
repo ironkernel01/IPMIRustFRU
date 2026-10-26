@@ -31,6 +31,7 @@ const cy = (y, h) => y + h / 2;
   box(s, c2, 1.75, w, 0.6, "ipmc-sensors", ["sensor and board I/O HAL", "hal, eval, drivers, board table"], W);
   box(s, c1, 0.85, w, 0.6, "ipmc-app", ["application port protocol, no_std", "one request line, one OK/ERR line"], W);
   box(s, c1, 1.75, w, 0.6, "ipmc-menu", ["console menu engine", "MenuBuilder rules"], W);
+  box(s, 4.5, 3.05, 1.55, 0.7, "ipmc-log", ["capture log and", "DEBUG logging code"], W);
   box(s, c2, 2.65, w, 0.85, "ipmc-core", ["all IPMI logic", "codec, link layer, commands, SDR,", "sensors, FRU state, self test"], W);
   box(s, c2, 3.8, w, 0.6, "ipmc-fru", ["FRU records and scratchpad", "image, store, flash log"], W);
   box(s, c2, 4.7, w, 0.6, "ipmc-wire", ["IPMI byte primitives", "checksum, builder, type/length, CRC-32"], W);
@@ -64,8 +65,8 @@ const cy = (y, h) => y + h / 2;
   notes(s, 0.6, 3.95, 3.5, 2.8, [
     "Every crate reads defs.rs values as ipmc_defs::NAME; those arrows are not drawn.",
     "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). The ipmc-defs build.rs finds the extension folder; without it ipmc-ext holds NoExtension and the build is Tier-1.",
-    "ipmc-nucleo-f401re uses ipmc-core, -fru, -app, -menu, -sensors (feature stm32f401) and -defs. ipmc-emu uses core, fru, sensors, wire and defs. ipmc-app uses core, fru, wire and defs. ipmc-sensors uses core and defs. ipmc-core uses fru, wire and defs. ipmc-fru uses wire and defs. ipmc-menu uses defs. Arrows that would cross are not drawn.",
-    "The firmware crate builds on its own (thumbv7em-none-eabihf). ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs, ipmc-menu and ipmc-app are no_std with forbid(unsafe_code); ipmc-sensors allows unsafe only in drivers/stm32f401.",
+    "ipmc-nucleo-f401re uses ipmc-core, -fru, -app, -menu, -log, -sensors (feature stm32f401) and -defs. ipmc-log uses ipmc-core and -defs; the core never uses it. ipmc-emu uses core, fru, sensors, wire and defs. ipmc-app uses core, fru, wire and defs. ipmc-sensors uses core and defs. ipmc-core uses fru, wire and defs. ipmc-fru uses wire and defs. ipmc-menu uses defs. Arrows that would cross are not drawn.",
+    "The firmware crate builds on its own (thumbv7em-none-eabihf). ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs, ipmc-menu, ipmc-log and ipmc-app are no_std with forbid(unsafe_code); ipmc-sensors allows unsafe only in drivers/stm32f401.",
     "ipmc-app touches no hardware; app_port.rs implements its AppHost trait over the IPMB link, which reaches the ipmc-core dispatcher and the ipmc-fru store. The console and APP_UART share bsp/uart.rs. The payload CPU is board hardware. ipmc-emu does not build ipmc-app.",
   ]);
   legend(s, 0.6, 6.85, LEG, 3.0);

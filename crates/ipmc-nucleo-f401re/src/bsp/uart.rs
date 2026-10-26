@@ -23,7 +23,7 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::NVIC;
 use heapless::Vec;
-use ipmc_core::capture::format_cut;
+use ipmc_core::names::format_cut;
 use ipmc_core::ring::ByteRing;
 use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull, Speed};
 use stm32f4::stm32f401::{interrupt, usart1::RegisterBlock, Interrupt, RCC, USART1, USART2};

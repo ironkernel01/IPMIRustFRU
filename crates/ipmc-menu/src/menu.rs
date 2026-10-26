@@ -168,7 +168,7 @@ pub struct Menu<C: 'static> {
 }
 
 impl<C: 'static> Menu<C> {
-    /// new -- A menu at the top level. `root` is the prompt name (`ipmc` gives `ipmc> `). `top` holds
+    /// new -- A menu at the top level. `root` is the prompt name (`CLI` gives `CLI> `). `top` holds
     /// commands typed without a group; `groups` the sub-menus. Check the tables with
     /// `validate_tables` (compile time in firmware, a test on the host).
     pub const fn new(
@@ -260,7 +260,7 @@ impl<C: 'static> Menu<C> {
             .position(|g| eq_ignore_case(g.name, word))
     }
 
-    /// write_prompt -- `ipmc> ` at the top level, `ipmc/sensors> ` inside a group.
+    /// write_prompt -- `CLI> ` at the top level, `CLI/sensors> ` inside a group.
     pub fn write_prompt(&self, out: &mut dyn MenuOutput) {
         emit(out, format_args!("{}", self.root));
         if let Some(group) = self.group_at(self.current) {
@@ -543,7 +543,7 @@ mod tests {
     ];
 
     fn menu() -> Menu<Ctx> {
-        Menu::new("ipmc", &TOP, &GROUPS)
+        Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP, &GROUPS)
     }
 
     fn feed(menu: &mut Menu<Ctx>, line: &str) -> (Outcome, Ctx, String) {
@@ -828,12 +828,15 @@ mod tests {
             m.write_prompt(&mut sink);
             sink.text
         };
-        assert_eq!(prompt(&m), "ipmc> ");
+        assert_eq!(prompt(&m), format!("{}> ", ipmc_defs::IPMC_CONSOLE_PROMPT));
         assert_eq!(feed(&mut m, "SENSORS").0, Outcome::Entered);
-        assert_eq!(prompt(&m), "ipmc/sensors> ");
+        assert_eq!(
+            prompt(&m),
+            format!("{}/sensors> ", ipmc_defs::IPMC_CONSOLE_PROMPT)
+        );
         assert_eq!(m.current_group(), Some("SENSORS"));
         assert_eq!(feed(&mut m, "..").0, Outcome::Left);
-        assert_eq!(prompt(&m), "ipmc> ");
+        assert_eq!(prompt(&m), format!("{}> ", ipmc_defs::IPMC_CONSOLE_PROMPT));
         assert_eq!(feed(&mut m, "led").0, Outcome::Entered);
         assert_eq!(feed(&mut m, "up").0, Outcome::Left);
         let (outcome, _, text) = feed(&mut m, "UP");

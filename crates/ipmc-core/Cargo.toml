@@ -7,3 +7,7 @@ edition = "2021"
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-fru = { path = "../ipmc-fru" }
 ipmc-wire = { path = "../ipmc-wire" }
+
+[features]
+# recording: RecordingTrace (std) for the tests of other crates.
+recording = []

@@ -1,28 +1,26 @@
-// debug_cmds.rs - the DEBUG console group: test switches, the IPMB capture log and local IPMI
-// requests.
+// debug_cmds.rs - the DEBUG console group: STATUS, EVENTS, IPMI, INJECT and CACHE (local IPMI
+// requests and the duplicate cache).
 //
-// The state lives in ipmb_link.rs (the capture log, the two trace switches, the link and the
-// dispatch context); these handlers switch it, print it and run requests through it. Decoding
-// and printing of the log come from ipmc_core::capture (CSV rows and trace rows are the same
-// Display types the live I2C trace uses); nothing here reads an IPMB byte layout of its own.
+// The state lives in ipmb_link.rs (the link and the dispatch context); these handlers switch it,
+// print it and run requests through it. The logging handlers (LOG, DUMP, CLEAR, TRACE) are in
+// log_cmds.rs and the ipmc-log crate; STATUS prints the log lines through ipmc-log. Nothing here
+// reads an IPMB byte layout of its own.
 // The words typed for IPMI and INJECT are hex bytes, parsed by ipmc_wire::hex_byte.
 //
 // Nothing here runs in an interrupt handler.
 
 use core::fmt;
 
-use ipmc_core::capture::{
-    CommandName, CsvHeader, CsvRow, DumpCursor, HexBytes, NetFnName, Step, TraceRow, PAYLOAD_MAX,
-    TEXT_MAX,
-};
 use ipmc_core::dispatch::cc;
 use ipmc_core::ipmb::{self, IPMB_MAX_LEN, NETFN_SE};
 use ipmc_core::link::{LocalError, CM_ADDR8};
+use ipmc_core::names::{CommandName, HexBytes, NetFnName};
 use ipmc_core::queue::Bus;
+use ipmc_log::{LogLine, SwitchLines};
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
 use crate::bsp::systick;
-use crate::bsp::uart::{self, Port};
+use crate::bsp::uart;
 use crate::console::Context;
 use crate::ipmb_link::IpmbLink;
 
@@ -35,17 +33,8 @@ const RECEIVER_OFF: u8 = 0xFF;
 /// RECEIVER_LUN_MASK -- the Event Receiver LUN is bits 1:0 of the second data byte.
 const RECEIVER_LUN_MASK: u8 = 0x03;
 
-/// on_off -- the switch word.
-const fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
-    }
-}
-
 /// reported -- prints one error line and stops the handler.
-fn reported(message: fmt::Arguments) -> CmdError {
+pub(crate) fn reported(message: fmt::Arguments) -> CmdError {
     out!("Error: {}\n", message);
     CmdError::Reported
 }
@@ -207,177 +196,15 @@ pub(crate) fn events_off_at_boot(link: &mut IpmbLink) {
 
 // ---- status ----
 
-/// print_log -- the capture log line of DEBUG STATUS and DEBUG LOG.
-fn print_log(link: &IpmbLink) {
-    let s = link.capture().stats();
-    out!(
-        "Capture log:     {}, {} bytes, used {}, {} records, {} overwritten\n",
-        on_off(s.enabled),
-        s.size,
-        s.used,
-        s.records,
-        s.overwritten
-    );
-}
-
-/// print_switches -- the two trace switches (DEBUG STATUS and DEBUG TRACE without argument).
-fn print_switches(link: &IpmbLink) {
-    out!("IPMI console:    trace {}\n", on_off(link.ipmi_console()));
-    out!("I2C trace:       {}\n", on_off(link.i2c_trace()));
-}
-
 /// cmd_debug_status -- DEBUG STATUS.
 pub fn cmd_debug_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
-    print_log(ctx.ipmb);
-    print_switches(ctx.ipmb);
+    out!("{}{}", LogLine(ctx.ipmb.log()), SwitchLines(ctx.ipmb.log()));
     let receiver = receiver_state(ctx.ipmb);
     out!("Event receiver:  {}\n", receiver);
     out!(
         "Duplicate cache: {} entries\n",
         ctx.ipmb.link().duplicate_cache_len()
     );
-    Ok(())
-}
-
-// ---- capture log ----
-
-/// cmd_debug_log -- DEBUG LOG {STATE}.
-pub fn cmd_debug_log(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
-    if let Some(on) = optional(args.on_off_at(0))? {
-        ctx.ipmb.capture_mut().set_enabled(on);
-    }
-    print_log(ctx.ipmb);
-    Ok(())
-}
-
-/// DumpFormat -- the two printers of DEBUG DUMP.
-#[derive(Clone, Copy)]
-enum DumpFormat {
-    Csv,
-    Trace,
-}
-
-/// ROW_MAX -- room one dump step needs in the console TX ring before it prints a row, so a row
-/// never waits for the wire. The longest row is the larger of a text record and a frame record,
-/// each with its CR LF:
-///   text:  index (10) + time (10) + `TEXT` and commas (12) + quotes (2) + the text, which a
-///          CSV row may double when every character is a quote, so 2 x IPMC_LOG_TEXT_MAX
-///          + 2 for CR LF = 2 x TEXT_MAX + 36
-///   frame: fixed columns and the summary (at most 160 with the trace row's padded NetFn and
-///          command columns) + 3 characters per frame byte (hex and a space)
-///          + 2 for CR LF = 3 x IPMB_MAX_LEN + 162
-/// A bigger TX ring is a design input: the const assert below names the define.
-const TEXT_ROW_MAX: usize = 2 * TEXT_MAX + 36;
-const FRAME_ROW_MAX: usize = 3 * IPMB_MAX_LEN + 162;
-const ROW_MAX: usize = if TEXT_ROW_MAX > FRAME_ROW_MAX {
-    TEXT_ROW_MAX
-} else {
-    FRAME_ROW_MAX
-};
-const _: () = assert!(
-    ROW_MAX < ipmc_defs::IPMC_UART_TX_BUF,
-    "IPMC_UART_TX_BUF must be larger than the longest dump row (ROW_MAX in debug_cmds.rs)"
-);
-
-/// DumpJob -- a DEBUG DUMP in progress. The console holds it and continues it on every
-/// `Console::poll` pass (`step`): whole rows while the console TX ring has room for the longest
-/// one, so the main loop never waits for the wire. It dumps the records held when it started.
-pub struct DumpJob {
-    format: DumpFormat,
-    cursor: DumpCursor,
-}
-
-impl DumpJob {
-    /// step -- prints rows while the TX ring holds the longest row; true when the dump is over
-    /// (the end marker is printed).
-    pub fn step(&mut self, link: &IpmbLink) -> bool {
-        let names = link.names();
-        let log = link.capture();
-        let mut scratch = [0u8; PAYLOAD_MAX];
-        while uart::tx_free(Port::Console) >= ROW_MAX {
-            match self.cursor.next(log) {
-                Step::Row(index) => {
-                    if let Some(record) = log.get(index, &mut scratch) {
-                        match self.format {
-                            DumpFormat::Csv => out!("{}\n", CsvRow(&record, &names)),
-                            DumpFormat::Trace => out!("{}\n", TraceRow(&record, &names)),
-                        }
-                    }
-                }
-                Step::Overwritten(count) => {
-                    out!("# {} records overwritten during the dump\n", count);
-                }
-                Step::Done => {
-                    out!("# end of capture\n");
-                    return true;
-                }
-            }
-        }
-        false
-    }
-}
-
-/// cmd_debug_dump -- DEBUG DUMP {FORMAT}: prints the header line and starts the dump job; the
-/// console prints the rows and the end line on the following main-loop passes (`DumpJob`).
-pub fn cmd_debug_dump(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
-    let format = match optional(args.text_at(0))? {
-        None => DumpFormat::Csv,
-        Some(word) if word.eq_ignore_ascii_case("CSV") => DumpFormat::Csv,
-        Some(word) if word.eq_ignore_ascii_case("TRACE") => DumpFormat::Trace,
-        Some(_) => return Err(reported(format_args!("format must be CSV or TRACE"))),
-    };
-    let link = &*ctx.ipmb;
-    let stats = link.capture().stats();
-    out!(
-        "# IPMC capture: {} v{}, ipmc-core v{}, IPMB address {:02X}h, Tier {}, uptime {} ms, {} records, {} overwritten\n",
-        ipmc_defs::IPMC_FW_NAME,
-        env!("CARGO_PKG_VERSION"),
-        ipmc_core::CORE_VERSION,
-        link.dispatch().addr.ipmb_address,
-        ipmc_defs::IPMC_TIER,
-        systick::millis(),
-        stats.records,
-        stats.overwritten
-    );
-    if matches!(format, DumpFormat::Csv) {
-        out!("{}\n", CsvHeader);
-    }
-    ctx.dump = Some(DumpJob {
-        format,
-        cursor: DumpCursor::start(link.capture()),
-    });
-    Ok(())
-}
-
-/// cmd_debug_clear -- DEBUG CLEAR.
-pub fn cmd_debug_clear(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
-    ctx.ipmb.capture_mut().clear();
-    out!("OK: capture log cleared\n");
-    Ok(())
-}
-
-// ---- trace switches ----
-
-/// cmd_debug_trace -- DEBUG TRACE {WHAT} {STATE}: IPMI (the request, link and event lines on
-/// the console; the log keeps them either way) or I2C (one console line per frame).
-pub fn cmd_debug_trace(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
-    let Some(what) = optional(args.text_at(0))? else {
-        print_switches(ctx.ipmb);
-        return Ok(());
-    };
-    let state = optional(args.on_off_at(1))?;
-    if what.eq_ignore_ascii_case("IPMI") {
-        if let Some(on) = state {
-            ctx.ipmb.set_ipmi_console(on);
-        }
-    } else if what.eq_ignore_ascii_case("I2C") {
-        if let Some(on) = state {
-            ctx.ipmb.set_i2c_trace(on);
-        }
-    } else {
-        return Err(reported(format_args!("trace is IPMI or I2C")));
-    }
-    print_switches(ctx.ipmb);
     Ok(())
 }
 

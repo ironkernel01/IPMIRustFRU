@@ -15,7 +15,7 @@
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
 // IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; the FRU handlers (SHOW, DUMP, STORE,
-// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs.
+// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs (STATUS, EVENTS, IPMI, INJECT, CACHE) and log_cmds.rs (LOG, DUMP, CLEAR, TRACE).
 
 use core::fmt;
 
@@ -34,9 +34,11 @@ use crate::bsp::reset_cause::ResetCause;
 use crate::bsp::uart::{self, Port};
 use crate::bsp::{ga, systick};
 use crate::data_cmds;
-use crate::debug_cmds::{self, DumpJob};
+use crate::debug_cmds;
 use crate::ipmb_link::{self, IpmbLink};
+use crate::log_cmds::{self, ConsoleSink};
 use crate::sensing::{self, Sensing};
+use ipmc_log::DumpJob;
 
 /// Context -- values captured at start-up that the banner and `SYS STATUS` report. This is the context
 /// value every command handler receives.
@@ -48,7 +50,7 @@ pub struct Context {
     pub(crate) sensing: Sensing,
     /// IPMB link layer; the IPMB STATS and IPMB STATE handlers read it.
     pub(crate) ipmb: &'static mut IpmbLink,
-    /// The DEBUG DUMP in progress, continued by `Console::poll` (debug_cmds.rs).
+    /// The DEBUG DUMP in progress, continued by `Console::poll` (log_cmds.rs).
     pub(crate) dump: Option<DumpJob>,
     /// The application port: its line assembler, polled by `Console::service_app`.
     app: AppPort,
@@ -287,22 +289,22 @@ static DEBUG_COMMANDS: [ConsoleCommand; 9] = [
     Command {
         syntax: "LOG {STATE}",
         help: "Capture log ON or OFF; no argument shows its state",
-        handler: debug_cmds::cmd_debug_log,
+        handler: log_cmds::cmd_debug_log,
     },
     Command {
         syntax: "DUMP {FORMAT}",
         help: "Print the capture log: CSV (default) or TRACE; any key stops it",
-        handler: debug_cmds::cmd_debug_dump,
+        handler: log_cmds::cmd_debug_dump,
     },
     Command {
         syntax: "CLEAR",
         help: "Empty the capture log",
-        handler: debug_cmds::cmd_debug_clear,
+        handler: log_cmds::cmd_debug_clear,
     },
     Command {
         syntax: "TRACE {WHAT} {STATE}",
         help: "Console trace: IPMI (request, link and event lines) or I2C (one line per frame), ON or OFF",
-        handler: debug_cmds::cmd_debug_trace,
+        handler: log_cmds::cmd_debug_trace,
     },
     Command {
         syntax: "EVENTS {STATE}",
@@ -653,7 +655,7 @@ impl Console {
 impl Console {
     /// poll_dump -- one main-loop pass of a running DEBUG DUMP. A received byte stops the dump
     /// (a line feed does not count: a terminal that ends Enter with CR LF sends it right after
-    /// the CR that started the dump); otherwise `DumpJob::step` prints the rows the TX ring has room for. New command lines
+    /// the CR that started the dump); otherwise `DumpJob::step` (ipmc-log) prints the rows the TX ring has room for. New command lines
     /// wait: the menu does not run while the job exists. The prompt follows the end of the job.
     fn poll_dump(&mut self) {
         let stopped = matches!(uart::getc(Port::Console), Some(byte) if byte != b'\n');
@@ -661,7 +663,11 @@ impl Console {
             out!("# dump stopped\n");
         }
         let finished = match self.ctx.dump.as_mut() {
-            Some(job) if !stopped => job.step(self.ctx.ipmb),
+            Some(job) if !stopped => job.step(
+                self.ctx.ipmb.log().capture(),
+                &self.ctx.ipmb.names(),
+                &mut ConsoleSink,
+            ),
             _ => true,
         };
         if finished {
@@ -738,19 +744,33 @@ fn print_ga(g: &AddrInfo) {
 
 // ---- handlers ----
 
+/// UART_VALUE_COLUMN -- the column of the value in a SYS STATUS line (the width of `Uptime:       `).
+const UART_VALUE_COLUMN: usize = 14;
+
+/// port_name -- the name the firmware prints for a UART (defs.rs IPMC_CONSOLE_UART_NAME and
+/// IPMC_APP_UART_NAME); a PC's port number is not known here.
+fn port_name(port: Port) -> &'static str {
+    match port {
+        Port::Console => ipmc_defs::IPMC_CONSOLE_UART_NAME,
+        Port::App => ipmc_defs::IPMC_APP_UART_NAME,
+    }
+}
+
+/// print_uart_label -- `<name> UART:` padded to UART_VALUE_COLUMN (at least one space).
+fn print_uart_label(port: Port) {
+    let name = port_name(port);
+    let pad = UART_VALUE_COLUMN
+        .saturating_sub(name.len() + " UART:".len())
+        .max(1);
+    out!("{} UART:{:pad$}", name, "");
+}
+
 /// print_uart -- one line with the failure counters and the free TX bytes of a port.
 fn print_uart(port: Port) {
     let e = uart::counters(port);
+    print_uart_label(port);
     out!(
-        "{} UART:{} rx overflow={} tx timeout={} overrun={} tx lines dropped={} tx free={}\n",
-        match port {
-            Port::Console => "Console",
-            Port::App => "App",
-        },
-        match port {
-            Port::Console => "  ",
-            Port::App => "      ",
-        },
+        "rx overflow={} tx timeout={} overrun={} tx lines dropped={} tx free={}\n",
         e.rx_overflow,
         e.tx_timeout,
         e.overrun,

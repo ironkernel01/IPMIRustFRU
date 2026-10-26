@@ -1,4 +1,4 @@
 [workspace]
-members = ["crates/ipmc-defs", "crates/ipmc-wire", "crates/ipmc-fru", "crates/ipmc-app", "crates/ipmc-core", "crates/ipmc-menu", "crates/ipmc-sensors", "crates/ipmc-ext", "crates/ipmc-emu"]
+members = ["crates/ipmc-defs", "crates/ipmc-wire", "crates/ipmc-fru", "crates/ipmc-app", "crates/ipmc-core", "crates/ipmc-log", "crates/ipmc-menu", "crates/ipmc-sensors", "crates/ipmc-ext", "crates/ipmc-emu"]
 exclude = ["crates/ipmc-nucleo-f401re"]
 resolver = "2"

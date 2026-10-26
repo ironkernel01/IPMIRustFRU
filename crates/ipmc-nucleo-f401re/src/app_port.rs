@@ -43,9 +43,9 @@ use ipmc_app::{
     answer_final_line, banner, serve, AnswerBuf, AppError, AppHost, Fed, IpmiData, LineEditor,
     SaveState, Status, ANSWER_MAX,
 };
-use ipmc_core::capture::Names;
 use ipmc_core::fru_state::State;
 use ipmc_core::link::LocalError;
+use ipmc_core::names::Names;
 use ipmc_fru::{FieldError, FruField};
 
 use crate::bsp::systick;

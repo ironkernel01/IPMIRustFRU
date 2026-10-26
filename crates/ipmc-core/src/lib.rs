@@ -2,13 +2,11 @@
 //!
 //! All IPMI logic lives in this crate: no hardware access, no allocator.
 //! It builds for the host and for thumbv7em-none-eabihf.
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "recording")), no_std)]
 #![forbid(unsafe_code)]
 
 /// addr -- geographic address decode and strap-source resolution.
 pub mod addr;
-/// capture -- the capture log: IPMB frames and trace lines in a ring, CSV and trace printers.
-pub mod capture;
 /// cmd -- command handlers, one module per NetFn group.
 pub mod cmd;
 /// commands -- the command table, one row per command.
@@ -29,13 +27,15 @@ pub mod identity;
 pub mod ipmb;
 /// link -- dual-bus IPMB link layer: ingress, duplicate cache, bus choice, resend.
 pub mod link;
+/// names -- the names and bounded text the link layer and the printers share.
+pub mod names;
 /// queue -- fixed-capacity egress queue of response frames.
 pub mod queue;
 /// requester -- the IPMB requester: the one request this IPMC sends at a time (Tier-2/3).
 pub mod requester;
 /// reset_gate -- when a pending processor reset may run.
 pub mod reset_gate;
-/// ring -- the byte ring shared by the capture log and the UART driver.
+/// ring -- the byte ring shared by the capture log (ipmc-log) and the UART driver.
 pub mod ring;
 /// sdr -- the Device SDR repository and its reservation.
 pub mod sdr;

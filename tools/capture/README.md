@@ -2,7 +2,7 @@
 
 `capture2pcap.py` turns the console output of the `DEBUG DUMP` command into a pcap file that
 Wireshark opens, and into a CSV file that a spreadsheet opens. The IPMC keeps the capture log in
-RAM (`ipmc-core/src/capture.rs`): a ring of every whole IPMB frame it received (before the
+RAM (`crates/ipmc-log`): a ring of every whole IPMB frame it received (before the
 parser) and sent (with the outcome), plus the trace and fault lines the console prints.
 
 ## Customer steps (on the target system)

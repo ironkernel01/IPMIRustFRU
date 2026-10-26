@@ -3,7 +3,7 @@
 `app_cli.py` talks to the application port of the IPMC (APP_UART, USART1 PB6 TX / PB7 RX)
 through a USB serial adapter. The protocol is in `crates/ipmc-app` (module comment of
 `src/lib.rs`): one ASCII request line; the answer is zero or more `KEY: value` data lines and one
-final line, `OK` or `ERROR <CODE>: <sentence>`. The IPMC also prints the prompt `app> ` and echoes
+final line, `OK` or `ERROR <CODE>: <sentence>`. The IPMC also prints the prompt `APP> ` and echoes
 what it receives; the client skips both.
 
 ## Setup
@@ -43,7 +43,7 @@ echo of a request only when it starts with the prompt followed by exactly the re
 without tags a final line is trusted only after that echo, so `--no-tags` with the request `OK`
 reads the `ERROR UNKNOWN` answer and exits 1, not the echo.
 
-The client follows the parsing rule of the protocol: skip the lines that start with `app> `
+The client follows the parsing rule of the protocol: skip the lines that start with `APP> `
 (prompt and echo), collect `KEY: value` lines, end the answer at the first line that is `OK`,
 starts with `OK ` or starts with `ERROR `. It prints the data lines and the final line of each
 answer. `--raw` passes every key to the port and every received byte to the screen, like a

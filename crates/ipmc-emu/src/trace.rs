@@ -14,4 +14,4 @@ impl Trace for StdoutTrace {
 
 /// Hex -- displays bytes as space-separated upper-case hex pairs (the notation of the vector
 /// file and of the PIC32 trace lines): the capture log's printer, the one implementation.
-pub use ipmc_core::capture::HexBytes as Hex;
+pub use ipmc_core::names::HexBytes as Hex;

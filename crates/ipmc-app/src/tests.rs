@@ -714,7 +714,7 @@ fn the_longest_final_line_fits_behind_the_longest_echo_at_the_line_limit() {
         let mut out = AnswerBuf::<{ ECHO_WORST_CASE + FINAL_LINE_MAX + PROMPT.len() }>::new();
         out.write_str(&"e".repeat(ECHO_WORST_CASE)).unwrap();
         assert!(respond(&fed, &mut host, &mut out));
-        assert!(out.as_str().ends_with("\r\napp> "));
+        assert!(out.as_str().ends_with("\r\nAPP> "));
         assert!(!out.as_str().contains("ANSWER_TOO_LONG"));
     }
 }
@@ -1008,18 +1008,18 @@ fn the_editor_echoes_erases_and_ends_lines() {
         (b"INFO\x08", "INFO\x08 \x08".into()),
         (b"INFO\x7f\x7f", "INFO\x08 \x08\x08 \x08".into()),
         (b"\x08\x7f", "".into()),
-        (b"\r", "\r\napp> ".into()),
-        (b"\n", "\r\napp> ".into()),
-        (b"\r\n", "\r\napp> ".into()),
-        (b"\n\r", "\r\napp> ".into()),
-        (b"\r\r", "\r\napp> \r\napp> ".into()),
-        (b"\n\n", "\r\napp> \r\napp> ".into()),
-        (b"A\x00B\r", format!("AB\r\n{BAD_CHAR_LINE}\r\napp> ")),
-        (b"\xc3\xa9\n", format!("\r\n{BAD_CHAR_LINE}\r\napp> ")),
-        (b"\x1b[A\n", format!("[A\r\n{BAD_CHAR_LINE}\r\napp> ")),
+        (b"\r", "\r\nAPP> ".into()),
+        (b"\n", "\r\nAPP> ".into()),
+        (b"\r\n", "\r\nAPP> ".into()),
+        (b"\n\r", "\r\nAPP> ".into()),
+        (b"\r\r", "\r\nAPP> \r\nAPP> ".into()),
+        (b"\n\n", "\r\nAPP> \r\nAPP> ".into()),
+        (b"A\x00B\r", format!("AB\r\n{BAD_CHAR_LINE}\r\nAPP> ")),
+        (b"\xc3\xa9\n", format!("\r\n{BAD_CHAR_LINE}\r\nAPP> ")),
+        (b"\x1b[A\n", format!("[A\r\n{BAD_CHAR_LINE}\r\nAPP> ")),
         (
             b"x\r\n",
-            "x\r\nERROR UNKNOWN: unknown command 'x'; type HELP or ?\r\napp> ".into(),
+            "x\r\nERROR UNKNOWN: unknown command 'x'; type HELP or ?\r\nAPP> ".into(),
         ),
     ];
     let banner_text = {
@@ -1042,7 +1042,7 @@ fn backspace_edits_the_line_before_it_runs() {
     // "INFX" BS "O" is "INFO"; the answer is INFO's.
     let text = typed::<32>(b"INFX\x08O\r\n");
     assert!(text.contains("INFX\x08 \x08O\r\n"), "{text:?}");
-    assert!(text.contains("PROTOCOL: 2\r\nOK\r\napp> "), "{text:?}");
+    assert!(text.contains("PROTOCOL: 2\r\nOK\r\nAPP> "), "{text:?}");
     // Erasing everything and typing again.
     let text = typed::<32>(b"AB\x08\x08STATUS\r");
     assert!(text.contains("IPMB_ADDRESS: 82h"), "{text:?}");
@@ -1100,10 +1100,10 @@ fn an_overlong_line_is_answered_once_when_its_end_arrives() {
         ipmc_defs::IPMC_APP_LINE_MAX
     );
     assert!(
-        text.contains(&format!("HELP    \r\n{error}app> ")),
+        text.contains(&format!("HELP    \r\n{error}APP> ")),
         "{text:?}"
     );
-    assert!(text.contains("PROTOCOL: 2\r\nOK\r\napp> "), "{text:?}");
+    assert!(text.contains("PROTOCOL: 2\r\nOK\r\nAPP> "), "{text:?}");
     // Nothing is answered before the end of the overlong line arrives; backspace does nothing on
     // it; the editor reports TooLong once.
     let mut editor = LineEditor::<4>::new();
@@ -1278,7 +1278,7 @@ fn every_line_state_and_host_failure_has_its_error_line() {
         let mut out = AnswerBuf::<ANSWER_MAX>::new();
         assert!(respond(&fed, &mut host, &mut out));
         assert!(out.as_str().starts_with(start), "{}", out.as_str());
-        assert!(out.as_str().ends_with("\r\napp> "));
+        assert!(out.as_str().ends_with("\r\nAPP> "));
     }
     let forced = [
         (FieldError::NoRoom, "NO_ROOM"),
@@ -1372,7 +1372,7 @@ fn the_answer_buffer_stores_whole_writes_only() {
 fn the_payload_parsing_rule_finds_the_data_lines_and_the_final_line() {
     // Skip lines that start with the prompt (prompt and echo), collect KEY: value lines, the
     // answer ends at the first line that is OK / starts with OK or ERROR.
-    let session = "app> STATUS\nGA: 1\nHEALTH: ok\nOK #t1\napp> FRU GET X\nERROR ARGS: bad\napp> ";
+    let session = "APP> STATUS\nGA: 1\nHEALTH: ok\nOK #t1\nAPP> FRU GET X\nERROR ARGS: bad\nAPP> ";
     let mut data = Vec::new();
     let mut last = None;
     for line in session.lines().filter(|l| !l.starts_with(PROMPT)) {
@@ -1389,7 +1389,7 @@ fn the_payload_parsing_rule_finds_the_data_lines_and_the_final_line() {
         Some("ERROR ARGS: x")
     );
     assert_eq!(final_line("OK\n"), Some("OK"));
-    assert_eq!(final_line("app> OK\n"), None);
+    assert_eq!(final_line("APP> OK\n"), None);
 }
 
 // ---- a whole session ----
@@ -1406,13 +1406,13 @@ fn a_session_prints_as_the_documents_show_it() {
     let devid = hex_text(&DEVICE_IDENTITY.response_data());
     let want = format!(
         "IPMC application port, {fw} v0.1.0, Tier {tier}, protocol 2. Type HELP or ?.\n\
-         app> HELP\n{HELP_TABLE}OK\n\
-         app> STATUS\n{}\
-         app> FRU FIELDS\n{FIELD_LINES}OK\n\
-         app> FRU SET BOARD_SERIAL 1234567890123456789012345\n\
+         APP> HELP\n{HELP_TABLE}OK\n\
+         APP> STATUS\n{}\
+         APP> FRU FIELDS\n{FIELD_LINES}OK\n\
+         APP> FRU SET BOARD_SERIAL 1234567890123456789012345\n\
          ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n\
-         app> IPMI 06 01\nCC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n\
-         app> FRU SAVE\nSAVE: done\nOK\napp> ",
+         APP> IPMI 06 01\nCC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n\
+         APP> FRU SAVE\nSAVE: done\nOK\nAPP> ",
         "IPMB_ADDRESS: 82h\nGA: 1\nFRU_STATE: M4 FRU Active\nPAYLOAD_POWER: on\nHEALTH: ok\nNVMRO: deasserted\nUPTIME: 0d 00:17:48\nOK\n"
     );
     assert_eq!(text, want);

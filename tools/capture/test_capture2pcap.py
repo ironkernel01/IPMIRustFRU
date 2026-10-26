@@ -13,7 +13,7 @@ import capture2pcap  # noqa: E402
 TSHARK = r"C:\Program Files\Wireshark\tshark.exe"
 
 # A terminal session around one dump: a request in, a response out, a failed out, a text line.
-DUMP = '''ipmc> debug dump
+DUMP = '''CLI> debug dump
 # IPMC capture: ipmc-nucleo-f401re v0.1.0, ipmc-core v0.1.0, IPMB address 82h, Tier 3, uptime 130000 ms, 4 records, 0 overwritten
 rec,time_ms,type,bus,dir,status,len,summary,bytes
 0,1000,FRAME,A,IN,rx,7,"20h->82h App Req Get Device ID seq 01h",82 18 66 20 04 01 DB

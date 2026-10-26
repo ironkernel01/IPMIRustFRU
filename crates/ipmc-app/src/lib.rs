@@ -31,7 +31,7 @@
 //! There is one mode. A person at a terminal reads it as it is; a payload CPU parses it with
 //! three rules. The port is plain ASCII at 115200 baud, 8N1 (`IPMC_APP_UART_BAUD`).
 //!
-//! - The IPMC prints a start-up banner, one line, then the prompt `app> ` (`PROMPT`, defs.rs `IPMC_APP_PROMPT`). It prints
+//! - The IPMC prints a start-up banner, one line, then the prompt `APP> ` (`PROMPT`, defs.rs `IPMC_APP_PROMPT`). It prints
 //!   the prompt again after every answer.
 //! - It echoes every printable byte it receives, erases with BS SP BS when it receives backspace
 //!   (08h or 7Fh), and takes a request line at CR, LF or CR LF (one line end; no empty second
@@ -60,7 +60,7 @@
 //! ## The parsing rule for a payload CPU
 //!
 //! 1. Send the request line (CR LF at the end).
-//! 2. Skip every line that starts with `app> ` (the prompt, and the prompt joined with the echo
+//! 2. Skip every line that starts with `APP> ` (the prompt, and the prompt joined with the echo
 //!    of your own line).
 //! 3. Collect the lines that look like `KEY: value`.
 //! 4. The answer ends at the first line that is `OK`, starts with `OK ` or starts with `ERROR `
@@ -93,11 +93,11 @@
 //!
 //! # A session
 //!
-//! `>` is not printed; the text below is what the terminal shows (typed text after `app> `).
+//! `>` is not printed; the text below is what the terminal shows (typed text after `APP> `).
 //!
 //! ```text
 //! IPMC application port, ipmc-nucleo-f401re v0.1.0, Tier 1, protocol 2. Type HELP or ?.
-//! app> STATUS
+//! APP> STATUS
 //! IPMB_ADDRESS: 82h
 //! GA: 1
 //! FRU_STATE: M4 FRU Active
@@ -106,17 +106,17 @@
 //! NVMRO: deasserted
 //! UPTIME: 0d 00:17:48
 //! OK
-//! app> #a7 FRU SET BOARD_SERIAL 1234567890123456789012345
+//! APP> #a7 FRU SET BOARD_SERIAL 1234567890123456789012345
 //! ERROR #a7 TOO_LONG: BOARD_SERIAL is at most 24 characters
-//! app> FRU SET BOARD_SERIAL 00:11:22:33:44:55
+//! APP> FRU SET BOARD_SERIAL 00:11:22:33:44:55
 //! BOARD_SERIAL: 00:11:22:33:44:55
 //! OK
-//! app> IPMI 06 01
+//! APP> IPMI 06 01
 //! CC: 00h
 //! DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00
 //! COMMAND: App Get Device ID
 //! OK
-//! app>
+//! APP>
 //! ```
 //!
 //! The commands are `HELP`, `?`, `INFO`, `STATUS`, `FRU STATE`, `FRU FIELDS`, `FRU GET`,

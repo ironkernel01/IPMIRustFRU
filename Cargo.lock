@@ -138,6 +138,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipmc-log"
+version = "0.1.0"
+dependencies = [
+ "ipmc-core",
+ "ipmc-defs",
+]
+
+[[package]]
 name = "ipmc-menu"
 version = "0.1.0"
 dependencies = [

@@ -198,9 +198,18 @@ pub const IPMC_APP_UART_TX_BUF: usize = 1024;
 pub const IPMC_APP_LINE_MAX: usize = 128;
 /// most application port bytes one main-loop pass takes (1..=IPMC_APP_UART_RX_BUF)
 pub const IPMC_APP_BYTES_PER_POLL: usize = 32;
-/// application port prompt, printed after the banner and after every answer; the payload CPU skips
-/// every line that starts with it (1..=16 printable ASCII bytes, the last one a space)
-pub const IPMC_APP_PROMPT: &str = "app> ";
+/// application port prompt (USART1), printed after the banner and after every answer; the payload
+/// CPU skips every line that starts with it (1..=16 printable ASCII bytes, the last one a space)
+pub const IPMC_APP_PROMPT: &str = "APP> ";
+/// bootloader command-mode prompt (Phase 12, Documentation/ipmc_boot_plan.md); same rules as
+/// IPMC_APP_PROMPT (1..=16 printable ASCII bytes, the last one a space)
+pub const IPMC_BOOT_PROMPT: &str = "BOOT> ";
+/// name the firmware and the bootloader print for the console UART (USART2); a PC's port number is
+/// not known to the firmware and is never printed (1..=8 printable ASCII bytes, no space)
+pub const IPMC_CONSOLE_UART_NAME: &str = "CLI";
+/// name the firmware and the bootloader print for the application UART (USART1); same rules as
+/// IPMC_CONSOLE_UART_NAME
+pub const IPMC_APP_UART_NAME: &str = "APP";
 /// true = the console FRU menu sets every FRU field (SET) and restores the built image (RESTORE);
 /// false = the console FRU menu is read only (SHOW, DUMP, STORE, FIELDS, GET) and the SET and
 /// RESTORE commands do not exist
@@ -219,8 +228,9 @@ pub const IPMC_MENU_TOKENS_MAX: usize = 40;
 pub const IPMC_FRU_DUMP_BYTES_PER_LINE: usize = 16;
 /// firmware name in the banner and SYS VERSION
 pub const IPMC_FW_NAME: &str = "ipmc-nucleo-f401re";
-/// root prompt text of the console menu
-pub const IPMC_CONSOLE_PROMPT: &str = "ipmc";
+/// root prompt text of the console menu (1..=16 printable ASCII bytes, no space); the menu appends
+/// the group path and `> `, so the prompts read `CLI> ` and `CLI/sensors> `
+pub const IPMC_CONSOLE_PROMPT: &str = "CLI";
 /// lowest LED blink rate, centihertz (0.01 Hz); 0 would be off
 pub const IPMC_LED_RATE_MIN_CHZ: u32 = 1;
 /// highest LED blink rate, centihertz (50 Hz); the 1 ms tick toggles twice per flash

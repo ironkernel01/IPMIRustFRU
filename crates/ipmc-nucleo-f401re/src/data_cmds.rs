@@ -48,7 +48,7 @@ const DUMP_BYTES_PER_LINE: usize = ipmc_defs::IPMC_FRU_DUMP_BYTES_PER_LINE;
 // put in front of it; a listing that could be longer prints its first part and says what is left
 // (the way to see the rest is the line it prints). Every size below counts a line end as two
 // bytes (CR LF) and uses the worst text of each row, worked out beside it. `DEBUG DUMP` is not bound
-// here: it is a paced job (`debug_cmds.rs`, `DumpJob`). The commands not named here print a fixed
+// here: it is a paced job (`log_cmds.rs`, ipmc-log `DumpJob`). The commands not named here print a fixed
 // set of lines of fewer than 128 bytes each.
 
 /// SLACK -- room left in the ring for what is still in it when a command starts (the echo of the

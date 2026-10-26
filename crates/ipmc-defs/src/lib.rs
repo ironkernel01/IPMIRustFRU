@@ -249,23 +249,46 @@ const _: () = assert!(
     IPMC_APP_BYTES_PER_POLL >= 1 && IPMC_APP_BYTES_PER_POLL <= IPMC_APP_UART_RX_BUF,
     "IPMC_APP_BYTES_PER_POLL must be 1..=IPMC_APP_UART_RX_BUF"
 );
-// The prompt: 1..=16 bytes of printable ASCII (20h..=7Eh), ending in a space, so a request echoed
-// after it is one line that starts with the prompt.
-const _: () = {
-    let prompt = IPMC_APP_PROMPT.as_bytes();
-    assert!(
-        !prompt.is_empty() && prompt.len() <= 16 && prompt[prompt.len() - 1] == b' ',
-        "IPMC_APP_PROMPT must be 1..=16 bytes and end in a space"
-    );
+// Text defines that reach a terminal. `printable_len_ok` checks 1..=max bytes of printable ASCII
+// (20h..=7Eh). With `space_end` the last byte must be a space and earlier spaces are allowed
+// (a prompt); without it no byte is a space (a name).
+const fn printable_len_ok(text: &str, max: usize, space_end: bool) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() || bytes.len() > max || (space_end && bytes[bytes.len() - 1] != b' ') {
+        return false;
+    }
+    let lowest = if space_end { 0x20 } else { 0x21 };
     let mut i = 0;
-    while i < prompt.len() {
-        assert!(
-            prompt[i] >= 0x20 && prompt[i] <= 0x7E,
-            "IPMC_APP_PROMPT must be printable ASCII"
-        );
+    while i < bytes.len() {
+        if bytes[i] < lowest || bytes[i] > 0x7E {
+            return false;
+        }
         i += 1;
     }
-};
+    true
+}
+// A prompt of a request/answer port ends in a space, so a request echoed after it is one line that
+// starts with the prompt.
+const _: () = assert!(
+    printable_len_ok(IPMC_APP_PROMPT, 16, true),
+    "IPMC_APP_PROMPT must be 1..=16 printable ASCII bytes and end in a space"
+);
+const _: () = assert!(
+    printable_len_ok(IPMC_BOOT_PROMPT, 16, true),
+    "IPMC_BOOT_PROMPT must be 1..=16 printable ASCII bytes and end in a space"
+);
+const _: () = assert!(
+    printable_len_ok(IPMC_CONSOLE_UART_NAME, 8, false),
+    "IPMC_CONSOLE_UART_NAME must be 1..=8 printable ASCII bytes, no space"
+);
+const _: () = assert!(
+    printable_len_ok(IPMC_APP_UART_NAME, 8, false),
+    "IPMC_APP_UART_NAME must be 1..=8 printable ASCII bytes, no space"
+);
+const _: () = assert!(
+    printable_len_ok(IPMC_CONSOLE_PROMPT, 16, false),
+    "IPMC_CONSOLE_PROMPT must be 1..=16 printable ASCII bytes, no space"
+);
 const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,
     "IPMC_MENU_LINE_MAX must be 1..IPMC_UART_RX_BUF (usable ring bytes must cover a line)"
@@ -320,10 +343,7 @@ const _: () = assert!(
     IPMC_LED_ACTIVITY_HOLD_MS > 0,
     "IPMC_LED_ACTIVITY_HOLD_MS must be above 0"
 );
-const _: () = assert!(
-    !IPMC_FW_NAME.is_empty() && !IPMC_CONSOLE_PROMPT.is_empty(),
-    "IPMC_FW_NAME and IPMC_CONSOLE_PROMPT must not be empty"
-);
+const _: () = assert!(!IPMC_FW_NAME.is_empty(), "IPMC_FW_NAME must not be empty");
 
 // ---- clock ----
 

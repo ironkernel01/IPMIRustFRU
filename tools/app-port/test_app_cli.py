@@ -18,7 +18,7 @@ import defs  # noqa: E402  (tools/defs.py)
 class FakeTransport:
     """Records writes; read_line returns scripted lines, then None (a timeout).
 
-    Like the IPMC it echoes each request it is sent: the line `app> ` and the request text comes
+    Like the IPMC it echoes each request it is sent: the line `APP> ` and the request text comes
     before the scripted lines (`echo=False` turns that off). As on the serial port, `sync` reads
     the prompt, so the echo of the request written right after a sync has no prompt in front.
     `sync` records that the client synchronised and returns `sync_ok`.
@@ -62,7 +62,7 @@ class FakeTransport:
 
 # What the IPMC prints for `STATUS` typed at the prompt: the prompt and the echo share a line.
 STATUS_ANSWER = [
-    "app> STATUS",
+    "APP> STATUS",
     "IPMB_ADDRESS: 82h",
     "GA: 1",
     "FRU_STATE: M4 FRU Active",
@@ -86,7 +86,7 @@ class ParsingTests(unittest.TestCase):
 
     def test_an_error_line_ends_the_answer_with_its_code_and_sentence(self):
         transport = FakeTransport(
-            ["app> FRU GET X", "ERROR ARGS: unknown field 'X'; FRU FIELDS lists them"]
+            ["APP> FRU GET X", "ERROR ARGS: unknown field 'X'; FRU FIELDS lists them"]
         )
         answer = app_cli.Client(transport, use_tags=False).request("FRU GET X")
         self.assertFalse(answer.ok)
@@ -149,7 +149,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(transport.events, ["sync", "write", "write"])
 
     def test_without_tags_the_echo_of_ok_is_not_its_answer(self):
-        # The request `OK` is echoed as `app> OK`; the answer is the ERROR line behind it.
+        # The request `OK` is echoed as `APP> OK`; the answer is the ERROR line behind it.
         error = "ERROR UNKNOWN: unknown command 'OK'; type HELP or ?"
         transport = FakeTransport([error])
         answer = app_cli.Client(transport, use_tags=False).request("OK")
@@ -173,7 +173,7 @@ class SyncTests(unittest.TestCase):
     def test_a_line_is_the_echo_only_when_the_prompt_is_followed_by_exactly_the_request(self):
         # The echo of an earlier request (a late answer) does not make the final line trusted.
         transport = FakeTransport(
-            ["app> STATUS", "GA: 1", "OK", "app> INFO", "FIRMWARE: x", "OK"], echo=False
+            ["APP> STATUS", "GA: 1", "OK", "APP> INFO", "FIRMWARE: x", "OK"], echo=False
         )
         client = app_cli.Client(transport, use_tags=False)
         answer = client.request("INFO")
@@ -211,7 +211,7 @@ class SyncTests(unittest.TestCase):
 
         class FakeSerial:
             def __init__(self, port, baud, timeout):
-                self.reply = b"\r\napp> "
+                self.reply = b"\r\nAPP> "
 
             def reset_input_buffer(self):
                 calls.append("reset")
@@ -233,18 +233,18 @@ class SyncTests(unittest.TestCase):
         try:
             transport = app_cli.SerialTransport("COM9", 115200, 1.0)
             calls.clear()
-            self.assertTrue(transport.sync("app> "))
+            self.assertTrue(transport.sync("APP> "))
             self.assertEqual(
                 calls,
                 [
                     "reset",
                     ("write", b"\r"),
                     "flush",
-                    ("read_until", b"app> ", app_settings.SYNC_READ_MAX),
+                    ("read_until", b"APP> ", app_settings.SYNC_READ_MAX),
                 ],
             )
             transport._serial.reply = b"garbage"
-            self.assertFalse(transport.sync("app> "))
+            self.assertFalse(transport.sync("APP> "))
         finally:
             if saved is None:
                 del sys.modules["serial"]
@@ -254,7 +254,7 @@ class SyncTests(unittest.TestCase):
 
 class TagTests(unittest.TestCase):
     def test_a_request_goes_out_with_a_tag_and_crlf_and_the_tagged_answer_returns(self):
-        transport = FakeTransport(["app> #t0001 FRU SAVE", "SAVE: done", "OK #t0001"])
+        transport = FakeTransport(["APP> #t0001 FRU SAVE", "SAVE: done", "OK #t0001"])
         client = app_cli.Client(transport, counter_start=0)
         answer = client.request("FRU SAVE")
         self.assertEqual(answer.final, "OK #t0001")
@@ -430,7 +430,7 @@ class SerialOpenTests(unittest.TestCase):
 class RunTests(unittest.TestCase):
     def test_requests_print_the_data_lines_and_the_final_line_and_report_failure(self):
         transport = FakeTransport(
-            ["app> A", "KEY: 1", "OK", "app> B", "ERROR UNKNOWN: unknown command 'B'; type HELP or ?"]
+            ["APP> A", "KEY: 1", "OK", "APP> B", "ERROR UNKNOWN: unknown command 'B'; type HELP or ?"]
         )
         client = app_cli.Client(transport, use_tags=False)
         lines = []
@@ -464,12 +464,12 @@ class RunTests(unittest.TestCase):
 
 class RawTests(unittest.TestCase):
     def test_raw_passes_keys_to_the_port_and_bytes_back_until_ctrl_right_bracket(self):
-        transport = FakeTransport([], available=[b"app> ", b"", b"INFO\r\n"])
+        transport = FakeTransport([], available=[b"APP> ", b"", b"INFO\r\n"])
         keys = iter([b"I", None, b"N", app_cli.RAW_QUIT, b"never"])
         shown = []
         app_cli.run_raw(transport, lambda: next(keys), shown.append)
         self.assertEqual(transport.written, [b"I", b"N"])
-        self.assertEqual(shown, [b"app> ", b"INFO\r\n"])
+        self.assertEqual(shown, [b"APP> ", b"INFO\r\n"])
 
     def test_raw_ends_when_idle_says_so(self):
         transport = FakeTransport([])

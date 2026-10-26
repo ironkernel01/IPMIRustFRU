@@ -30,6 +30,7 @@ mod debug_cmds;
 mod eval;
 mod fru_log;
 mod ipmb_link;
+mod log_cmds;
 mod sensing;
 
 use cortex_m_rt::entry;

@@ -26,13 +26,13 @@
 //! Nothing here blocks or waits.
 
 use crate::addr::AddrInfo;
-use crate::capture::{CommandName, CoreNames, NetFnName, TxFault};
 use crate::cmd::app::CMD_GET_DEVICE_ID;
 use crate::commands::{Command, COMMANDS};
 use crate::dispatch::{dispatch_with, Context};
 use crate::dupcache::{CacheEntry, DupCache, Key};
 use crate::ext::Extension;
 use crate::ipmb::{self, IpmbError, IPMB_MAX_LEN, NETFN_APP};
+use crate::names::{CommandName, CoreNames, NetFnName, TxFault};
 use crate::queue::{Bus, EgressFrame, EgressQueue, Fifo};
 use crate::requester::Requester;
 use crate::sensor::{LinkBus, LinkSensor, LocalStatus};

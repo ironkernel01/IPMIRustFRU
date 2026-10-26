@@ -70,7 +70,7 @@ def line_max(path=DEFS_PATH):
 
 
 # The prompt used when defs.rs is not found.
-PROMPT_FALLBACK = "app> "
+PROMPT_FALLBACK = "APP> "
 
 
 def prompt(path=DEFS_PATH):

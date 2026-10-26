@@ -1,0 +1,11 @@
+[package]
+name = "ipmc-log"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ipmc-core = { path = "../ipmc-core" }
+ipmc-defs = { path = "../ipmc-defs" }
+
+[dev-dependencies]
+ipmc-core = { path = "../ipmc-core", features = ["recording"] }

@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 10-25-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 10-26-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -72,7 +72,7 @@ to `diagrams/out/png/`).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -126,7 +126,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -172,7 +172,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -208,7 +208,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-023 | The optional speed byte of Set IPMB State sets each bus to 100 kHz (00b) or, at Tier-3 on a fitted bus, 400 kHz (01b); every other value, a reserved bit and 400 kHz below Tier-3 answer CCh with no change; every bus starts and restarts at 100 kHz | Rules 4.1.1-4.3, 4.1.1-4.4, 4.1.1-14 | `cmd/vita.rs`, `link.rs` `plan_ipmb_speed` |
 | FR-024 | A Warm Reset request (commercial release build) restarts the link state and the requester without a processor reset, once its response has left and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.3 | `reset_gate.rs`, `ipmb_link.rs`, `link.rs` `restarted` |
 | FR-025 | A Cold Reset of the payload (commercial release build) holds PAYLOAD_RST_OUT_N (PA9, open drain) low for `IPMC_PAYLOAD_RESET_PULSE_MS` without blocking the main loop; the FRU state does not change | Rule 4.1.2-9 | `reset_pulse.rs`, `sensing.rs` |
-| FR-026 | Every whole IPMB frame the IPMC receives (before the parser) or sends (with its outcome) and every trace line goes into a RAM ring of `IPMC_LOG_SIZE` bytes, oldest overwritten first; the console dumps it as CSV or as trace rows | owner, Phase 11 (PLAN, 10-25-2026) | `capture.rs`, `debug_cmds.rs`, `ipmb_link.rs` |
+| FR-026 | Every whole IPMB frame the IPMC receives (before the parser) or sends (with its outcome) and every trace line goes into a RAM ring of `IPMC_LOG_SIZE` bytes, oldest overwritten first; the console dumps it as CSV or as trace rows | owner, Phase 11 (PLAN, 10-25-2026) | `ipmc-log`, `log_cmds.rs`, `ipmb_link.rs` |
 | FR-027 | A payload CPU on APP_UART gets, per request line, zero or more `KEY: value` data lines and exactly one final line (`OK` or `ERROR <CODE>: <sentence>`), with the optional tag on the final line, in text a person reads and a parser splits; a `FRU SET` of a unit field rewrites that field in place, moves no area and goes to the flash through the Write FRU Data save path | owner, Phase 11 (PLAN, 10-25-2026) | `ipmc-app`, `app_port.rs`, `ipmc-fru/src/unit.rs` |
 
 ### Performance requirements
@@ -234,7 +234,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -249,7 +249,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 
 Source: `diagrams/src/ipmc-software.js`, sheet 1.
 
-The code is a Cargo workspace of nine crates plus the firmware crate, which is its own
+The code is a Cargo workspace of ten crates plus the firmware crate, which is its own
 workspace (it builds only for `thumbv7em-none-eabihf`). Dependencies point one way: the two
 binaries at the top, the IPMI logic in the middle, the configuration reader at the bottom. The
 bridge crate `ipmc-ext` sits between the IPMI logic and the two binaries; it is the only place
@@ -260,7 +260,8 @@ the private Tier-2/3 extension enters the build.
 | `ipmc-defs` | `no_std` library | the build configuration as Rust (`src/defs.rs`, and the extension's `defs_tier23.rs` when the extension is built in): one typed `pub const` per define, no parser, compile-time guards on every value, the IPMB timing arithmetic (`i2c_timing.rs`) and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
 | `ipmc-wire` | `no_std` library | IPMI byte primitives: zero checksum, const record builder, type/length ASCII field, CRC-32, hex-byte parser |
 | `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the FRU field editor (`unit.rs`) and the manufacturing date (`date.rs`), the RAM scratchpad (`FruStore`) and the flash store (`persist`) |
-| `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, byte ring, capture log, command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
+| `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, byte ring, shared names (`names.rs`), command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
+| `ipmc-log` | `no_std` library, `forbid(unsafe_code)`, no allocator | the capture log and the logging logic of the DEBUG menu: record ring (`record.rs`), CSV and trace printers (`print.rs`), the paced dump (`dump.rs`), the trace tee (`tee.rs`) and the log switches with their status lines (`switches.rs`); depends on `ipmc-core` and `ipmc-defs` |
 | `ipmc-ext` | `no_std` library, `forbid(unsafe_code)` | the bridge: `ipmc_ext::Active` is `NoExtension` in the Tier-1 build and the extension's state when `ipmc-defs` found it; the firmware and the emulator hold one `Active` |
 | `ipmc-sensors` | `no_std` library | sensor and board-I/O HAL: four traits, hardware-free evaluation, drivers (simulation, STM32F401 ADC/GPIO behind feature `stm32f401`, example I2C/SPI parts), board table, sampling monitor, payload reset pulse timing, GPIO pin ownership |
 | `ipmc-menu` | `no_std` library, no dependencies besides `ipmc-defs` | the console menu engine (MenuBuilder rules, tiered groups) |
@@ -318,7 +319,7 @@ the private Tier-2/3 extension enters the build.
   leaves the previous record loadable. The save that finds the sector full erases it and writes
   the newest image first (owner decision 10-25-2026, no second copy): a power cut between that
   erase and that write loses the stored image, and the next start-up loads the built image.
-- The capture log (`ipmc-core/src/capture.rs`) is one byte ring of whole records. Every trace
+- The capture log (`ipmc-log/src/record.rs`) is one byte ring of whole records. Every trace
   sink the firmware hands to the core is a `LoggedTrace`, which records the line and prints it on
   the console unless the IPMI console trace is off (section 10.11).
 - Both UART ports run one driver (`bsp/uart.rs`) with a receive and a transmit ring each; a
@@ -346,7 +347,7 @@ the private Tier-2/3 extension enters the build.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -421,7 +422,7 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -547,11 +548,13 @@ decision 24).
 | `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) takes the output in pieces: the output buffer drains into it across main-loop passes (`drain`) and no guard ties the ring to `ANSWER_MAX`; the ring holds `IPMC_APP_UART_TX_BUF` - 1 bytes at once |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
-| `IPMC_APP_PROMPT` | `app> ` | application port prompt, printed after the banner and after every answer and in front of the echo of every request; 1..=16 printable ASCII bytes, the last a space (`tools/app-port/app_cli.py` reads it through `tools/defs.py`) |
+| `IPMC_APP_PROMPT` | `APP> ` | application port prompt, printed after the banner and after every answer and in front of the echo of every request; 1..=16 printable ASCII bytes, the last a space (`tools/app-port/app_cli.py` reads it through `tools/defs.py`) |
+| `IPMC_BOOT_PROMPT` | `BOOT> ` | bootloader command-mode prompt (Phase 12); same rules as `IPMC_APP_PROMPT` |
+| `IPMC_CONSOLE_UART_NAME`, `IPMC_APP_UART_NAME` | `CLI`, `APP` | the names the firmware and the bootloader print for USART2 and USART1 (`SYS STATUS` lines `CLI UART:` and `APP UART:`, the `APP UART not started` line); 1..=8 printable ASCII bytes, no space; a PC's port number is never printed |
 | `IPMC_APP_FRU_WRITE` | `true` | the application port may `FRU SET` the unit fields and run the IPMI Write FRU Data request; false refuses both with `ERROR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `FRU GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
 | `IPMC_MENU_LINE_MAX`, `IPMC_MENU_TOKENS_MAX` | 128, 40 | console line and token limits |
 | `IPMC_FRU_DUMP_BYTES_PER_LINE` | 16 | bytes on one line of `FRU DUMP` (1..=16) |
-| `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `ipmc` | firmware name of the banner, `SYS VERSION`, the application port banner and its `INFO` answer; root prompt text |
+| `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `CLI` | firmware name of the banner, `SYS VERSION`, the application port banner and its `INFO` answer; root prompt text (1..=16 printable ASCII bytes, no space; the menu appends the group path and `> `) |
 | `IPMC_HSE_HZ`, `IPMC_SYSCLK_HZ` | 8000000, 84000000 | clock input and system clock (PLL values checked at compile time) |
 | `IPMC_LED_*`, `IPMC_FAULT_BLINK_CHZ` | 1 Hz heartbeat, 10 Hz activity, 5 Hz fault | LD2 patterns (centihertz) |
 | `IPMC_ADC_INTERNAL_SOURCE` | `Source::Hw` | VDDA and die temperature from ADC1 |
@@ -603,7 +606,7 @@ Pin assignments are not in `defs.rs`: they live in the owning board-support modu
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -948,17 +951,23 @@ N - 1 bytes usable (one slot stays empty), no allocator, every index masked and 
 checked. The capture log stores its records in it and the firmware's UART driver keeps its
 receive and transmit queues in it.
 
-`crates/ipmc-core/src/capture.rs` - the capture log (section 10.11). `CaptureLog<N>` is a
-`ByteRing` of whole records, `DefaultLog` the size of `IPMC_LOG_SIZE`; `frame` adds a whole IPMB
-frame with its bus, direction and `FrameStatus` (`Received`, `Injected`, `Sent` or
-`Failed(TxFault)`), `text` adds a trace line cut at `IPMC_LOG_TEXT_MAX`, and a record that does not
-fit drops the oldest whole records first. `Record` and `Kind` hand a held record out; the
-printers `CsvHeader`, `CsvRow` and `TraceRow` are `Display` types, the same ones the live I2C
-trace uses. `Names` and `CoreNames` give a command its name (the Tier-1 table, then the
-extension, then Platform Event, the one request the IPMC sends). `DumpCursor` walks the records
-held when a dump starts, a few rows per main-loop pass, and counts a record the ring overwrote
-meanwhile. `CaptureTrace` is the `Trace` that records every line and forwards it to the console
-when asked; `format_cut` and `Bounded` format a line into a stack buffer and cut it with `...`.
+`crates/ipmc-core/src/names.rs` - the names and bounded text the link layer and the printers
+share. `TxFault` (why a transmission failed) and `FaultMeaning`; `Names` and `CoreNames` give a
+command its name (the Tier-1 table, then the extension, then Platform Event, the one request the
+IPMC sends); `NetFnName` and `CommandName`; `format_cut` and `Bounded` format a line into a stack
+buffer and cut it with `...`; `HexBytes`.
+
+`crates/ipmc-log` - the capture log and all the logging logic of the DEBUG menu (section 10.11),
+so a person looks in one place. It depends on `ipmc-core` (`names.rs`, `ring.rs`, `ipmb.rs`); the
+core never depends on it.
+
+| File | Holds |
+|---|---|
+| `src/record.rs` | the record layout, `CaptureLog<N>` (a `ByteRing` of whole records), `DefaultLog` (the size of `IPMC_LOG_SIZE`), `Dir`, `FrameStatus` (`Received`, `Injected`, `Sent` or `Failed(TxFault)`), `Stats`, `Record`, `Kind`; `frame` adds a whole IPMB frame, `text` a trace line cut at `IPMC_LOG_TEXT_MAX`; a record that does not fit drops the oldest whole records first |
+| `src/print.rs` | the printers `CsvHeader`, `CsvRow` and `TraceRow` (`Display` types, the same ones the live I2C trace uses) |
+| `src/dump.rs` | `DumpCursor` (walks the records held when a dump starts and counts a record the ring overwrote meanwhile), `DumpFormat` (CSV or TRACE), `DumpHeader` (the first line), `DumpSink` (where a dump prints) and `DumpJob` (a few rows per main-loop pass while the sink has room for `ROW_MAX`) |
+| `src/tee.rs` | `CaptureTrace`, the `Trace` that records every line and forwards it to the console when asked |
+| `src/switches.rs` | `LogState` (the capture log, the IPMI console trace switch, the I2C trace switch), `TraceWhat`, and the `Display` types `LogLine` and `SwitchLines` for the status lines |
 
 ### 6.4 `ipmc-sensors`: sensors and board I/O
 
@@ -1012,11 +1021,12 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | File | Role |
 |---|---|
 | `src/main.rs` | start-up order (section 8.3) and the main loop: `console.poll`, `console.service_app`, `console.service_sensors`, `console.service_link`, `wfi` (the evaluation image also checks the evaluation period) |
-| `src/ipmb_link.rs` | owns the static `Link`, the dispatch `Context`, the `ipmc_ext::Active` extension, the `ResetGate`, the frame-queue consumers, the master, the fault trackers and the FRU log; `service` is the IPMB main-loop step (section 10.2) and ends with `service_reset` and `apply_bus_speeds`; `service_fru_log` saves at once while a Cold or Warm Reset is pending; `warm_reset` rebuilds the link (section 8.2); `power_on_check` and `take_hand_offs` give the sensing owner the payload power and payload reset requests of the handlers with the power-on check; `feed_sensors` calls `ext::feed_sensors`; owns the capture log: `LoggedTrace` (the trace sink that records every line and prints it unless the IPMI console trace is off), `record_frame` (every frame taken from a driver queue before the parser, and every frame handed to the master with its outcome), `status` (a line that prints whatever the console switch says), `local_request` and `inject` (the paths of `DEBUG IPMI` and `DEBUG INJECT`), `set_unit_field`; `IPMB STATS` and `IPMB STATE` commands; `stop_for_eval` (evaluation image only) |
+| `src/ipmb_link.rs` | owns the static `Link`, the dispatch `Context`, the `ipmc_ext::Active` extension, the `ResetGate`, the frame-queue consumers, the master, the fault trackers and the FRU log; `service` is the IPMB main-loop step (section 10.2) and ends with `service_reset` and `apply_bus_speeds`; `service_fru_log` saves at once while a Cold or Warm Reset is pending; `warm_reset` rebuilds the link (section 8.2); `power_on_check` and `take_hand_offs` give the sensing owner the payload power and payload reset requests of the handlers with the power-on check; `feed_sensors` calls `ext::feed_sensors`; owns the `LogState` of `ipmc-log` (`IpmbLink::log`): `LoggedTrace` (the trace sink that records every line and prints it unless the IPMI console trace is off), `record_frame` (every frame taken from a driver queue before the parser, and every frame handed to the master with its outcome), `status` (a line that prints whatever the console switch says), `local_request` and `inject` (the paths of `DEBUG IPMI` and `DEBUG INJECT`), `set_unit_field`; `IPMB STATS` and `IPMB STATE` commands; `stop_for_eval` (evaluation image only) |
 | `src/fru_log.rs` | the boot load of the FRU log before the I2C drivers start; owns `Flash` and `Persist` |
 | `src/sensing.rs` | builds the sensor backends from the source switches, owns the `Monitor` and the `PayloadResetPulse`; `serve_hand_offs` (power requests through `apply_power_request`, the payload reset pulse and its release, every main-loop pass); `start` requests payload power at boot when the power-on check allows; `SENSORS`, `POWER`, `SIM` commands |
 | `src/console.rs` | command tables (eight groups, section 7.3) and the `SYS`, `LED`, `IPMB` handlers on the `ipmc-menu` engine; banner; `SYS STATUS` with the failure counters of both UARTs; `poll_dump`, which continues a running `DEBUG DUMP` one main-loop pass at a time; `service_app` |
-| `src/debug_cmds.rs` | the `DEBUG` group (section 10.11): `STATUS`, `LOG`, `DUMP` (the `DumpJob` that prints rows while the console transmit ring has room for the longest one), `CLEAR`, `TRACE`, `EVENTS`, `IPMI`, `INJECT`, `CACHE`; `events_off_at_boot`; `local`, the function behind `DEBUG IPMI` and the application port `IPMI` command |
+| `src/debug_cmds.rs` | the `DEBUG` group (section 10.11) except the logging commands: `STATUS` (prints the `ipmc-log` status lines), `EVENTS`, `IPMI`, `INJECT`, `CACHE`; `events_off_at_boot`; `local`, the function behind `DEBUG IPMI` and the application port `IPMI` command |
+| `src/log_cmds.rs` | the logging half of the `DEBUG` group (section 10.11): `LOG`, `DUMP`, `CLEAR`, `TRACE`, each a thin wrapper that parses its words, calls `ipmc-log` and prints its `Display` lines; `ConsoleSink`, the console transmit ring as the `DumpSink` of the paced dump |
 | `src/app_port.rs` | the transport of the application port (section 7.6): `AppPort::poll` takes bytes from the APP_UART receive ring, feeds the `ipmc-app` line editor, queues the echo, the answer and the prompt in one output buffer and drains it into the transmit ring without waiting; `LinkHost`, the `AppHost` implementation over the link layer |
 | `src/data_cmds.rs` | `FRU SHOW`, `FRU DUMP`, `FRU STORE`, `FRU FIELDS`, `FRU GET`, `FRU SET`, `FRU RESTORE`, `SENSORS SDR` |
 | `src/bsp/clock.rs` | HSE bypass (HSI fallback) to 84 MHz, PLL M 8 / N 336 / P 4 / Q 7, compile-time check of the PLL against `IPMC_SYSCLK_HZ` |
@@ -1134,7 +1144,7 @@ and answers.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1268,7 +1278,7 @@ Externally visible behaviour of the commercial release build:
 
 ### 7.3 Console
 
-COM3, 115200 8N1 (`IPMC_CONSOLE_BAUD`), prompt `ipmc`. `HELP` or `?` lists the groups;
+COM3, 115200 8N1 (`IPMC_CONSOLE_BAUD`), prompt `CLI> ` (`CLI/<group>> ` inside a group; `IPMC_CONSOLE_PROMPT`). `HELP` or `?` lists the groups;
 `<GROUP> HELP` lists a group; a command is typed in full from the top level (`SENSORS SHOW`) or
 after entering its group, and `UP` or `..` leaves the group. A line holds at most 128 bytes and 40
 tokens. A syntax token in `[ ]` is required, in `{ }` optional, and a last `{NAME...}` takes every
@@ -1391,7 +1401,7 @@ existing request or answer raises it, a new command does not.
 
 #### Terminal behaviour
 
-- After reset the IPMC prints the banner, one line, and the prompt `app> `:
+- After reset the IPMC prints the banner, one line, and the prompt `APP> `:
   `IPMC application port, <firmware name> v<version>, Tier <n>, protocol <n>. Type HELP or ?.`
   The banner is not an answer, so it has no final line. The prompt comes again after every answer.
 - The IPMC echoes every printable byte it receives. Backspace (08h or 7Fh) erases the last
@@ -1431,7 +1441,7 @@ long answer drains, after which bytes are lost (counted, and the next line end i
 `LINE_DAMAGED`).
 
 Send the request with CR LF. Skip every line that starts
-with `app> ` (the prompt, and the prompt joined with the echo of the request). Collect the lines
+with `APP> ` (the prompt, and the prompt joined with the echo of the request). Collect the lines
 that look like `KEY: value`. The answer ends at the first line that is `OK`, starts with `OK ` or
 starts with `ERROR `; on `OK` the data lines are complete, on `ERROR` they are to be ignored.
 `ipmc_app::final_line` is this rule in code and the bench client `tools/app-port/app_cli.py`
@@ -1548,11 +1558,11 @@ output left in the buffer or the transmit ring keeps the reset gate from going (
 #### A session
 
 The text is the output of the unit test `a_session_prints_as_the_documents_show_it`
-for the Tier-1 build and the test host's FRU image; typed text follows `app> `:
+for the Tier-1 build and the test host's FRU image; typed text follows `APP> `:
 
 ```text
 IPMC application port, ipmc-nucleo-f401re v0.1.0, Tier 1, protocol 2. Type HELP or ?.
-app> HELP
+APP> HELP
   HELP {COMMAND...}              - List the commands, or describe one
   ? {COMMAND...}                 - Same as HELP
   INFO                           - Firmware name, version, Tier and protocol version
@@ -1564,7 +1574,7 @@ app> HELP
   FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
   IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
 OK
-app> STATUS
+APP> STATUS
 IPMB_ADDRESS: 82h
 GA: 1
 FRU_STATE: M4 FRU Active
@@ -1573,7 +1583,7 @@ HEALTH: ok
 NVMRO: deasserted
 UPTIME: 0d 00:17:48
 OK
-app> FRU FIELDS
+APP> FRU FIELDS
 BOARD_MFR: IronKernel (max 24)
 BOARD_PRODUCT: VPX Tier-1 IPMC (max 32)
 BOARD_SERIAL: IK-T1-000001 (max 24)
@@ -1588,17 +1598,17 @@ PRODUCT_SERIAL: IK-T1-000001 (max 24)
 ASSET_TAG:  (max 24)
 PRODUCT_FILE_ID:  (max 16)
 OK
-app> FRU SET BOARD_SERIAL 1234567890123456789012345
+APP> FRU SET BOARD_SERIAL 1234567890123456789012345
 ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters
-app> IPMI 06 01
+APP> IPMI 06 01
 CC: 00h
 DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00
 COMMAND: App Get Device ID
 OK
-app> FRU SAVE
+APP> FRU SAVE
 SAVE: done
 OK
-app>
+APP>
 ```
 
 <div style="page-break-after: always;"></div>
@@ -1606,7 +1616,7 @@ app>
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1642,7 +1652,7 @@ flash and, after a software reset, the request sequence words described below.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1710,7 +1720,7 @@ emulator models the board.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1780,7 +1790,7 @@ output and prints that; FRU Control still answers 00h. The emulator models the p
    blinks LD2 at 5 Hz and parks; a pin-claim conflict prints both owners and parks); then, when
    `IPMC_APP_UART_ENABLE` is 1, APP_UART on USART1 (clocked from PCLK2). A failure of the
    application port other than a pin-claim conflict does not stop the board: the console prints
-   `APP_UART not started: <reason>` after the banner. The evaluation image starts its TIM2
+   `APP UART not started: <reason>` after the banner. The evaluation image starts its TIM2
    run-time counter after the UARTs (section 8.4).
 4. IPMB pins parked as floating inputs.
 5. Sensor hardware for the groups whose source is hardware (ADC1, board GPIO).
@@ -1797,7 +1807,7 @@ output and prints that; FRU Control still answers 00h. The emulator models the p
    dispatch Context (self test runs; a stored image replaces the built one and the self test runs
    on it).
 10. Banner (the application port line and the `BOOTLOADER pin:` line included), the
-    `APP_UART not started` line when it applies, the events setting (`IPMC_EVENTS_AT_BOOT` false
+    `APP UART not started` line when it applies, the events setting (`IPMC_EVENTS_AT_BOOT` false
     makes the IPMC send itself Set Event Receiver FFh and print `Events: off from start-up`; a
     build without event messages answers C1h and prints nothing), sensor start (payload power
     requested when `IPMC_POWER_AT_BOOT` is 1 and the power-on check,
@@ -1838,7 +1848,7 @@ The evaluation image is a time-limited build of the commercial release build (ow
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1949,7 +1959,7 @@ event enable). Set Payload Mode, in the commercial release build, is its only wr
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2060,7 +2070,7 @@ enables cannot disagree.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2154,7 +2164,7 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2222,7 +2232,7 @@ the payload off at boot.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2296,7 +2306,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2344,7 +2354,7 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2394,7 +2404,7 @@ saves it after the quiet time.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2459,7 +2469,7 @@ sends at that moment is lost and recovered by the requester's retry.
 | Corrupt FRU image | `selftest::run` | Get Self Test Results 57h with bit 5 | FRU stays in M0 when found at start-up; Write FRU Data or `FRU RESTORE` repairs it |
 | Flash program, erase or verify failure | `FlashError` | console `FRU log: save failed: <name>`, `FRU STORE` | write stays pending, retried once per delay |
 | PGOOD timeout or loss | `power_fsm` | console event line, `POWER STATUS`; FRU Health is bad only while PWR_EN is asserted without PGOOD, so it returns to good once the fault releases PWR_EN | latched until `POWER OFF` or `POWER CLEAR` |
-| Pin-claim conflict, UART failure | `ports::claim`, `uart::init` | console line naming both owners, or 5 Hz LED | fail-stop (park); an application port failure other than a pin conflict prints `APP_UART not started` and the board runs without it |
+| Pin-claim conflict, UART failure | `ports::claim`, `uart::init` | console line naming both owners, or 5 Hz LED | fail-stop (park); an application port failure other than a pin conflict prints `APP UART not started` and the board runs without it |
 | UART receive ring full, overrun, transmit timeout | `uart.rs` `service`, `wait_for_room` | per-port counters in `SYS STATUS` | the byte is dropped (receive) or the bounded wait ends (transmit) |
 | Trace line without room in the console transmit ring | `print_line_or_drop` | `tx lines dropped` in `SYS STATUS` | the line is dropped whole and never stalls the IPMB; the capture log still holds it |
 | Application answer longer than the transmit ring has room for | `app_port.rs` `drain` | none (the answer is only late) | the output stays in its buffer and leaves as the ring has room; no new request is taken meanwhile, and the main loop never waits |
@@ -2470,12 +2480,12 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
 
-### 10.11 Capture log (`capture.rs`, `ipmb_link.rs`, `debug_cmds.rs`)
+### 10.11 Capture log (`ipmc-log`, `ipmb_link.rs`, `log_cmds.rs`, `debug_cmds.rs`)
 
 The capture log is the field-service record of the IPMB. A person enables it on a target system,
 reproduces a fault and mails the dump back; the dump reads the same on the console, in a
@@ -2599,7 +2609,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2669,7 +2679,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 | `Extension` | `ipmc-core::ext` | `command`, `poll`, `on_sample`, `warm_reset`, `power_on_allowed` | `NoExtension`; the Tier-2/3 extension through `ipmc_ext::Active` |
 | `MenuOutput` | `ipmc-menu` | `write_str` | firmware UART output |
 | `AppHost` | `ipmc-app::host` | `version`, `status`, `fru_state`, `unit_field`, `set_unit_field`, `ipmi`, `save_state` | `LinkHost` in the firmware `app_port.rs`, `FakeHost` in the tests |
-| `Names` | `ipmc-core::capture` | `command(netfn, cmd)` | `CoreNames` (Tier-1 table, extension, sent requests) |
+| `Names` | `ipmc-core::names` | `command(netfn, cmd)` | `CoreNames` (Tier-1 table, extension, sent requests) |
 
 ### 11.4 Concurrency model
 
@@ -2694,7 +2704,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2803,7 +2813,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2816,12 +2826,13 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 
 Source: `diagrams/src/ipmc-software.js`, sheet 4.
 
-### 13.1 Host tests (585 in the public build, `cargo test --workspace` with `IPMC_TIER23=0`, 10-25-2026)
+### 13.1 Host tests (610 in the public build, `cargo test --workspace` with `IPMC_TIER23=0`, 10-26-2026)
 
 | Crate | Covers |
 |---|---|
-| `ipmc-core` | codec, address decode, link layer (bus speed, restarted link, the failure lines of a transmission), requester timing, reset gate, Tier rules, FRU state machine including M5, Payload Mode sensor, speed byte per Tier, event enables, extension hook and the power-on check, duplicate cache, queues, byte ring, capture log (records, wrap, drop order, CSV and trace rows, dump cursor, cut lines), dispatcher, handlers (`tests/tier1_handlers.rs`), Tier-1 link rules, SDR walk, command document in step (`tests/commands_doc.rs`) |
+| `ipmc-core` | codec, address decode, link layer (bus speed, restarted link, the failure lines of a transmission), requester timing, reset gate, Tier rules, FRU state machine including M5, Payload Mode sensor, speed byte per Tier, event enables, extension hook and the power-on check, duplicate cache, queues, byte ring, names, dispatcher, handlers (`tests/tier1_handlers.rs`), Tier-1 link rules, SDR walk, command document in step (`tests/commands_doc.rs`) |
 | `ipmc-app` | line assembler (CR LF, long line, bad byte), every request of the protocol against the test host (`REQUEST_TABLE`), tags, every error code, `WRITE_DISABLED`, the `HELP` listing |
+| `ipmc-log` | capture log (records, wrap, drop order, CSV and trace rows, dump cursor and job, header line, cut lines, trace tee, switch lines) |
 | `ipmc-sensors` | evaluation, power state machine, routing, monitor and the power-request path, payload reset pulse timing, pin claims, LED level, example drivers against mock buses |
 | `ipmc-emu` | vector reader, captured frames decode and re-encode byte-identically, replay runs including the Event Receiver role, Cold and Warm Reset rebuild, the flash copy across a power cycle, serve protocol over TCP, command line |
 | `ipmc-fru` | image build, decoder, `verify`, store, the unit field editor (every field, every refusal, a MAC address in a serial), the single-sector flash log including a power cut at every word, the erase of a full sector and the settings byte |
@@ -2903,7 +2914,7 @@ procedure and expected result of each.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2980,7 +2991,7 @@ procedure and expected result of each.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-25-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">

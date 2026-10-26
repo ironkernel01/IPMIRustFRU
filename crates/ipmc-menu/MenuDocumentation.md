@@ -134,7 +134,7 @@ Rules:
   match never runs and never ends dispatch, whatever a handler would have returned.
 - Inside a group, that group's table is tried first, so its commands work without the prefix.
 - A full command (`SENSORS SHOW`) works from any level and does not change the current group.
-- A group name alone enters that group from any level. The prompt shows it (`ipmc/led> `).
+- A group name alone enters that group from any level. The prompt shows it (`CLI/led> `).
 - Top-level commands work from inside a group.
 - `HELP`, `?`, `UP` and `..` are reserved at every level and only act alone on the line.
 
@@ -291,8 +291,8 @@ the line, and the line end then reports `LineTooLong`.
 
 ## 7. Command Reference
 
-Firmware command tree (`crates/ipmc-nucleo-f401re/src/console.rs`). Prompt `ipmc> ` at the top level and
-`ipmc/<group>> ` inside a group. The table shows the full form; inside a group, drop the group
+Firmware command tree (`crates/ipmc-nucleo-f401re/src/console.rs`). Prompt `CLI> ` at the top level and
+`CLI/<group>> ` inside a group. The table shows the full form; inside a group, drop the group
 keyword. Min and Max count the tokens of the full form.
 
 ```text
@@ -384,17 +384,17 @@ a `Group` value with its own table, and the engine needs no change.
 Session example:
 
 ```text
-ipmc> led
-ipmc/led> blink 2
+CLI> led
+CLI/led> blink 2
 OK: LED blink 2.00 Hz
-ipmc/led> ..
-ipmc> sys version
+CLI/led> ..
+CLI> sys version
 ipmc-nucleo-f401re v0.1.0 (ipmc-core v0.1.0)
-ipmc> debug ipmi 06 01
+CLI> debug ipmi 06 01
 -> CC 00h, 15 bytes: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00 (App Get Device ID)
-ipmc> debug log
+CLI> debug log
 Capture log:     on, 8191 bytes, used 1204, 41 records, 0 overwritten
-ipmc> frobnicate
+CLI> frobnicate
 Error: unknown command 'frobnicate'
 Type HELP or ?
 ```

@@ -2,7 +2,7 @@
 
 The application port protocol of the IPMC: what a payload CPU on the application UART (APP_UART,
 USART1, PB6 TX and PB7 RX) can ask the IPMC, and how the IPMC answers. One text for a person at a
-terminal and a payload CPU alike: the prompt `app> `, an echo of what is typed, then for each
+terminal and a payload CPU alike: the prompt `APP> `, an echo of what is typed, then for each
 request zero or more `KEY: value` data lines and one final line, `OK` or
 `ERROR <CODE>: <sentence>`.
 

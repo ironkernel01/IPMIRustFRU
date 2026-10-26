@@ -2,12 +2,12 @@
 
 Opens a serial port, sends one request line per command-line argument (or prompts for lines)
 and prints the answers. The port speaks one readable format for a person and a payload CPU alike
-(module comment of crates/ipmc-app/src/lib.rs): the IPMC prints the prompt `app> ` and echoes
+(module comment of crates/ipmc-app/src/lib.rs): the IPMC prints the prompt `APP> ` and echoes
 what is typed; an answer is zero or more data lines `KEY: value` and one final line, `OK` or
 `ERROR <CODE>: <sentence>`, with `#tag` after the `OK` or `ERROR` when the request had a tag.
 
 The parsing rule this client follows (the rule a payload CPU follows): skip lines that start with
-`app> ` (prompt and echo); collect `KEY: value` lines; the answer ends at the first line that is
+`APP> ` (prompt and echo); collect `KEY: value` lines; the answer ends at the first line that is
 `OK` or starts with `OK ` or `ERROR `.
 
     python app_cli.py --port COM5 INFO STATUS "FRU SET ASSET_TAG rack 7" "FRU SAVE"
@@ -83,7 +83,7 @@ class SerialTransport:
     def read_line(self):
         """One line without its CR LF, or None when the timeout passed with no complete line.
 
-        The prompt `app> ` has no line end: it is returned joined with the echo that follows it,
+        The prompt `APP> ` has no line end: it is returned joined with the echo that follows it,
         so a line that starts with the prompt is a prompt or echo line.
         """
         raw = self._serial.readline()
