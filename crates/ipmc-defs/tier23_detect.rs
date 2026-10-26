@@ -62,15 +62,25 @@ fn half_checkout(present: &str, missing: &str) -> String {
     format!("half a Tier23 checkout: {present} found, {missing} missing")
 }
 
-/// parse_eval -- whether IPMC_EVAL selects the evaluation build (None = unset): unset or 0 =
-/// off, 1 = on. Err names the variable and the value for any other text, the empty string
-/// included.
-pub fn parse_eval(value: Option<&str>) -> Result<bool, String> {
+/// parse_switch -- whether the environment switch `name` is on (None = unset): unset or 0 = off,
+/// 1 = on. Err names the variable and the value for any other text, the empty string included.
+/// The one rule of IPMC_EVAL and IPMC_FIELD.
+pub fn parse_switch(name: &str, value: Option<&str>) -> Result<bool, String> {
     match value {
         None | Some("0") => Ok(false),
         Some("1") => Ok(true),
-        Some(other) => Err(format!("IPMC_EVAL is {other:?}: it must be unset, 0 or 1")),
+        Some(other) => Err(format!("{name} is {other:?}: it must be unset, 0 or 1")),
     }
+}
+
+/// parse_eval -- whether IPMC_EVAL selects the evaluation build (None = unset).
+pub fn parse_eval(value: Option<&str>) -> Result<bool, String> {
+    parse_switch("IPMC_EVAL", value)
+}
+
+/// parse_field -- whether IPMC_FIELD selects the field image (None = unset).
+pub fn parse_field(value: Option<&str>) -> Result<bool, String> {
+    parse_switch("IPMC_FIELD", value)
 }
 
 /// check_eval -- the build conditions of the evaluation build. `tier23` is whether the Tier-2/3

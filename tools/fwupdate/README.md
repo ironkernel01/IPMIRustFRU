@@ -1,0 +1,83 @@
+# fwupdate
+
+Host update tool for the IPMC bootloader (`crates/ipmc-boot`). It wakes the bootloader on the console
+(CLI) port or the application (APP) port, erases the runtime firmware sectors, loads an Intel HEX file
+record by record, verifies the image and starts it.
+
+An update erases sectors 2 to 7 (the runtime firmware) only. The FRU store (sector 1) and the
+bootloader (sector 0) stay.
+
+## Setup
+
+Python 3 and `pip install pyserial` (imported on first use; the unit tests need no serial port).
+Every value the tool chooses is in `fwu_settings.py`. The baud rates, the prompt and the line limit
+come from `crates/ipmc-defs/src/defs.rs` (`IPMC_CONSOLE_BAUD`, `IPMC_APP_UART_BAUD`,
+`IPMC_BOOT_PROMPT`, `IPMC_MENU_LINE_MAX`); the fallbacks apply when that file is absent.
+
+## Bench ports
+
+On this bench PC COM3 is the CLI port and COM5 is the APP port; any PC port works. `--port` is
+required. `--uart cli|app` (default `app`) names what the port is and picks the baud rate;
+`--baud N` overrides it.
+
+## Usage
+
+    python fwupdate.py --port COMx [--uart cli|app] [--baud N] [--enter cli|app --enter-port COMy]
+                       [--field] [--no-precheck] [--as-is] [--no-run] <action> [file.hex]
+
+Every action sends `WAKEUP` every 0.2 s first (60 s limit; `--field` has none) and prints when it
+sees the countdown line and when the `BOOT> ` prompt arrives.
+
+| Action | What it does |
+|---|---|
+| `wakeup` | wakes the bootloader and stops |
+| `info`, `verify`, `run`, `reset`, `help` | one command; prints its output; exit 0 on `OK` |
+| `erase-app`, `erase-fru` | the erase command, then `CONFIRM`; waits up to 20 s for the answer |
+| `update file.hex` | pre-check, erase APP, load, verify, run |
+
+Examples:
+
+    python fwupdate.py --port COM5 info
+    python fwupdate.py --port COM3 --uart cli verify
+    python fwupdate.py --port COM5 update ipmc-nucleo-f401re.hex
+    python fwupdate.py --port COM5 --enter app --enter-port COM5 update app.hex
+    python fwupdate.py --port COM3 --uart cli --enter cli --enter-port COM3 update app.hex
+
+`--enter` first opens `--enter-port` at the baud rate of that runtime port, sends the entry command
+(`DEBUG BOOTLOADER` on the CLI, `BOOTLOADER` on the APP port), prints the answer and closes the port.
+
+## What update does
+
+1. Reads the file (Intel HEX types 00, 01, 04, 05; 02 and 03 are refused) and builds the memory image
+   with FFh in gaps.
+2. Pre-check, refused before anything is sent, with one line naming the rule: every byte inside
+   0x08008000..0x08080000; header magic, format, size, length (multiple of 4, 0x240 to 491520), vector
+   table address; vector word 0 (8-byte aligned, SRAM) and word 1 (odd, inside the code); the SHA-256
+   recomputed with `hashlib` equals the stored digest. `--no-precheck` skips it.
+3. `ERASE APP` and `CONFIRM`, `LOAD`.
+4. Records, one at a time, each answered before the next. By default the image is re-chunked into aligned
+   32-byte records with an 04 record at each 64 KB boundary; an all-FFh chunk is skipped (the flash is
+   erased). `--as-is` sends the file's own records. An `ERR FORMAT`, `ERR CHECKSUM` or `ERR LINE_TOO_LONG`
+   answer is sent again up to 3 times; any other `ERR` stops the run and names the record number and the
+   answer. One progress line shows records, bytes and rate.
+5. The end record, `VERIFY`, then `RUN` (not with `--no-run` or `--field`).
+
+Exit codes: 0 success, 1 a refusal or an `ERR` answer, 2 usage, 3 a timeout.
+
+Time: about 30 to 85 s for today's image at 115200 baud (the six-sector erase takes up to 8 s of it).
+
+## Field procedure
+
+Fit the jumper from PC10 (CN7-1) to 3.3 V (CN7-5), then:
+
+    python fwupdate.py --port COM5 --field update app.hex
+
+The tool prints `power-cycle the board now`, waits for the bootloader without limit, updates and
+verifies, then prints `remove the BOOTLOADER jumper and power-cycle the board` and sends no `RUN`.
+
+## Tests
+
+    cd tools/fwupdate
+    python -m unittest test_fwupdate -v
+
+The tests use a fake bootloader; no board and no serial port.

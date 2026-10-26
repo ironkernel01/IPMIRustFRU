@@ -4,7 +4,7 @@
 //! Ownership: this module owns ADC1, ADC_COMMON (ADC_CCR) and the analog function of the external
 //! input pins, claimed through `ports` (owner name "adc"). The pins and the ADC channel numbers
 //! are the board's choice: the board support hands them in as an `AdcMap` (ipmc-nucleo-f401re
-//! bsp/board_pins.rs); this module holds no board pin or channel number.
+//! drivers/board_pins.rs); this module holds no board pin or channel number.
 //!
 //! Clock: ADCCLK = PCLK2 / 4 (ADC_CCR.ADCPRE = 01b). At the 84 MHz PCLK2 that is 21 MHz, within
 //! the 36 MHz limit for VDDA >= 2.4 V (DS10086 Table 66); `init` refuses a PCLK2 above 144 MHz.

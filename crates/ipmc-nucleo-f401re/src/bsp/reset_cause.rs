@@ -1,4 +1,4 @@
-// bsp/reset_cause.rs - decodes and clears the reset flags in RCC_CSR (RM0368 6.3.21).
+// reset_cause.rs - decodes and clears the reset flags in RCC_CSR (RM0368 6.3.21).
 //
 // Flags accumulate until RMVF clears them, so they are read once at start-up. Several
 // flags can be set together (power-on also sets PINRSTF and BORRSTF), so the most
@@ -8,6 +8,8 @@ use core::mem::MaybeUninit;
 use core::ptr::{addr_of_mut, write_volatile};
 
 use stm32f4::stm32f401::RCC;
+
+use crate::bsp::raw::read_raw_word;
 
 /// ResetCause -- why the MCU last reset.
 #[derive(Clone, Copy)]
@@ -67,27 +69,9 @@ const KEPT_CHECK: usize = 3;
 #[link_section = ".uninit.KEPT_SEQUENCE"]
 static mut KEPT: MaybeUninit<[u32; KEPT_WORDS]> = MaybeUninit::uninit();
 
-/// check_word -- the check word of the three data words.
-const fn check_word(seq: u32, lo: u32, hi: u32) -> u32 {
-    seq ^ lo ^ hi ^ KEPT_MAGIC
-}
-
-/// read_raw_word -- the word at `p` as an integer, however the memory got its value.
-fn read_raw_word(p: *const u32) -> u32 {
-    let value: u32;
-    // SAFETY: `p` is an aligned word inside `KEPT`, a static this module owns, so the load is
-    // valid. An `asm!` output is an initialised integer whatever the RAM held (a
-    // `read_volatile` of never-written memory is not); the value is only an integer, and the
-    // check word decides whether it means anything.
-    unsafe {
-        core::arch::asm!(
-            "ldr {v}, [{p}]",
-            p = in(reg) p,
-            v = out(reg) value,
-            options(nostack, readonly, preserves_flags)
-        );
-    }
-    value
+/// kept_check -- the check word of the three data words of `KEPT` (`ipmc_wire::check_word`).
+fn kept_check(seq: u32, lo: u32, hi: u32) -> u32 {
+    ipmc_wire::check_word([seq, lo, hi], KEPT_MAGIC)
 }
 
 /// keep_sequence -- stores the next request sequence number (6 bits) and the mask of the rqSeq
@@ -105,7 +89,7 @@ pub fn keep_sequence(next_seq: u8, recent: u64) {
         write_volatile(words.add(KEPT_SEQ), seq);
         write_volatile(words.add(KEPT_RECENT_LO), lo);
         write_volatile(words.add(KEPT_RECENT_HI), hi);
-        write_volatile(words.add(KEPT_CHECK), check_word(seq, lo, hi));
+        write_volatile(words.add(KEPT_CHECK), kept_check(seq, lo, hi));
     }
 }
 
@@ -126,7 +110,7 @@ pub fn kept_sequence(cause: ResetCause) -> (u8, u64) {
     unsafe { write_volatile(words.add(KEPT_CHECK), 0) };
     match u8::try_from(seq) {
         Ok(next_seq)
-            if matches!(cause, ResetCause::Software) && check == check_word(seq, lo, hi) =>
+            if matches!(cause, ResetCause::Software) && check == kept_check(seq, lo, hi) =>
         {
             (next_seq, u64::from(lo) | u64::from(hi) << 32)
         }
@@ -134,10 +118,10 @@ pub fn kept_sequence(cause: ResetCause) -> (u8, u64) {
     }
 }
 
-/// take -- reads the reset flags, then clears them.
-pub fn take(rcc: &RCC) -> ResetCause {
+/// read -- decodes the reset flags without clearing them.
+pub fn read(rcc: &RCC) -> ResetCause {
     let csr = rcc.csr().read();
-    let cause = if csr.lpwrrstf().bit_is_set() {
+    if csr.lpwrrstf().bit_is_set() {
         ResetCause::LowPower
     } else if csr.wwdgrstf().bit_is_set() {
         ResetCause::WindowWatchdog
@@ -153,7 +137,12 @@ pub fn take(rcc: &RCC) -> ResetCause {
         ResetCause::Pin
     } else {
         ResetCause::Unknown
-    };
+    }
+}
+
+/// take -- reads the reset flags (`read`), then clears them (RMVF).
+pub fn take(rcc: &RCC) -> ResetCause {
+    let cause = read(rcc);
     rcc.csr().modify(|_, w| w.rmvf().clear());
     cause
 }

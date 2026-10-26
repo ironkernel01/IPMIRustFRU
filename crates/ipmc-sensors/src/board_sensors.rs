@@ -25,7 +25,7 @@
 //! | PWR_EN | digital output | driven by the power state machine (eval/power_fsm.rs) |
 //!
 //! Pins and ADC channels are not named here: the board support chooses them once, in
-//! ipmc-nucleo-f401re `bsp/board_pins.rs` (external input n is the n-th entry of its ADC table). Which pin
+//! ipmc-nucleo-f401re `drivers/board_pins.rs` (external input n is the n-th entry of its ADC table). Which pin
 //! carries which signal is also listed in Documentation/nucleo_f401re_pinout.md.
 //!
 //! Each group has a source switch in defs.rs (IPMC_ADC_INTERNAL_SOURCE,
@@ -75,7 +75,7 @@ const fn dc_from_define(degrees_c: i32) -> i32 {
 pub const EXTERNAL_INPUTS: usize = RAIL_COUNT - 1;
 
 /// Abstract channel ids of the external rails: external input n (A0 = 0 .. A3 = 3). The pin and
-/// ADC channel behind each id are chosen once, by the board support (ipmc-nucleo-f401re bsp/board_pins.rs).
+/// ADC channel behind each id are chosen once, by the board support (ipmc-nucleo-f401re drivers/board_pins.rs).
 const INPUT_A0: u8 = 0;
 const INPUT_A1: u8 = 1;
 const INPUT_A2: u8 = 2;

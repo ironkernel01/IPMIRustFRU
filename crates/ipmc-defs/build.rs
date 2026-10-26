@@ -12,6 +12,8 @@
 //                 IPMC_EVAL_MINUTES, a define of defs_tier23.rs): needs the extension and
 //                 --release. The firmware crate reads the result as DEP_IPMC_DEFS_EVAL; no
 //                 other build carries evaluation code.
+//   IPMC_FIELD    unset or 0 = bench image, 1 = field image (cfg(ipmc_field): the boot
+//                 countdown is IPMC_BOOT_COUNTDOWN_FIELD). Needs no extension, any profile.
 
 use std::env;
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     println!("cargo:rerun-if-env-changed=IPMC_TIER23");
     println!("cargo:rerun-if-env-changed=IPMC_EVAL");
+    println!("cargo:rerun-if-env-changed=IPMC_FIELD");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=tier23_detect.rs");
 
@@ -80,5 +83,14 @@ fn main() {
         println!("cargo:warning=EVALUATION build");
     } else {
         println!("cargo:eval=0");
+    }
+    let field = tier23_detect::parse_field(env::var("IPMC_FIELD").ok().as_deref())
+        .unwrap_or_else(|e| panic!("{e}"));
+    if field {
+        println!("cargo:rustc-cfg=ipmc_field");
+        println!("cargo:field=1");
+        println!("cargo:warning=FIELD build");
+    } else {
+        println!("cargo:field=0");
     }
 }

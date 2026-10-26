@@ -1,4 +1,4 @@
-// bsp/eval_timer.rs - the evaluation run-time clock: TIM2 as a free-running 32-bit up-counter.
+// drivers/eval_timer.rs - the evaluation run-time clock: TIM2 as a free-running 32-bit up-counter.
 // Compiled only for the evaluation build (`cfg(ipmc_eval)`, IPMC_EVAL=1).
 //
 // Ownership: this module owns the TIM2 registers (the peripheral is moved into `start`). It
@@ -11,7 +11,7 @@
 
 use stm32f4::stm32f401::{RCC, TIM2};
 
-use super::clock::ClockInfo;
+use crate::bsp::clock::ClockInfo;
 
 /// TICK_HZ -- counter rate, Hz: 10 kHz gives 0.1 ms resolution and 7158 minutes of range in
 /// 32 bits, far past any evaluation length. The defs_tier23.rs guard on

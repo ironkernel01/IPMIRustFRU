@@ -15,7 +15,7 @@ mod syntax;
 pub use args::{optional, ArgError, Args};
 pub use line::{report_line_error, EditEvent, LineEditor, MenuError};
 pub use menu::{Group, Menu, Outcome};
-pub use syntax::{Kind, SynToken, TableError};
+pub use syntax::{eq_ignore_case, Kind, SynToken, TableError};
 
 /// MENU_LINE_MAX -- longest accepted input line in bytes (defs.rs IPMC_MENU_LINE_MAX). The firmware RX ring
 /// (IPMC_UART_RX_BUF) is sized against this value: ipmc-defs guards that a line that fills it

@@ -1,18 +1,16 @@
-// bsp/mod.rs - board support: one module per hardware access path.
+// bsp/mod.rs - the board support both images of the NUCLEO-F401RE use (the runtime firmware and
+// the sector-0 bootloader): one module per hardware access path, each with its ownership in its
+// head comment. The runtime-only hardware (IPMB masters and pins, board pins, the FRU store
+// driver) is in `drivers`, in the runtime binary's tree.
 
-pub mod board_pins;
+pub mod boot_request;
 pub mod clock;
-#[cfg(ipmc_eval)]
-pub mod eval_timer;
+pub mod cycles;
 pub mod fault;
-pub mod flash;
+pub mod flash_regs;
 pub mod ga;
-pub mod i2c_bitbang;
-pub mod i2c_hw;
-pub mod ipmb_common;
-pub mod ipmb_master;
-pub mod ipmb_pins;
 pub mod led;
+mod raw;
 pub mod reset_cause;
 pub mod static_slot;
 pub mod systick;

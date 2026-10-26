@@ -204,6 +204,16 @@ pub const IPMC_APP_PROMPT: &str = "APP> ";
 /// bootloader command-mode prompt (Phase 12, Documentation/ipmc_boot_plan.md); same rules as
 /// IPMC_APP_PROMPT (1..=16 printable ASCII bytes, the last one a space)
 pub const IPMC_BOOT_PROMPT: &str = "BOOT> ";
+/// wait after configuring the BOOTLOADER pin (PC10, pull-down) before the one read at reset, us (10..=10000); 100 us is over 100 RC time constants of the internal pull-down and the pin load
+pub const IPMC_FWU_PIN_SETTLE_US: u32 = 100;
+/// LD2 blink rate while the bootloader waits for WAKEUP or a command, centi-Hz (2 Hz, distinct from the runtime heartbeat)
+pub const IPMC_FWU_LED_WAIT_CHZ: u32 = 200;
+/// LOAD record mode ends with ERR TIMEOUT after this many seconds without a line (1..=600)
+pub const IPMC_FWU_LOAD_IDLE_S: u32 = 30;
+/// bench image: seconds a valid runtime image waits for WAKEUP on CLI or APP before it starts (0..=30); every second delays the first IPMB answer after a reset by one second
+pub const IPMC_BOOT_COUNTDOWN_BENCH: u32 = 3;
+/// field image (`gen.ps1 build -Field`): the same wait; 0 = no countdown, the image starts at once
+pub const IPMC_BOOT_COUNTDOWN_FIELD: u32 = 0;
 /// name the firmware and the bootloader print for the console UART (USART2); a PC's port number is
 /// not known to the firmware and is never printed (1..=8 printable ASCII bytes, no space)
 pub const IPMC_CONSOLE_UART_NAME: &str = "CLI";
@@ -249,9 +259,9 @@ pub const IPMC_LED_ACTIVITY_CHZ: u32 = 1000;
 pub const IPMC_LED_ACTIVITY_HOLD_MS: u32 = 200;
 
 /// HSE input, Hz: the ST-LINK MCO clock into OSC_IN (UM1724 6.7.1), used in bypass; the PLL setting
-/// in ipmc-nucleo-f401re bsp/clock.rs must produce IPMC_SYSCLK_HZ from it (compile-time check)
+/// in ipmc-nucleo-f401re src/bsp/clock.rs must produce IPMC_SYSCLK_HZ from it (compile-time check)
 pub const IPMC_HSE_HZ: u32 = 8_000_000;
-/// system clock, Hz; the PLL M, N, P, Q values in ipmc-nucleo-f401re bsp/clock.rs produce it from
+/// system clock, Hz; the PLL M, N, P, Q values in ipmc-nucleo-f401re src/bsp/clock.rs produce it from
 /// IPMC_HSE_HZ and from the 16 MHz HSI (compile-time check)
 pub const IPMC_SYSCLK_HZ: u32 = 84_000_000;
 

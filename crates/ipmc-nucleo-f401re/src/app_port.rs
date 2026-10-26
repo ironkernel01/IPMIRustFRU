@@ -30,7 +30,7 @@
 // answers the next line end `LINE_DAMAGED`. Without flow control a sender that fills the ring
 // loses bytes, with the same answer.
 //
-// Ownership: the UART driver (bsp/uart.rs) owns USART1 and its rings; this file only reads and
+// Ownership: the UART driver (ipmc-nucleo-f401re src/bsp/uart.rs) owns USART1 and its rings; this file only reads and
 // writes through its functions. The per-unit FRU fields are written through the same path as a
 // Write FRU Data from the Chassis Manager: `IpmbLink::set_unit_field` edits the RAM image and
 // marks it dirty, and `IpmbLink::service_fru_log` saves it. There is no second writer.

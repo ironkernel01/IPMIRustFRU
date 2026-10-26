@@ -5,7 +5,7 @@
 #[path = "../tier23_detect.rs"]
 mod tier23_detect;
 
-use tier23_detect::{check_eval, decide, parse_eval, parse_mode, Marker, Mode};
+use tier23_detect::{check_eval, decide, parse_eval, parse_field, parse_mode, Marker, Mode};
 
 fn markers(header: bool, lib: bool) -> [Marker<'static>; 2] {
     [
@@ -112,20 +112,6 @@ fn decide_follows_the_mode_and_the_markers() {
 }
 
 #[test]
-fn eval_parses_unset_zero_one_and_rejects_the_rest() {
-    assert_eq!(parse_eval(None), Ok(false));
-    assert_eq!(parse_eval(Some("0")), Ok(false));
-    assert_eq!(parse_eval(Some("1")), Ok(true));
-    for bad in ["", "2", "yes", "01", " 1"] {
-        let err = parse_eval(Some(bad)).unwrap_err();
-        assert!(
-            err.contains("IPMC_EVAL") && err.contains(&format!("{bad:?}")),
-            "{err}"
-        );
-    }
-}
-
-#[test]
 fn eval_needs_the_extension_and_the_release_profile() {
     // (eval, tier23, profile, expected error text)
     let cases = [
@@ -154,5 +140,21 @@ fn eval_needs_the_extension_and_the_release_profile() {
     for (eval, tier23, profile, expected) in cases {
         let got = check_eval(eval, tier23, profile);
         assert_eq!(got.err().as_deref(), expected, "{eval} {tier23} {profile}");
+    }
+}
+
+#[test]
+fn eval_and_field_switches_share_one_rule() {
+    type Parse = fn(Option<&str>) -> Result<bool, String>;
+    let cases: [(&str, Parse); 2] = [("IPMC_EVAL", parse_eval), ("IPMC_FIELD", parse_field)];
+    for (name, parse) in cases {
+        assert_eq!(parse(None), Ok(false));
+        assert_eq!(parse(Some("0")), Ok(false));
+        assert_eq!(parse(Some("1")), Ok(true));
+        for bad in ["", "2", "yes", "01", " 1"] {
+            let err = parse(Some(bad)).unwrap_err();
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains(&format!("{bad:?}")), "{err}");
+        }
     }
 }

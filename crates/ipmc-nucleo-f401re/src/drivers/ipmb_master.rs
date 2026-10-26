@@ -1,8 +1,8 @@
-// bsp/ipmb_master.rs - the IPMB master interface: one trait, the error names and the counters
+// drivers/ipmb_master.rs - the IPMB master interface: one trait, the error names and the counters
 // every master method shares.
 //
-// Two implementations: the bit-bang master (bsp/i2c_bitbang.rs, `IPMB_MASTER_BITBANG`) and the
-// hardware I2C master (bsp/i2c_hw.rs, `IPMB_MASTER_HW`). Both implement the same trait, so the
+// Two implementations: the bit-bang master (drivers/i2c_bitbang.rs, `IPMB_MASTER_BITBANG`) and the
+// hardware I2C master (drivers/i2c_hw.rs, `IPMB_MASTER_HW`). Both implement the same trait, so the
 // main loop (ipmb_link.rs) is written once. `SelectedMaster` is the method ipmc-defs
 // IPMB_MASTER_MODE chooses.
 

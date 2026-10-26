@@ -1,9 +1,9 @@
-// bsp/ipmb_pins.rs - claims the four IPMB pins and parks them as floating inputs: PB8, PB9 (IPMB-A
+// drivers/ipmb_pins.rs - claims the four IPMB pins and parks them as floating inputs: PB8, PB9 (IPMB-A
 // I2C1 SCL/SDA), PA8 (IPMB-B I2C3 SCL) and PB4 (IPMB-B I2C3 SDA).
 //
 // Ownership: this module holds the claims (owner "ipmb"); the handles it returns go to the
-// bit-bang master (bsp/i2c_bitbang.rs), which owns the pins while it is the master, and are
-// lent to the I2C driver (bsp/i2c_hw.rs) to select the alternate function. The pin numbers live
+// bit-bang master (drivers/i2c_bitbang.rs), which owns the pins while it is the master, and are
+// lent to the I2C driver (drivers/i2c_hw.rs) to select the alternate function. The pin numbers live
 // only here; the alternate-function numbers (AF4 for PB8, PB9, PA8; AF9 for PB4) live in
 // i2c_hw.rs, which names this file as their peer: a pin change here needs the matching AF there,
 // or the bus stays silent.

@@ -1,26 +1,16 @@
-/* Flash layout of the STM32F401RE (RM0368 Table 5: sectors 0-3 are 16 KB, sector 4 is 64 KB,
-   sectors 5-7 are 128 KB; 512 KB from 0x0800_0000).
-     VECTORS  sector 0    0x0800_0000..0x0800_3FFF   16 KB   .vector_table only
-     STORE    sector 1    0x0800_4000..0x0800_7FFF   16 KB   the FRU flash store, nothing else
-     FLASH    sectors 2-7 0x0800_8000..0x0807_FFFF  480 KB   .text, .rodata, the .data load image
-   link.x (this crate's own script) places the sections. The store is the one sector the FRU log
-   (crates/ipmc-fru persist.rs) erases and programs: no code shares it, so an erase never touches
-   the vector table or the program.
-   Peers: link.x (placement and asserts); src/bsp/flash.rs, which reads __fru_store_start and
-   __fru_store_end at run time and refuses to start the store unless the region is exactly
-   sector 1 (ipmc_fru::persist::store_region_ok); ipmc-fru STORE_START and STORE_LEN, the same
-   numbers. The linker fails the build when a section no longer fits its region. */
-MEMORY
-{
-  VECTORS : ORIGIN = 0x08000000, LENGTH = 16K
-  STORE   : ORIGIN = 0x08004000, LENGTH = 16K
-  FLASH   : ORIGIN = 0x08008000, LENGTH = 480K
-  RAM     : ORIGIN = 0x20000000, LENGTH = 96K
-}
+/* memory.x - the memory regions of the runtime (cortex-m-rt looks for this file name): the
+   flash and RAM map of flash_map.x, the one place of every address, and the stack reservation.
+   link.x (this crate's own script) places the sections: the vector table at the start of APP
+   (0x0800_8000), the image header at 0x0800_8200, then the program. Nothing of the runtime
+   shares BOOT (sector 0, the bootloader) or STORE (sector 1): the FRU log (crates/ipmc-fru
+   persist.rs) erases and programs the store, so no code shares it.
+   Peers: flash_map.x (the regions), link.x (placement and asserts), src/drivers/flash.rs (the
+   store check at start-up). */
+INCLUDE flash_map.x
 
-/* Stack reservation: the RAM that must stay free above the statics (.data, .bss, .uninit) for the
+/* Stack reservation: the RAM that must stay free above the statics (.data, .bss) for the
    stack. link.x asserts that RAM from the end of the statics to the top of RAM holds at least
-   this much. Measured on the release ELF of 10-26-2026 (the default build; the frames do not
+   this much. (.uninit sits in NOINIT, outside RAM, since the relink to 0x0800_8000.) Measured on the release ELF of 10-26-2026 (the default build; the frames do not
    depend on IPMC_LOG_SIZE, the log lives in the static) with arm-none-eabi-objdump -d, every
    function's frame = its push list + vpush + `sub sp`, summed along the longest call chain,
    indirect calls (menu and application port handlers, trait objects) followed by hand:
@@ -38,6 +28,3 @@ MEMORY
    `main` or `take`, a larger FRU image or Link) is re-measured and this number changed with
    it. */
 _stack_reserve = 35K;
-
-__fru_store_start = ORIGIN(STORE);
-__fru_store_end = ORIGIN(STORE) + LENGTH(STORE);

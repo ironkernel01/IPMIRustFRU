@@ -5,7 +5,7 @@
 // consumer ends of the per-bus frame queues and the IPMB master, and runs the main-loop step.
 // The behaviour (ingress, duplicate cache, bus choice, resend, bus state) lives in ipmc-core;
 // this file moves values between it, the drivers and the console. Each bus's I2C interrupt
-// (bsp/i2c_hw.rs) posts its frames to its queue; `service` drains both queues in STOP-time order
+// (drivers/i2c_hw.rs) posts its frames to its queue; `service` drains both queues in STOP-time order
 // into `Link::on_frame`, runs `Link::poll`, then sends each queued response through the master
 // and reports the outcome with `on_tx_result` (PLAN 3.3a). Nothing here runs in an interrupt
 // handler.
@@ -44,13 +44,13 @@ use ipmc_log::{CaptureTrace, DefaultLog, Dir, FrameStatus, Kind, LogState, Recor
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
-use crate::bsp::flash::Flash;
-use crate::bsp::i2c_hw::{self, I2cError, I2cPeripheral, RxConsumer};
-use crate::bsp::ipmb_common;
-use crate::bsp::ipmb_master::{self, IpmbMaster, MasterError, Recovery, SelectedMaster};
-use crate::bsp::ipmb_pins::IpmbPins;
 use crate::bsp::{fault, ga, reset_cause, systick, uart};
 use crate::console::{ConsoleTrace, Context};
+use crate::drivers::flash::Flash;
+use crate::drivers::i2c_hw::{self, I2cError, I2cPeripheral, RxConsumer};
+use crate::drivers::ipmb_common;
+use crate::drivers::ipmb_master::{self, IpmbMaster, MasterError, Recovery, SelectedMaster};
+use crate::drivers::ipmb_pins::IpmbPins;
 use crate::fru_log::FruLog;
 
 /// RX_DRAIN_MAX -- most frames one `service` pass takes from the queues: both queues full at

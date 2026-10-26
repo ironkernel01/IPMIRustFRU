@@ -1,8 +1,8 @@
 //! i2c_timing.rs - the arithmetic from the IPMB timing defines to core clock cycles and I2C
 //! register values, for STANDARD-MODE (100 kHz) and FAST-MODE (400 kHz, VITA 46.11 Rule 4.1.1-4.4).
 //!
-//! Hardware-free so the host tests check it: the firmware (ipmc-nucleo-f401re bsp/i2c_bitbang.rs,
-//! bsp/i2c_hw.rs, bsp/ipmb_common.rs) only applies the numbers. Every time here comes from
+//! Hardware-free so the host tests check it: the firmware (ipmc-nucleo-f401re drivers/i2c_bitbang.rs,
+//! drivers/i2c_hw.rs, drivers/ipmb_common.rs) only applies the numbers. Every time here comes from
 //! defs.rs (`IPMB_BITBANG_HALF_NS`, `IPMB_BITBANG_FAST_LOW_NS`, `IPMB_BITBANG_FAST_HIGH_NS`,
 //! `IPMB_I2C_HZ`, `IPMB_I2C_FAST_HZ`) or from the I2C-bus specification (the minimum high times).
 

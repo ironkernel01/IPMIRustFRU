@@ -2,22 +2,29 @@
 
    Derived from link.x.in of cortex-m-rt 0.7.7 (https://github.com/rust-embedded/cortex-m,
    licensed MIT OR Apache-2.0, Copyright the Cortex-M Developers; the developer notes and the
-   checks of that file are kept). Differences, all for the FRU flash store:
+   checks of that file are kept). This is the script of the runtime firmware; the sector-0
+   bootloader has boot.x. Both include flash_map.x, the one place of every address. Layout:
 
-   - .vector_table sits in VECTORS (flash sector 0, 16 KB) alone.
-   - Every other flash output section (.text, .rodata, the .data load image, veneers) sits in
-     FLASH (sectors 2-7, 480 KB), which starts after the STORE region.
-   - STORE (sector 1, 16 KB) receives no output section: the FRU flash store (crates/ipmc-fru
-     persist.rs) erases and programs it at run time, so no code or constant may share it.
-   - Symbols __vectors_end (end of .vector_table) and __program_start (start of .text) tell
-     bsp/flash.rs where the vectors end and the program starts; memory.x exports
-     __fru_store_start and __fru_store_end.
-   - Added asserts: the vector table fits VECTORS; VECTORS, STORE and FLASH are in that order
-     without overlap; no output section is placed in STORE.
+   - The whole image sits in APP (flash sectors 2-7, from 0x0800_8000): .vector_table at
+     ORIGIN(APP), then the 64-byte .app_header at __app_header (ORIGIN(APP) + 0x200, the
+     ipmc_boot::header image header), then .text, .rodata, the .data load image and veneers.
+   - BOOT (sector 0) is written by the bench only (SWD or the drive copy: the bootloader). STORE
+     (sector 1) receives no output section: the FRU flash store (crates/ipmc-fru persist.rs)
+     erases and programs it at run time. Sectors 2-7 are written by the bootloader's LOAD, by SWD
+     or by the drive copy. The runtime writes sector 1 only.
+   - .uninit (NOLOAD) sits in NOINIT at ORIGIN(NOINIT) + 0x10; the boot request words are the
+     first 16 bytes (__boot_request), written by src/bsp/boot_request.rs and read by the
+     bootloader, so no other section may use them.
+   - Symbols: __program_start (start of .text) and __sidata/__sdata/__edata tell
+     drivers/flash.rs where the program ends; flash_map.x exports __app_vectors, __app_header,
+     __boot_end, __fru_store_start and __fru_store_end.
+   - Added asserts: the vector table, the header and the program sit at their addresses and
+     inside APP (nothing in BOOT or STORE), the header is 64 bytes, and .uninit fits NOINIT above
+     the request words.
 
-   Peer: memory.x (the regions) and src/bsp/flash.rs (the store check at start-up). The link
-   of device.x (the interrupt handler defaults of the device crate) is at the end, as cortex-m-rt
-   appends it for a device crate. */
+   Peer: memory.x (INCLUDE flash_map.x) and src/drivers/flash.rs (the store check at start-up),
+   src/app_header.rs (the header static). The link of device.x (the interrupt handler defaults
+   of the device crate) is at the end, as cortex-m-rt appends it for a device crate. */
 
 /* # Developer notes
 
@@ -87,7 +94,7 @@ SECTIONS
 
   /* ## Sections in FLASH */
   /* ### Vector table */
-  .vector_table ORIGIN(VECTORS) :
+  .vector_table __app_vectors :
   {
     __vector_table = .;
 
@@ -108,16 +115,19 @@ SECTIONS
 
     /* Device specific interrupts */
     KEEP(*(.vector_table.interrupts)); /* this is the `__INTERRUPTS` symbol */
-  } > VECTORS
+  } > APP
 
-  /* The end of the vector table and the start of the program, for bsp/flash.rs. */
-  __vectors_end = ADDR(.vector_table) + SIZEOF(.vector_table);
+  /* ### Image header (ipmc_boot::header, 64 bytes at ORIGIN(APP) + 0x200) */
+  .app_header __app_header :
+  {
+    KEEP(*(.app_header));
+  } > APP
 
   /* The alignment of .text is the maximum alignment required by its input sections, which
      can be more than 4 (e.g. `.p2align` directives inside inline assembly). Since the
      start address of .text is set explicitly, the linker won't align it automatically, so do it
-     here. */
-  PROVIDE(_stext = ALIGN(ORIGIN(FLASH), ALIGNOF(.text)));
+     here. The program starts after the header. */
+  PROVIDE(_stext = ALIGN(ADDR(.app_header) + SIZEOF(.app_header), ALIGNOF(.text)));
 
   /* ### .text */
   .text _stext :
@@ -135,7 +145,7 @@ SECTIONS
 
     . = ALIGN(4); /* Pad .text to the alignment to workaround overlapping load section bug in old lld */
     __etext = .;
-  } > FLASH
+  } > APP
 
   /* ### .rodata */
   .rodata : ALIGN(4)
@@ -149,7 +159,7 @@ SECTIONS
        section will have the correct alignment. */
     . = ALIGN(4);
     __erodata = .;
-  } > FLASH
+  } > APP
 
   /* ## Sections in RAM */
   /* ### .data */
@@ -159,7 +169,7 @@ SECTIONS
     __sdata = .;
     *(.data .data.*);
     . = ALIGN(4); /* 4-byte align the end (VMA) of this section */
-  } > RAM AT>FLASH
+  } > RAM AT>APP
   /* Allow sections from user `memory.x` injected using `INSERT AFTER .data` to
    * use the .data loading mechanism by pushing __edata. Note: do not change
    * output region or load region in those user sections! */
@@ -179,7 +189,7 @@ SECTIONS
     __veneer_base = .;
     *(.gnu.sgstubs*)
     . = ALIGN(32);
-  } > FLASH
+  } > APP
   /* Place `__veneer_limit` outside the `.gnu.sgstubs` section because veneers are
    * always inserted last in the section, which would otherwise be _after_ the `__veneer_limit` symbol.
    */
@@ -201,22 +211,20 @@ SECTIONS
   . = ALIGN(4);
   __ebss = .;
 
-  /* ### .uninit */
-  .uninit (NOLOAD) : ALIGN(4)
+  /* ### .uninit: in NOINIT, after the 16 bytes of the boot request (__boot_request) */
+  .uninit (ORIGIN(NOINIT) + 0x10) (NOLOAD) : ALIGN(4)
   {
     . = ALIGN(4);
     __suninit = .;
     *(.uninit .uninit.*);
     . = ALIGN(4);
     __euninit = .;
-  } > RAM
+  } > NOINIT
 
-  /* Align `__sheap` and `_stack_end` pointers to 4 bytes */
-  . = ALIGN(4);
-
-  /* Place the heap start and stack end at the end of allocated RAM */
-  PROVIDE(__sheap = .);
-  PROVIDE(_stack_end = .);
+  /* Place the heap start and stack end at the end of allocated RAM (.bss; .uninit is in
+     NOINIT, not in RAM). The location counter is in NOINIT here, so the end of .bss is used. */
+  PROVIDE(__sheap = __ebss);
+  PROVIDE(_stack_end = __ebss);
 
   /* ## .got */
   /* Dynamic relocations are unsupported. This section is only used to detect relocatable code in
@@ -238,27 +246,41 @@ SECTIONS
 
 /* Do not exceed this mark in the error messages below                                    | */
 /* # Alignment checks */
-ASSERT(ORIGIN(FLASH) % 4 == 0, "
-ERROR(cortex-m-rt): the start of the FLASH region must be 4-byte aligned");
+ASSERT(ORIGIN(APP) % 4 == 0, "
+ERROR(cortex-m-rt): the start of the APP region must be 4-byte aligned");
 
-/* # FRU flash store checks (not in cortex-m-rt) */
-ASSERT(ADDR(.vector_table) + SIZEOF(.vector_table) <= ORIGIN(VECTORS) + LENGTH(VECTORS), "
-ERROR(ipmc): the vector table does not fit the VECTORS region (flash sector 0)");
+/* # Image placement checks (not in cortex-m-rt) */
+ASSERT(ADDR(.vector_table) == __app_vectors, "
+ERROR(ipmc): the vector table is not at the start of APP (0x0800_8000)");
 
-ASSERT(ORIGIN(VECTORS) + LENGTH(VECTORS) <= ORIGIN(STORE), "
-ERROR(ipmc): the VECTORS region reaches into the STORE region");
+ASSERT(ADDR(.app_header) == __app_header, "
+ERROR(ipmc): the image header is not at ORIGIN(APP) + 0x200 (0x0800_8200)");
 
-ASSERT(ORIGIN(STORE) + LENGTH(STORE) <= ORIGIN(FLASH), "
-ERROR(ipmc): the STORE region reaches into the FLASH region");
+ASSERT(SIZEOF(.app_header) == 64, "
+ERROR(ipmc): the .app_header section is not 64 bytes (src/app_header.rs, ipmc_boot::header)");
 
-ASSERT(__program_start >= ORIGIN(STORE) + LENGTH(STORE), "
-ERROR(ipmc): the program starts inside the FRU flash store region");
+ASSERT(ADDR(.vector_table) + SIZEOF(.vector_table) <= __app_header, "
+ERROR(ipmc): the vector table reaches into the image header");
 
-ASSERT(__sidata >= ORIGIN(STORE) + LENGTH(STORE), "
-ERROR(ipmc): the .data load image lies inside the FRU flash store region");
+ASSERT(__program_start >= __app_header + 64, "
+ERROR(ipmc): the program starts inside the image header");
 
-ASSERT(__veneer_limit <= ORIGIN(FLASH) + LENGTH(FLASH), "
-ERROR(ipmc): the flash image does not end inside the FLASH region");
+ASSERT(ADDR(.vector_table) >= ORIGIN(APP) && ADDR(.app_header) >= ORIGIN(APP)
+       && ADDR(.text) >= ORIGIN(APP) && ADDR(.rodata) >= ORIGIN(APP)
+       && ADDR(.gnu.sgstubs) >= ORIGIN(APP) && __sidata >= ORIGIN(APP), "
+ERROR(ipmc): an output section lies below APP, in the bootloader or the FRU flash store");
+
+ASSERT(__sidata + SIZEOF(.data) <= ORIGIN(APP) + LENGTH(APP), "
+ERROR(ipmc): the flash image does not end inside the APP region (sectors 2-7, 480 KB)");
+
+ASSERT(__veneer_limit <= ORIGIN(APP) + LENGTH(APP), "
+ERROR(ipmc): the veneers do not end inside the APP region");
+
+ASSERT(ADDR(.uninit) == ORIGIN(NOINIT) + 0x10, "
+ERROR(ipmc): .uninit does not start at ORIGIN(NOINIT) + 0x10 (the boot request words come first)");
+
+ASSERT(ADDR(.uninit) + SIZEOF(.uninit) <= ORIGIN(NOINIT) + LENGTH(NOINIT), "
+ERROR(ipmc): .uninit does not end inside NOINIT (256 bytes)");
 
 ASSERT(ORIGIN(RAM) % 4 == 0, "
 ERROR(cortex-m-rt): the start of the RAM region must be 4-byte aligned");
@@ -289,7 +311,7 @@ ERROR(cortex-m-rt): stack end address is not below stack start.");
 
 ASSERT(_stack_start - _stack_end >= _stack_reserve, "
 ERROR(ipmc): the RAM left for the stack is smaller than _stack_reserve (memory.x).
-The statics (.data, .bss, .uninit) fill too much of the RAM. Make IPMC_LOG_SIZE (capture log,
+The statics (.data, .bss) fill too much of the RAM. Make IPMC_LOG_SIZE (capture log,
 1024..=16384), IPMC_UART_RX_BUF, IPMC_UART_TX_BUF, IPMC_APP_UART_RX_BUF or IPMC_APP_UART_TX_BUF
 in defs.rs smaller, or re-measure the stack and change _stack_reserve in memory.x.");
 
@@ -327,9 +349,9 @@ ASSERT(ADDR(.vector_table) + SIZEOF(.vector_table) <= _stext, "
 ERROR(cortex-m-rt): The .text section can't be placed inside the .vector_table section
 Set _stext to an address greater than the end of .vector_table (See output of `nm`)");
 
-ASSERT(_stext >= ORIGIN(FLASH) && _stext < ORIGIN(FLASH) + LENGTH(FLASH), "
-ERROR(cortex-m-rt): The .text section must be placed inside the FLASH memory.
-Set _stext to an address within the FLASH region.");
+ASSERT(_stext >= ORIGIN(APP) && _stext < ORIGIN(APP) + LENGTH(APP), "
+ERROR(cortex-m-rt): The .text section must be placed inside the APP memory.
+Set _stext to an address within the APP region.");
 
 /* # Other checks */
 ASSERT(SIZEOF(.got) == 0, "

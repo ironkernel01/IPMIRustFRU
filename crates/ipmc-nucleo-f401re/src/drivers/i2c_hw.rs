@@ -1,9 +1,9 @@
-// bsp/i2c_hw.rs - the IPMB I2C slave: I2C1 (IPMB-A) and I2C3 (IPMB-B) in I2C slave mode, receive
+// drivers/i2c_hw.rs - the IPMB I2C slave: I2C1 (IPMB-A) and I2C3 (IPMB-B) in I2C slave mode, receive
 // interrupts and the per-bus frame queues.
 //
 // Ownership: this module owns the I2C1 and I2C3 registers and their RCC clock enables and
 // resets; the peripherals are moved in at `init` and never handed out. It does not own the pins:
-// the pin claims stay with bsp/ipmb_pins.rs / bsp/i2c_bitbang.rs, which lend a `BusPins` to
+// the pin claims stay with drivers/ipmb_pins.rs / drivers/i2c_bitbang.rs, which lend a `BusPins` to
 // `init` and `resume` so this module can select the alternate function.
 // One implementation serves both buses (I2C1 and I2C3 share the i2c1::RegisterBlock layout);
 // everything per bus is selected by `Bus`: the state static, the queue, the counters, the
@@ -36,8 +36,8 @@ use super::ipmb_common::{
 };
 use super::ipmb_master::{IpmbMaster, MasterError, MasterState};
 use super::ipmb_pins::{BusPins, IpmbPins};
-use super::static_slot::{self, StaticSlot};
-use super::{led, systick};
+use crate::bsp::static_slot::{self, StaticSlot};
+use crate::bsp::{led, systick};
 
 // ---- sizes, from defs.rs ----
 
@@ -142,7 +142,7 @@ const ADDR7_MAX: u8 = 0x77;
 /// on a stretched clock is 3 ms.
 const I2C_PRIORITY: u8 = 1 << 4;
 
-/// Alternate-function numbers (DS10086 Table 9): (SCL, SDA) per bus. Peer: bsp/ipmb_pins.rs
+/// Alternate-function numbers (DS10086 Table 9): (SCL, SDA) per bus. Peer: drivers/ipmb_pins.rs
 /// chooses the pins; PB8, PB9 and PA8 are AF4, PB4 is AF9. A mismatch leaves the bus silent.
 const fn pin_afs(bus: Bus) -> (u8, u8) {
     match bus {

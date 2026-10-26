@@ -861,52 +861,52 @@ fn a_settings_change_marks_the_store_dirty_and_is_saved_with_the_image() {
 
 #[test]
 fn the_store_region_check_accepts_sector_1_and_names_every_other_layout() {
-    const VECTORS_END: u32 = 0x0800_0400;
+    const BOOT_END: u32 = 0x0800_4000;
     const TEXT: u32 = 0x0800_8000;
-    // (start, end, vectors_end, text_start, expected)
+    // (start, end, boot_end, app_start, expected)
     type Case = (u32, u32, u32, u32, Result<u32, RegionError>);
     let cases: [Case; 11] = [
-        (0x0800_4000, 0x0800_8000, VECTORS_END, TEXT, Ok(STORE_LEN)),
-        (0x0800_4000, 0x0800_8000, 0x0800_4000, TEXT, Ok(STORE_LEN)),
+        (0x0800_4000, 0x0800_8000, BOOT_END, TEXT, Ok(STORE_LEN)),
+        (0x0800_4000, 0x0800_8000, 0x0800_3C00, TEXT, Ok(STORE_LEN)),
         (
             0x0800_8000,
             0x0800_C000,
-            VECTORS_END,
+            BOOT_END,
             0x0800_C000,
             Err(RegionError::Shifted),
         ),
         (
             0x0800_0000,
             0x0800_4000,
-            VECTORS_END,
+            BOOT_END,
             0x0800_4000,
             Err(RegionError::Shifted),
         ),
         (
             0x0800_4000,
             0x0800_7000,
-            VECTORS_END,
+            BOOT_END,
             TEXT,
             Err(RegionError::TooShort),
         ),
         (
             0x0800_4000,
             0x0800_4000,
-            VECTORS_END,
+            BOOT_END,
             TEXT,
             Err(RegionError::TooShort),
         ),
         (
             0x0800_4000,
             0x0800_C000,
-            VECTORS_END,
+            BOOT_END,
             0x0800_C000,
             Err(RegionError::TooLong),
         ),
         (
             0x0800_4200,
             0x0800_8200,
-            VECTORS_END,
+            BOOT_END,
             0x0800_8200,
             Err(RegionError::NotSectorAligned),
         ),
@@ -920,23 +920,23 @@ fn the_store_region_check_accepts_sector_1_and_names_every_other_layout() {
         (
             0x0800_4000,
             0x0800_8000,
-            VECTORS_END,
+            BOOT_END,
             0x0800_6000,
             Err(RegionError::ProgramInside),
         ),
         (
             0x0800_4000,
             0x0800_8000,
-            VECTORS_END,
+            BOOT_END,
             0x0800_7FFF,
             Err(RegionError::ProgramInside),
         ),
     ];
-    for (start, end, vectors_end, text_start, want) in cases {
+    for (start, end, boot_end, app_start, want) in cases {
         assert_eq!(
-            store_region_ok(start, end, vectors_end, text_start),
+            store_region_ok(start, end, boot_end, app_start),
             want,
-            "region {start:08X}..{end:08X}, vectors end {vectors_end:08X}, program {text_start:08X}"
+            "region {start:08X}..{end:08X}, bootloader end {boot_end:08X}, runtime {app_start:08X}"
         );
     }
 }

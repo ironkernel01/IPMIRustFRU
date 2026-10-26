@@ -1,17 +1,19 @@
-// bsp/ipmb_common.rs - what both IPMB master methods (bit-bang, hardware I2C) share: the DWT cycle
-// counter and the wait times in cycles, the free-bus wait with the I2C BUSY-flag erratum check, and
+// drivers/ipmb_common.rs - what both IPMB master methods (bit-bang, hardware I2C) share: the cycle counter
+// use and the wait times in cycles, the free-bus wait with the I2C BUSY-flag erratum check, and
 // the write wrapper with the arbitration-loss retry loop.
 //
-// Ownership: this module owns the DWT cycle counter use (`start_cycle_counter`); it reads the
+// Ownership: the DWT cycle counter belongs to `bsp/cycles.rs`; it reads the
 // IPMB pins (levels only) lent by the master and reaches the I2C registers only through
-// bsp/i2c_hw.rs. One implementation of each piece serves both masters (no copy between them).
+// drivers/i2c_hw.rs. One implementation of each piece serves both masters (no copy between them).
 
+use crate::bsp::cycles;
 use cortex_m::peripheral::{DCB, DWT};
 use ipmc_core::queue::Bus;
 
+use super::i2c_hw;
 use super::ipmb_master::MasterError;
 use super::ipmb_pins::BusPins;
-use super::{i2c_hw, led};
+use crate::bsp::led;
 
 /// T_BUF_NS -- bus free time between a STOP and the next START, standard mode: 4.7 us (I2C-bus
 /// specification Table 5, tBUF). A master starts only after both lines were high this long.
@@ -33,8 +35,6 @@ const MS_PER_S: u64 = 1_000;
 const WRITE_BUDGET_NS: u64 =
     ipmc_defs::IPMB_BUS_FREE_TIMEOUT_MS as u64 * NS_PER_S / MS_PER_S + T1_FRAME_NS;
 const NS_PER_US: u32 = 1_000;
-/// Polls of the cycle counter that must show it advancing, at `start_cycle_counter`.
-const COUNTER_CHECK_POLLS: u32 = 1_000;
 
 /// B_FITTED -- IPMB-B is built in (defs.rs IPMB_BUS_B_ENABLE).
 const B_FITTED: bool = ipmc_defs::IPMB_BUS_B_ENABLE;
@@ -60,27 +60,17 @@ impl TimebaseError {
     }
 }
 
-/// now -- the DWT cycle counter.
-pub fn now() -> u32 {
-    DWT::cycle_count()
-}
+pub use crate::bsp::cycles::now;
 
 /// cycles_for -- ceil(ns x core_hz / 1e9) as u32 cycles, None when it does not fit: the one
 /// conversion, in ipmc-defs (`i2c_timing`, host-tested), so the bit-bang phases and these waits
 /// share it.
 pub use ipmc_defs::i2c_timing::cycles_for;
 
-/// start_cycle_counter -- DCB trace enable, then CYCCNT (Cortex-M4 TRM, DWT_CTRL.CYCCNTENA);
-/// Err when the counter does not advance.
+/// start_cycle_counter -- the BSP's `cycles::start_cycle_counter`, with its error mapped to
+/// `TimebaseError::CycleCounterStopped`.
 pub fn start_cycle_counter(dcb: &mut DCB, dwt: &mut DWT) -> Result<(), TimebaseError> {
-    dcb.enable_trace();
-    dwt.enable_cycle_counter();
-    let first = now();
-    if (0..COUNTER_CHECK_POLLS).any(|_| now() != first) {
-        Ok(())
-    } else {
-        Err(TimebaseError::CycleCounterStopped)
-    }
+    cycles::start_cycle_counter(dcb, dwt).map_err(|_| TimebaseError::CycleCounterStopped)
 }
 
 /// BusTimes -- the times both masters wait, in core clock cycles.

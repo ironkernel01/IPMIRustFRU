@@ -1,4 +1,4 @@
-// bsp/uart.rs - the one UART driver of both serial ports, interrupt driven in both directions.
+// uart.rs - the one UART driver of both serial ports, interrupt driven in both directions.
 //
 // Ports (`Port`): the console on USART2 (PA2 TX / PA3 RX, AF7, the ST-LINK virtual COM port) and
 // the application port APP_UART on USART1 (PB6 TX / PB7 RX, optional PA11 CTS / PA12 RTS, AF7;
@@ -28,7 +28,7 @@ use ipmc_core::ring::ByteRing;
 use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull, Speed};
 use stm32f4::stm32f401::{interrupt, usart1::RegisterBlock, Interrupt, RCC, USART1, USART2};
 
-use super::static_slot::{self, StaticSlot};
+use crate::bsp::static_slot::{self, StaticSlot};
 
 /// Port -- which serial port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +173,7 @@ const TX_TIMEOUT: u32 = 200_000;
 /// 200 000 polls last at least 2.38 ms at 84 MHz, the same margin as TX_TIMEOUT.
 const FLUSH_MARGIN: u32 = 200_000;
 /// Bits on the wire per byte: start, eight data, stop (8N1).
-const BITS_PER_BYTE: u64 = 10;
+const BITS_PER_BYTE: u32 = 10;
 /// NVIC priority byte for USART1 and USART2 (upper bits are significant on this device): below
 /// the I2C slaves (priority 1 << 4), so a burst of console bytes never delays an IPMB byte; a
 /// UART byte lasts 86.8 us at 115200 baud, so the interrupt body is short and rare. The body runs
@@ -246,8 +246,8 @@ struct Uart<const RX: usize, const TX: usize> {
     /// zero-sized token of this fixed MMIO block, so the address stays valid for the whole
     /// program.
     base: NonZeroUsize,
-    // Held for the life of the port: the claims stay with this module.
-    _pins: Vec<Pins, 4>,
+    // Held for the life of the port: the claims stay with this module; `stop` parks the pins.
+    pins: Vec<Pins, 4>,
     rx: ByteRing<RX>,
     tx: ByteRing<TX>,
     /// The reader is stopped (RXNEIE off) because the RX ring is full; the byte stays in DR.
@@ -258,7 +258,7 @@ impl<const RX: usize, const TX: usize> Uart<RX, TX> {
     fn new(base: NonZeroUsize, pins: Vec<Pins, 4>) -> Self {
         Uart {
             base,
-            _pins: pins,
+            pins,
             rx: ByteRing::new(),
             tx: ByteRing::new(),
             rx_stalled: Cell::new(false),
@@ -530,6 +530,42 @@ pub fn init(
     Ok(())
 }
 
+/// park_pins -- returns the pins of a stopped port to inputs without a pull.
+fn park_pins(pins: &[Pins]) {
+    for pin in pins {
+        pin.input(Pull::None);
+    }
+}
+
+/// stop -- takes `port` out of service (the bootloader stops the port that did not get the
+/// WAKEUP): its interrupt is masked, its USART is reset through RCC and its clock switched off,
+/// its state (rings and counters of bytes) is dropped, and its pins return to inputs without a
+/// pull. The pin claims stay with the `ports` table (it has no release): nobody else can claim
+/// the pins afterwards, which the bootloader does not need. Bytes still in the TX ring are lost,
+/// so the caller flushes first. `getc`, `write` and `is_up` treat the port as not initialised
+/// from here on; `init` could start it again.
+pub fn stop(port: Port, rcc: &RCC) {
+    NVIC::mask(port.interrupt());
+    match port {
+        Port::Console => {
+            rcc.apb1rstr().modify(|_, w| w.usart2rst().reset());
+            rcc.apb1rstr().modify(|_, w| w.usart2rst().clear_bit());
+            rcc.apb1enr().modify(|_, w| w.usart2en().disabled());
+            if let Some(uart) = static_slot::take(&CONSOLE) {
+                park_pins(&uart.pins);
+            }
+        }
+        Port::App => {
+            rcc.apb2rstr().modify(|_, w| w.usart1rst().reset());
+            rcc.apb2rstr().modify(|_, w| w.usart1rst().clear_bit());
+            rcc.apb2enr().modify(|_, w| w.usart1en().disabled());
+            if let Some(uart) = static_slot::take(&APP) {
+                park_pins(&uart.pins);
+            }
+        }
+    }
+}
+
 /// service -- the one interrupt body of both ports.
 fn service(port: Port) {
     let _ = with_port(port, |u| u.service(port));
@@ -622,12 +658,17 @@ pub fn write_all_wait(port: Port, bytes: &[u8]) -> Result<(), UartError> {
 }
 
 /// flush_polls -- the flush bound for `port`: the whole TX ring at one frame per byte, in polls
-/// (a poll lasts at least one cycle of the fastest clock), plus FLUSH_MARGIN.
+/// (a poll lasts at least one cycle of the fastest clock), plus FLUSH_MARGIN. All 32-bit (no
+/// 64-bit division in the bootloader): the cycles of one bit are `SYSCLK / baud + 1` (rounded up,
+/// so the bound never falls short of the exact value), times `ring bytes x BITS_PER_BYTE`, both
+/// saturating. At the largest ring and the lowest baud the product is far below 2^32, so
+/// saturation is a guard and not a case: for example 4 096 bytes x 10 bits x (84 000 000 / 9 600
+/// + 1 = 8 751) = 358 million polls.
 fn flush_polls(port: Port) -> u32 {
-    let ring_bits = (port.tx_size() as u64) * BITS_PER_BYTE;
-    let cycles = ring_bits * u64::from(ipmc_defs::IPMC_SYSCLK_HZ) / u64::from(port.baud().max(1));
-    u32::try_from(cycles)
-        .unwrap_or(u32::MAX)
+    let ring_bits = (port.tx_size() as u32).saturating_mul(BITS_PER_BYTE);
+    let cycles_per_bit = (ipmc_defs::IPMC_SYSCLK_HZ / port.baud().max(1)).saturating_add(1);
+    ring_bits
+        .saturating_mul(cycles_per_bit)
         .saturating_add(FLUSH_MARGIN)
 }
 
@@ -668,7 +709,7 @@ impl fmt::Write for Writer {
     }
 }
 
-/// print -- backend of the `out!` macro: formatted console output, complete (waits only while the
+/// print -- backend of the `out!` macro (lib.rs): formatted console output, complete (waits only while the
 /// TX ring is full).
 pub fn print(args: fmt::Arguments) {
     // A write error means bytes were dropped; the timeout is already counted and the console has
@@ -679,6 +720,17 @@ pub fn print(args: fmt::Arguments) {
         },
         args,
     );
+}
+
+/// PortText -- a port as an `ipmc_boot::text::TextOut`: the text goes into the TX ring whole,
+/// with no `core::fmt` (the fault handlers and the bootloader's trace use it). A failed write
+/// drops the rest, as `print` does; the timeout is already counted.
+pub struct PortText(pub Port);
+
+impl ipmc_boot::text::TextOut for PortText {
+    fn put(&mut self, text: &str) {
+        let _ = write_all_wait(self.0, text.as_bytes());
+    }
 }
 
 /// ROW_TEXT_MAX -- longest I2C trace row, bytes: the columns of a `TraceRow` (up to 104 characters

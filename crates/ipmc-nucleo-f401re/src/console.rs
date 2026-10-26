@@ -31,7 +31,7 @@ use crate::app_port::{self, AppPort};
 use crate::bsp::clock::{ClockFault, ClockInfo};
 use crate::bsp::led::{self, Shown};
 use crate::bsp::reset_cause::ResetCause;
-use crate::bsp::uart::{self, Port};
+use crate::bsp::uart::{self, Port, PortText};
 use crate::bsp::{ga, systick};
 use crate::data_cmds;
 use crate::debug_cmds;
@@ -684,6 +684,10 @@ fn print_version() {
         env!("CARGO_PKG_VERSION"),
         ipmc_core::CORE_VERSION
     );
+    // The image header in flash: version, length and the start of the digest.
+    out!("Image:        ");
+    crate::app_header::image_line(&mut PortText(Port::Console));
+    out!("\n");
 }
 
 fn print_clock(ctx: &Context) {

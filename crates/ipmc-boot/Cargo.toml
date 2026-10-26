@@ -1,0 +1,14 @@
+[package]
+name = "ipmc-boot"
+version = "0.1.0"
+edition = "2021"
+description = "IPMC bootloader library: image check, boot request, start decision, Intel HEX LOAD, trace text"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-wire = { path = "../ipmc-wire" }
+ipmc-fru = { path = "../ipmc-fru" }
+ipmc-menu = { path = "../ipmc-menu" }

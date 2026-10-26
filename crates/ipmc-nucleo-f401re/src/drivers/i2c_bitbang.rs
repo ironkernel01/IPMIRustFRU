@@ -1,9 +1,9 @@
-// bsp/i2c_bitbang.rs - the bit-bang IPMB master (the PIC32 method): the I2C peripheral is switched
+// drivers/i2c_bitbang.rs - the bit-bang IPMB master (the PIC32 method): the I2C peripheral is switched
 // off, the same pins are driven open-drain as GPIO, then the peripheral is switched back on.
 //
-// Ownership: this module owns the IPMB pins (the `IpmbPins` handles from bsp/ipmb_pins.rs) while
+// Ownership: this module owns the IPMB pins (the `IpmbPins` handles from drivers/ipmb_pins.rs) while
 // it is the master, and the DWT cycle counter use (the peripherals are taken in `main` and passed
-// to `BitbangMaster::new`). It reaches the I2C registers only through bsp/i2c_hw.rs
+// to `BitbangMaster::new`). It reaches the I2C registers only through drivers/i2c_hw.rs
 // (`slave_idle`, `suspend`, `resume`).
 // Method: PLAN 3.4 and i2c-bitbang.md. Open-drain on both lines: a line is released (output
 // latch high) or driven low (latch low); a pin is never driven high. The half-bit delay and

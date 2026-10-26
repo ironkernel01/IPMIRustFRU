@@ -1,0 +1,19 @@
+// ipmc_nucleo_f401re (library) - the board support of the NUCLEO-F401RE that both images use: the
+// runtime firmware (src/main.rs, with its own `drivers` for the IPMB and the FRU store) and the
+// sector-0 bootloader. Holds only what both need; anything only the runtime uses lives in the
+// runtime binary's tree, so the bootloader never links its interrupt handlers. The handlers of
+// this library (`USART1`, `USART2`, `SysTick`, `HardFault`, `DefaultHandler`) reach the vector
+// table of each binary that links it. No `core::fmt` is reachable from the always-linked code
+// (the fault handlers write fixed text and `ipmc_boot::text` numbers).
+
+#![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
+
+/// out -- formatted write to the console UART (`\n` becomes CR LF): the console print macro of
+/// the runtime (`#[macro_use] extern crate ipmc_nucleo_f401re;`).
+#[macro_export]
+macro_rules! out {
+    ($($arg:tt)*) => { $crate::bsp::uart::print(format_args!($($arg)*)) };
+}
+
+pub mod bsp;

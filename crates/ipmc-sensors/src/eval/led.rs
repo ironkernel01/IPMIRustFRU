@@ -9,9 +9,12 @@
 //! It is exact for rates that do not divide 100 000 and needs no floating point.
 
 /// One period in phase units (a millisecond adds `chz` units).
-const PHASE_PERIOD: u64 = 100_000;
+const PHASE_PERIOD: u32 = 100_000;
 /// Half a period: the blink on-time (50 % duty).
-const PHASE_HALF: u64 = PHASE_PERIOD / 2;
+const PHASE_HALF: u32 = PHASE_PERIOD / 2;
+/// PHASE_SPLIT -- the rate is split as `high x PHASE_SPLIT + low` so every product of `phase`
+/// fits 32 bits (no 64-bit division reaches the bootloader).
+const PHASE_SPLIT: u32 = 1000;
 
 /// NO_ACTIVITY_MS -- `last_activity_ms` value that means no activity yet.
 pub const NO_ACTIVITY_MS: u32 = u32::MAX;
@@ -85,9 +88,17 @@ pub const fn rate_chz(shown: Shown) -> u32 {
     }
 }
 
-/// phase -- position within the period of `chz`, in 0..PHASE_PERIOD.
-fn phase(now_ms: u32, chz: u32) -> u64 {
-    (u64::from(now_ms) * u64::from(chz)) % PHASE_PERIOD
+/// phase -- position within the period of `chz`, in 0..PHASE_PERIOD: `now_ms x chz mod
+/// PHASE_PERIOD` for every input, in 32-bit arithmetic. With `a = now_ms mod P` and `c = chz mod
+/// P` (both below P = 100 000) and `c = high x 1000 + low` (high below 100, low below 1000):
+/// `a x c = (a x high) x 1000 + a x low`, so the result is `(((a x high) mod P) x 1000 + a x
+/// low) mod P`. Largest intermediates: `a x high` < 10 000 000, `(..mod P) x 1000` < 100 000 000,
+/// `a x low` < 100 000 000, their sum < 200 000 000, all under 2^32.
+fn phase(now_ms: u32, chz: u32) -> u32 {
+    let a = now_ms % PHASE_PERIOD;
+    let c = chz % PHASE_PERIOD;
+    let (high, low) = (c / PHASE_SPLIT, c % PHASE_SPLIT);
+    ((a * high) % PHASE_PERIOD * PHASE_SPLIT + a * low) % PHASE_PERIOD
 }
 
 /// led_level -- true when the LED is lit.
@@ -100,7 +111,7 @@ pub fn led_level(mode: Mode, now_ms: u32, last_activity_ms: u32) -> bool {
         Shown::On => true,
         Shown::Off => false,
         Shown::Heartbeat => {
-            phase(now_ms, ipmc_defs::IPMC_LED_HEARTBEAT_CHZ)
+            u64::from(phase(now_ms, ipmc_defs::IPMC_LED_HEARTBEAT_CHZ))
                 < u64::from(ipmc_defs::IPMC_LED_HEARTBEAT_ON_MS)
                     * u64::from(ipmc_defs::IPMC_LED_HEARTBEAT_CHZ)
         }
@@ -115,6 +126,25 @@ mod tests {
     use ipmc_defs::{IPMC_LED_ACTIVITY_HOLD_MS as HOLD, IPMC_LED_HEARTBEAT_ON_MS as ON_MS};
 
     const NONE: u32 = NO_ACTIVITY_MS;
+
+    #[test]
+    fn the_32_bit_phase_equals_the_64_bit_formula() {
+        // The old formula: (now_ms x chz) mod 100 000 in u64. Every rate the LED accepts, every
+        // millisecond of three periods and of the counter wrap, plus the largest u32 rates.
+        let old = |now: u32, chz: u32| ((u64::from(now) * u64::from(chz)) % 100_000) as u32;
+        let times = (0..100_100u32)
+            .chain(u32::MAX - 1_000..=u32::MAX)
+            .chain((0..2_000u32).map(|n| n.wrapping_mul(2_654_435_761)));
+        let times: std::vec::Vec<u32> = times.collect();
+        let rates = (0..=ipmc_defs::IPMC_LED_RATE_MAX_CHZ)
+            .step_by(13)
+            .chain([1, 100, 200, 1000, 5000, 99_999, 100_000, 100_001, u32::MAX]);
+        for chz in rates {
+            for &now in &times {
+                assert_eq!(phase(now, chz), old(now, chz), "{now} ms {chz} chz");
+            }
+        }
+    }
 
     fn lit_ms(mode: Mode, from: u32, to: u32, last: u32) -> u32 {
         (from..to).filter(|&t| led_level(mode, t, last)).count() as u32

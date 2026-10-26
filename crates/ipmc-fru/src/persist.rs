@@ -125,9 +125,9 @@ pub enum RegionError {
     TooShort,
     /// The region is longer than the sector.
     TooLong,
-    /// The vector table reaches into the region.
+    /// The bootloader reaches into the region.
     VectorsReachIn,
-    /// The program starts inside the region.
+    /// The runtime starts inside the region.
     ProgramInside,
 }
 
@@ -139,22 +139,23 @@ impl RegionError {
             RegionError::Shifted => "the store region is not flash sector 1",
             RegionError::TooShort => "the store region is shorter than sector 1",
             RegionError::TooLong => "the store region is longer than sector 1",
-            RegionError::VectorsReachIn => "the vector table reaches into the store region",
-            RegionError::ProgramInside => "the program starts inside the store region",
+            RegionError::VectorsReachIn => "the bootloader reaches into the store region",
+            RegionError::ProgramInside => "the runtime starts inside the store region",
         }
     }
 }
 
 /// store_region_ok -- checks the linker's store region `start..end` against the sector the log
 /// erases: it must be exactly sector 1 (`STORE_START`, `STORE_LEN`, aligned to its size), the
-/// vector table must end at or before `start` (`vectors_end`) and the program must start at or
-/// after `end` (`text_start`), so an erase of the store never touches code. Returns the region
-/// length. The firmware passes the values of the linker symbols (memory.x, link.x).
+/// bootloader must end at or before `start` (`boot_end`) and the runtime must start at or
+/// after `end` (`app_start`), so an erase of the store never touches code. Returns the region
+/// length. The firmware passes the values of the linker symbols (flash_map.x: `__boot_end` and
+/// `__app_vectors`).
 pub const fn store_region_ok(
     start: u32,
     end: u32,
-    vectors_end: u32,
-    text_start: u32,
+    boot_end: u32,
+    app_start: u32,
 ) -> Result<u32, RegionError> {
     if !start.is_multiple_of(STORE_LEN) {
         return Err(RegionError::NotSectorAligned);
@@ -169,10 +170,10 @@ pub const fn store_region_ok(
     if len > STORE_LEN {
         return Err(RegionError::TooLong);
     }
-    if vectors_end > start {
+    if boot_end > start {
         return Err(RegionError::VectorsReachIn);
     }
-    if text_start < end {
+    if app_start < end {
         return Err(RegionError::ProgramInside);
     }
     Ok(len)

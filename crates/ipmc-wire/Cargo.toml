@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+
+[dev-dependencies]
+# an independent SHA-256 for the tests only; never a normal dependency (it must not reach the image)
+sha2 = "=0.10.9"

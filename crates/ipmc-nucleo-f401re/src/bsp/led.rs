@@ -1,4 +1,4 @@
-// bsp/led.rs - user LED LD2 on PA5 (UM1724 6.4: pin HIGH = LED on) and its status patterns.
+// led.rs - user LED LD2 on PA5 (UM1724 6.4: pin HIGH = LED on) and its status patterns.
 //
 // Ownership: this module owns PA5, claimed through `ports` (owner "led"); the handle lives in
 // the `LED` mutex and the SysTick tick drives it through that handle.
@@ -15,8 +15,8 @@ use ipmc_sensors::eval::led::{self as pattern, Mode, NO_ACTIVITY_MS};
 
 pub use ipmc_sensors::eval::led::{rate_chz, Shown};
 
-use super::static_slot::{self, StaticSlot};
-use super::systick;
+use crate::bsp::static_slot::{self, StaticSlot};
+use crate::bsp::systick;
 
 const OWNER: &str = "led";
 const LED_PIN_MASK: u16 = 1 << 5;

@@ -1,4 +1,4 @@
-// bsp/static_slot.rs - the one access pattern of the driver statics: a `Mutex<RefCell<Option<T>>>`
+// static_slot.rs - the one access pattern of the driver statics: a `Mutex<RefCell<Option<T>>>`
 // filled by the driver's `init` and used inside a critical section. Every driver that keeps its
 // peripheral or pins in such a static installs and reaches them through these two functions.
 
@@ -18,6 +18,12 @@ pub fn install<T>(slot: &StaticSlot<T>, value: T) {
     free(|cs| {
         slot.borrow(cs).replace(Some(value));
     });
+}
+
+/// take -- removes the state from `slot` and returns it (`None` before `init`), inside a critical
+/// section; the slot is empty afterwards, as before `init`.
+pub fn take<T>(slot: &StaticSlot<T>) -> Option<T> {
+    free(|cs| slot.borrow(cs).replace(None))
 }
 
 /// with_mut -- runs `f` on the state inside a critical section; `None` (and `f` not run) before

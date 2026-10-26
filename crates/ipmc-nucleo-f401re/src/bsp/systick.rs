@@ -1,4 +1,4 @@
-// bsp/systick.rs - 1 ms tick from the Cortex-M4 SysTick timer; counts time and steps the LED pattern.
+// systick.rs - 1 ms tick from the Cortex-M4 SysTick timer; counts time and steps the LED pattern.
 //
 // Ownership: this module owns the SysTick peripheral (moved in at init) and its exception handler.
 
@@ -8,7 +8,7 @@ use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m::peripheral::{SCB, SYST};
 use cortex_m_rt::exception;
 
-use super::led;
+use crate::bsp::led;
 
 /// MS_PER_SECOND -- milliseconds per second; the tick period (1 ms) and the seconds counter both derive from it.
 pub const MS_PER_SECOND: u32 = 1000;
@@ -55,7 +55,7 @@ pub fn millis() -> u32 {
 }
 
 /// catch_up -- advances the clock over a stall the SysTick exception could not count. The caller
-/// is the flash erase (bsp/flash.rs): while it runs the core waits on flash, the counter keeps
+/// is the flash erase (drivers/flash.rs): while it runs the core waits on flash, the counter keeps
 /// wrapping but only one exception stays pending, so up to the 500 ms sector erase time (16 KB sector, DS10086 Table 45) is lost
 /// from `millis()` and `seconds()`.
 /// `start_ms` is `millis()` and `stall_cycles` the DWT cycle count (core clock, the SysTick

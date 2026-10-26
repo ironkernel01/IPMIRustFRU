@@ -1,4 +1,7 @@
 // main.rs - ipmc-nucleo-f401re entry point for the NUCLEO-F401RE.
+// This is the runtime firmware, linked at 0x0800_8000 (link.x, flash_map.x). The bootloader in sector 0 (src/boot/,
+// binary ipmc-boot) checks the image header and starts it with the state of a reset; with the
+// bootloader gone a debugger can still run it (cortex-m-rt features set-vtor and set-sp).
 // Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it
 // services exists), console UART, application UART (when enabled), IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
 // defs.rs source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
@@ -16,16 +19,17 @@
 
 use panic_halt as _;
 
-/// Formatted write to the console UART (`\n` becomes CR LF).
-macro_rules! out {
-    ($($arg:tt)*) => { $crate::bsp::uart::print(format_args!($($arg)*)) };
-}
+// `out!` (formatted console output) and the shared board support come from the library.
+#[macro_use]
+extern crate ipmc_nucleo_f401re;
+pub(crate) use ipmc_nucleo_f401re::bsp;
 
+mod app_header;
 mod app_port;
-mod bsp;
 mod console;
 mod data_cmds;
 mod debug_cmds;
+mod drivers;
 #[cfg(ipmc_eval)]
 mod eval;
 mod fru_log;
@@ -100,13 +104,13 @@ fn main() -> ! {
     // Evaluation build: the run-time clock starts here, before the banner. A clock that cannot
     // start stops the image (it could not end the evaluation).
     #[cfg(ipmc_eval)]
-    if bsp::eval_timer::start(&dp.RCC, dp.TIM2, &clock).is_err() {
+    if drivers::eval_timer::start(&dp.RCC, dp.TIM2, &clock).is_err() {
         out!("EVALUATION BUILD: timer start failed (TIM2 tick rate)\n");
         bsp::led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
         bsp::fault::park();
     }
     // IPMB pins float until the I2C drivers start, after the strap pins below.
-    let ipmb_pins = bsp::ipmb_pins::park().unwrap_or_else(|e| bsp::fault::claim_failed(e));
+    let ipmb_pins = drivers::ipmb_pins::park().unwrap_or_else(|e| bsp::fault::claim_failed(e));
     // Hardware is started only for the groups the source switches make hardware; a simulated
     // group claims and touches nothing (no analog pins, no input pins, no PWR_EN drive).
     let needs = sensing::hardware_needs();
@@ -116,7 +120,7 @@ fn main() -> ! {
             dp.ADC1,
             dp.ADC_COMMON,
             clock.pclk2_hz,
-            &bsp::board_pins::ADC,
+            &drivers::board_pins::ADC,
             needs.adc_pins,
         ) {
             Err(adc::InitError::Pins(e)) => bsp::fault::claim_failed(e),
@@ -124,8 +128,12 @@ fn main() -> ! {
         }
     });
     let board_io = (needs.input_pins || needs.power_pin).then(|| {
-        gpio::init(&bsp::board_pins::GPIO, needs.input_pins, needs.power_pin)
-            .unwrap_or_else(|e| bsp::fault::claim_failed(e))
+        gpio::init(
+            &drivers::board_pins::GPIO,
+            needs.input_pins,
+            needs.power_pin,
+        )
+        .unwrap_or_else(|e| bsp::fault::claim_failed(e))
     });
     if let Err(e) = bsp::ga::init() {
         bsp::fault::claim_failed(e);
@@ -136,7 +144,7 @@ fn main() -> ! {
     // before the I2C slaves start: an erase stalls the core for up to 500 ms (16 KB sector) and no
     // slave exists yet to miss a frame. The DWT cycle counter runs first so the erase can give SysTick the stalled time
     // (systick::catch_up); a counter that does not run is reported by the IPMB master start.
-    let _ = bsp::ipmb_common::start_cycle_counter(&mut cp.DCB, &mut cp.DWT);
+    let _ = drivers::ipmb_common::start_cycle_counter(&mut cp.DCB, &mut cp.DWT);
     let nvmro = bsp::ga::nvmro_asserted();
     let (fru_log, fru_image) = fru_log::FruLog::boot(dp.FLASH, nvmro);
 

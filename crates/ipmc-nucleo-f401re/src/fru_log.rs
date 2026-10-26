@@ -1,7 +1,7 @@
 // fru_log.rs - the firmware side of the FRU flash log: the boot load before the I2C drivers
 // start, and the owner of the log state (ipmc_fru::persist::Persist) and the flash driver.
 //
-// Ownership: FruLog owns the `bsp::flash::Flash` and the `Persist` state. The main loop's save
+// Ownership: FruLog owns the `drivers::flash::Flash` and the `Persist` state. The main loop's save
 // step and the FRU console commands live in ipmb_link.rs and data_cmds.rs; they reach the pair
 // through `parts` and `status`, so the IPMB pause around an erase (ipmb_link.rs) wraps every
 // erase the same way. Nothing here runs in an interrupt handler.
@@ -10,7 +10,7 @@ use ipmc_fru::persist::{Persist, Status};
 use ipmc_fru::FruStore;
 use stm32f4::stm32f401::FLASH;
 
-use crate::bsp::flash::Flash;
+use crate::drivers::flash::Flash;
 
 /// ENABLED -- the flash log is built in (defs.rs IPMC_FRU_PERSIST).
 pub const ENABLED: bool = ipmc_defs::IPMC_FRU_PERSIST;

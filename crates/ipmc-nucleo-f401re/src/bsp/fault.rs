@@ -1,4 +1,4 @@
-// bsp/fault.rs - HardFault and DefaultHandler (unhandled interrupt) handlers.
+// fault.rs - HardFault and DefaultHandler (unhandled interrupt) handlers.
 //
 // Fail-stop policy: a fault leaves the device in an unknown state, so each handler records what
 // happened in a static record (readable with a debugger), prints one line on the console when
@@ -15,8 +15,10 @@ use cortex_m_rt::{exception, ExceptionFrame};
 
 use ipmc_sensors::drivers::stm32f401::ports::PortError;
 
-use super::uart::Port;
-use super::{led, uart};
+use ipmc_boot::text::{self, TextOut};
+
+use crate::bsp::uart::{Port, PortText};
+use crate::bsp::{led, uart};
 
 /// Fault kind codes in `FAULT_KIND`.
 const KIND_NONE: u32 = 0;
@@ -51,6 +53,30 @@ pub fn claim_failed(error: PortError) -> ! {
     park()
 }
 
+/// say -- `pieces` on the console, in order: fixed text and the number writers of
+/// `ipmc_boot::text`, no `core::fmt` (both images link this file). A line end is the two bytes
+/// CR LF. The console print is best effort, as in `uart::print`.
+fn say(pieces: &[Piece]) {
+    let mut out = PortText(Port::Console);
+    for piece in pieces {
+        match *piece {
+            Piece::Text(text) => out.put(text),
+            Piece::Dec(value) => text::put_dec(&mut out, value),
+            Piece::Hex8(value) => text::put_hex(&mut out, value, 8),
+            Piece::Char(ch) => out.put(ch.encode_utf8(&mut [0u8; 4])),
+        }
+    }
+}
+
+/// Piece -- one part of a fault line.
+#[derive(Clone, Copy)]
+enum Piece<'a> {
+    Text(&'a str),
+    Dec(u32),
+    Hex8(u32),
+    Char(char),
+}
+
 /// report_claim -- prints the claim failure line on the console and waits for it to leave.
 fn report_claim(error: PortError) {
     match error {
@@ -59,14 +85,28 @@ fn report_claim(error: PortError) {
             pin,
             owner,
             claimant,
-        } => out!(
-            "\nFATAL: pin P{}{} already claimed by '{}', claimed again by '{}'\n",
-            port.letter(),
-            pin,
-            owner,
-            claimant
-        ),
-        other => out!("\nFATAL: pin claim failed: {:?}\n", other),
+        } => say(&[
+            Piece::Text("\r\nFATAL: pin P"),
+            Piece::Char(port.letter()),
+            Piece::Dec(u32::from(pin)),
+            Piece::Text(" already claimed by '"),
+            Piece::Text(owner),
+            Piece::Text("', claimed again by '"),
+            Piece::Text(claimant),
+            Piece::Text("'\r\n"),
+        ]),
+        other => say(&[
+            Piece::Text("\r\nFATAL: pin claim failed: "),
+            Piece::Text(match other {
+                PortError::AlreadyClaimed { .. } => "AlreadyClaimed",
+                PortError::EmptyMask => "EmptyMask",
+                PortError::EmptyOwner => "EmptyOwner",
+                PortError::InvalidPin => "InvalidPin",
+                PortError::NotInitialised => "NotInitialised",
+                PortError::AlreadyInitialised => "AlreadyInitialised",
+            }),
+            Piece::Text("\r\n"),
+        ]),
     }
     uart::flush(Port::Console);
 }
@@ -81,19 +121,20 @@ fn record_print_park(kind: u32, value: u32) -> ! {
     FAULT_KIND.store(kind, Ordering::Relaxed);
     if uart::is_up(Port::Console) {
         if kind == KIND_HARDFAULT {
-            out!(
-                "
-HARDFAULT pc=0x{:08X}
-",
-                value
-            );
+            say(&[
+                Piece::Text("\r\nHARDFAULT pc=0x"),
+                Piece::Hex8(value),
+                Piece::Text("\r\n"),
+            ]);
         } else {
-            out!(
-                "
-UNHANDLED IRQ {}
-",
-                value as i32
-            );
+            // The IRQ number as a signed decimal: system exceptions are negative.
+            let irq = value as i32;
+            say(&[
+                Piece::Text("\r\nUNHANDLED IRQ "),
+                Piece::Text(if irq < 0 { "-" } else { "" }),
+                Piece::Dec(irq.unsigned_abs()),
+                Piece::Text("\r\n"),
+            ]);
         }
         // The UART interrupt cannot run here (this handler outranks it); `flush` polls the TX
         // ring out.

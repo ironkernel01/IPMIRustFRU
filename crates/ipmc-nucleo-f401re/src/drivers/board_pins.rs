@@ -1,4 +1,4 @@
-// bsp/board_pins.rs - the board's pin and ADC channel assignments for the sensors: the one place
+// drivers/board_pins.rs - the board's pin and ADC channel assignments for the sensors: the one place
 // that says which MCU pin carries which sensor signal. The stm32f401 drivers in ipmc-sensors take
 // these tables at construction and hold no board pin of their own; board_sensors.rs refers to
 // the external rails by abstract input number (entry n of `ADC.external`). The same assignment

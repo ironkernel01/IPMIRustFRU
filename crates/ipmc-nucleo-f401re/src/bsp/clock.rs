@@ -1,4 +1,4 @@
-// bsp/clock.rs - PLL bring-up to IPMC_SYSCLK_HZ (HSE bypass, HSI fallback) and RCC clock-tree decode.
+// clock.rs - PLL bring-up to IPMC_SYSCLK_HZ (HSE bypass, HSI fallback) and RCC clock-tree decode.
 //
 // The ST-LINK MCU drives its MCO signal into OSC_IN (UM1724 6.7.1), so the HSE oscillator runs
 // in bypass. The input frequency (defs.rs IPMC_HSE_HZ) and the target SYSCLK (IPMC_SYSCLK_HZ)
@@ -35,6 +35,10 @@ const PLL_OFF_TIMEOUT: u32 = 100_000;
 /// Poll count for PLL lock: 100 000 polls >= 6.25 ms at 16 MHz against a PLL lock time of at
 /// most 300 us (DS10086 Table 41).
 const PLL_LOCK_TIMEOUT: u32 = 100_000;
+/// Poll count for HSIRDY and for HSERDY to clear, at the hand-over to the runtime
+/// (`restore_reset_state`): the core runs at up to 84 MHz, so 100 000 polls >= 1.19 ms. HSI is
+/// on already (it is never switched off), and an HSE in bypass stops within a few of its cycles.
+const HAND_OVER_TIMEOUT: u32 = 100_000;
 /// Poll count for SWS to follow SW: 100 000 polls >= 1.19 ms even at 84 MHz; a switch to a
 /// ready source completes within a few clock cycles.
 const SWITCH_TIMEOUT: u32 = 100_000;
@@ -100,6 +104,7 @@ pub enum ClockFault {
     PllLock,
     SwitchToPll,
     SwitchBackToHsi,
+    HseOff,
 }
 
 impl ClockFault {
@@ -111,6 +116,7 @@ impl ClockFault {
             ClockFault::PllLock => "PLL did not lock",
             ClockFault::SwitchToPll => "SYSCLK switch to PLL timed out (back on HSI)",
             ClockFault::SwitchBackToHsi => "SYSCLK fallback to HSI timed out",
+            ClockFault::HseOff => "HSE did not stop",
         }
     }
 }
@@ -242,6 +248,45 @@ pub fn init(rcc: &RCC, pwr: &PWR, flash: &FLASH) -> Result<(), ClockFault> {
         // is ready (RM0368 6.2.6), which would move PCLK1 under a UART divisor computed for
         // HSI, so the request is withdrawn and the fallback confirmed (RM0368 6.3.3: SWS).
         return Err(fall_back_to_hsi(rcc));
+    }
+    Ok(())
+}
+
+/// restore_reset_state -- the clock tree as a reset leaves it, for the hand-over from the
+/// bootloader to the runtime (the runtime's `init` then runs unchanged). Every wait is bounded.
+/// In order: HSI on and ready; CFGR to its reset value (SYSCLK = HSI, every prescaler /1) and
+/// wait for SWS; PLL off and wait for PLLRDY clear, PLLCFGR to its reset value; HSE off and wait
+/// for HSERDY clear, bypass off; flash ACR to its reset value (0 wait states, prefetch and
+/// caches off) after the switch, with the latency read back. The order matters: RM0368 6.3.1
+/// ignores a PLLON clear while the PLL drives SYSCLK, so the runtime's `init` would otherwise
+/// configure a running PLL. Err names the first step that ran out of its bound; the remaining
+/// steps are not run.
+pub fn restore_reset_state(rcc: &RCC, flash: &FLASH) -> Result<(), ClockFault> {
+    rcc.cr().modify(|_, w| w.hsion().on());
+    if !wait_for(HAND_OVER_TIMEOUT, || rcc.cr().read().hsirdy().is_ready()) {
+        return Err(ClockFault::SwitchBackToHsi);
+    }
+    rcc.cfgr().reset();
+    if !wait_for(SWITCH_TIMEOUT, || rcc.cfgr().read().sws().is_hsi()) {
+        return Err(ClockFault::SwitchBackToHsi);
+    }
+    rcc.cr().modify(|_, w| w.pllon().off());
+    if !wait_for(PLL_OFF_TIMEOUT, || rcc.cr().read().pllrdy().bit_is_clear()) {
+        return Err(ClockFault::PllOff);
+    }
+    rcc.pllcfgr().reset();
+    rcc.cr().modify(|_, w| w.hseon().off());
+    if !wait_for(HAND_OVER_TIMEOUT, || {
+        rcc.cr().read().hserdy().bit_is_clear()
+    }) {
+        return Err(ClockFault::HseOff);
+    }
+    rcc.cr().modify(|_, w| w.hsebyp().not_bypassed());
+    flash.acr().reset();
+    if !wait_for(FLASH_LATENCY_TIMEOUT, || {
+        flash.acr().read().latency().bits() == 0
+    }) {
+        return Err(ClockFault::FlashLatency);
     }
     Ok(())
 }

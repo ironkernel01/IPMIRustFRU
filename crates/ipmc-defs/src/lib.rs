@@ -206,7 +206,7 @@ const _: () = assert!(
     IPMC_CONSOLE_BAUD >= 1 && IPMC_CONSOLE_BAUD <= USART2_BAUD_MAX,
     "IPMC_CONSOLE_BAUD must be 1..=2625000 (USART2 limit at PCLK1 = 42 MHz)"
 );
-// The RX ring indexes wrap with a mask (bsp/uart.rs), so its size is a power of two; one slot
+// The RX ring indexes wrap with a mask (ipmc-nucleo-f401re src/bsp/uart.rs), so its size is a power of two; one slot
 // stays empty, so a whole line must fit in size - 1 bytes.
 const _: () = assert!(
     IPMC_UART_RX_BUF.is_power_of_two() && IPMC_UART_RX_BUF >= 2,
@@ -352,7 +352,7 @@ const _: () = assert!(
     IPMC_HSE_HZ >= 1_000_000 && IPMC_HSE_HZ <= 50_000_000,
     "IPMC_HSE_HZ must be 1000000..=50000000 (HSE bypass input)"
 );
-// ipmc-nucleo-f401re bsp/clock.rs programs 2 flash wait states (valid for 60 MHz < HCLK <= 84 MHz at
+// ipmc-nucleo-f401re src/bsp/clock.rs programs 2 flash wait states (valid for 60 MHz < HCLK <= 84 MHz at
 // 2.7 to 3.6 V, RM0368 3.4) and divides APB1 by 2 (APB1 is at most 42 MHz).
 const _: () = assert!(
     IPMC_SYSCLK_HZ > 60_000_000 && IPMC_SYSCLK_HZ <= 84_000_000,
@@ -700,4 +700,36 @@ const _: () = assert!(
 const _: () = assert!(
     IPMC_EMU_ERROR_ECHO_MAX >= 1 && IPMC_EMU_ERROR_ECHO_MAX <= IPMC_EMU_VECTOR_LINE_MAX,
     "IPMC_EMU_ERROR_ECHO_MAX must be 1..=IPMC_EMU_VECTOR_LINE_MAX"
+);
+
+/// IPMC_BOOT_COUNTDOWN -- the boot countdown of this build, seconds: IPMC_BOOT_COUNTDOWN_FIELD
+/// in the field image (`gen.ps1 build -Field`, cfg(ipmc_field)), IPMC_BOOT_COUNTDOWN_BENCH otherwise.
+pub const IPMC_BOOT_COUNTDOWN: u32 = if cfg!(ipmc_field) {
+    IPMC_BOOT_COUNTDOWN_FIELD
+} else {
+    IPMC_BOOT_COUNTDOWN_BENCH
+};
+/// FIELD_BUILD -- true in the field image.
+pub const FIELD_BUILD: bool = cfg!(ipmc_field);
+
+const _: () = assert!(
+    IPMC_BOOT_COUNTDOWN_BENCH < 31,
+    "IPMC_BOOT_COUNTDOWN_BENCH must be 0..=30"
+);
+const _: () = assert!(
+    IPMC_BOOT_COUNTDOWN_FIELD < 31,
+    "IPMC_BOOT_COUNTDOWN_FIELD must be 0..=30"
+);
+const _: () = assert!(
+    IPMC_FWU_PIN_SETTLE_US >= 10 && IPMC_FWU_PIN_SETTLE_US <= 10_000,
+    "IPMC_FWU_PIN_SETTLE_US must be 10..=10000"
+);
+const _: () = assert!(
+    IPMC_FWU_LED_WAIT_CHZ >= IPMC_LED_RATE_MIN_CHZ
+        && IPMC_FWU_LED_WAIT_CHZ <= IPMC_LED_RATE_MAX_CHZ,
+    "IPMC_FWU_LED_WAIT_CHZ must lie within IPMC_LED_RATE_MIN_CHZ..=IPMC_LED_RATE_MAX_CHZ"
+);
+const _: () = assert!(
+    IPMC_FWU_LOAD_IDLE_S >= 1 && IPMC_FWU_LOAD_IDLE_S <= 600,
+    "IPMC_FWU_LOAD_IDLE_S must be 1..=600"
 );

@@ -9,8 +9,14 @@
 //! - `Builder`: the const byte-record builder of the SDR records and the FRU image.
 //! - `Builder::push_type_length_ascii`: the IPMI type/length field of 8-bit ASCII text.
 //! - `crc32_update` / `crc32`: the CRC-32 of the stored FRU record (ipmc-fru persist.rs).
+//! - `Sha256` / `sha256`: the FIPS 180-4 digest of the runtime image (ipmc-boot, `fwimage`).
+//! - `check_word`: the XOR check word of the RAM words that survive a software reset (the boot
+//!   request and the kept request sequence).
 #![no_std]
 #![forbid(unsafe_code)]
+
+mod sha256;
+pub use sha256::{sha256, Sha256};
 
 /// TYPE_ASCII -- type/length byte bits 7:6 = 11b, 8-bit ASCII + Latin 1 (IPMI v2.0 section 43.15,
 /// FRU spec section 13).
@@ -96,6 +102,13 @@ pub const fn crc32(bytes: &[u8]) -> u32 {
     crc ^ CRC32_XOROUT
 }
 
+/// check_word -- the check word of three data words: their XOR with `magic`. The boot request and
+/// the kept request sequence (firmware reset_cause.rs) mark RAM words that survive a software
+/// reset with it.
+pub const fn check_word(data: [u32; 3], magic: u32) -> u32 {
+    data[0] ^ data[1] ^ data[2] ^ magic
+}
+
 /// Builder -- a fixed-capacity byte record built in const context: the bytes and how many of
 /// them are used. A push past the capacity is a compile error when the record is built in a
 /// const item. `bytes` is public so a caller patches a length or checksum byte in place.
@@ -173,6 +186,13 @@ impl<const N: usize> Builder<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_word_is_the_xor_of_the_words_and_the_magic() {
+        assert_eq!(check_word([0, 0, 0], 0), 0);
+        assert_eq!(check_word([1, 2, 4], 0x10), 0x17);
+        assert_eq!(check_word([0xFFFF_FFFF, 0xFFFF_FFFF, 5], 3), 6);
+    }
 
     #[test]
     fn checksum_known_values() {
