@@ -450,7 +450,7 @@ decision 24).
 |---|---:|---|
 | `IPMC_EVENTS_AT_BOOT` | 0 | Tier-2/3 event generator only, no effect in a Tier-1 build. 0 (bench): at start-up the IPMC sends itself Set Event Receiver FFh, so no Platform Event is retried toward a Chassis Manager that never acknowledges, and the console prints `Events: off from start-up`. 1 (system build): event messages go to the Event Receiver 20h from power-up (Rule 7-5). `DEBUG EVENTS ON` or `OFF` changes it at run time. The firmware start-up reads it; the emulator and the conformance runs are unchanged |
 | `IPMC_LOG_AT_BOOT` | 1 | the capture log records from start-up; `DEBUG LOG ON` or `OFF` changes it at run time |
-| `IPMC_I2C_TRACE_AT_BOOT` | 0 | one console line per IPMB frame in and out from start-up; `DEBUG TRACE I2C ON` or `OFF` changes it at run time |
+| `IPMC_I2C_TRACE_AT_BOOT` | 0 | one console line per IPMB frame in and out from start-up; `DEBUG TRACE I2C ON` or `OFF` changes it at run time; a row that does not fit the console TX ring whole is dropped and counted (`tx_lines_dropped`), and the frame stays in the capture log |
 
 ### IPMB link and drivers
 
@@ -484,7 +484,7 @@ decision 24).
 | `IPMB_FAULT_STREAK` | 8 | consecutive bus-fault errors before a bus is marked faulted (2..=64) |
 | `IPMB_FAULT_CLEAR_MS` | 1000 | both lines idle-high this long before a fault clears |
 | `IPMC_IPMI_TRACE` | 1 | one trace line per dispatched request, and the link and event lines (failed transmissions, resends, requests sent). 0 removes the link and dispatcher lines at compile time, so they are absent from the capture log as well as from the console; the status lines stay (FRU log saves, bus faults, bus speed changes, resets, and the FRU state change line) |
-| `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=65536, a power of two); the usable size is one byte less, because the ring keeps a slot empty |
+| `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=65536, a power of two); the usable size is one byte less, because the ring keeps a slot empty; each `DEBUG DUMP` row walks the log from its start, so a larger log makes the dump slower per row |
 | `IPMC_LOG_TEXT_MAX` | 160 | longest trace line the log keeps, bytes (32..=200); a longer line is cut and ends in `...` |
 
 ### Straps, identity and FRU
@@ -525,7 +525,7 @@ decision 24).
 | `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2) |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
-| `IPMC_APP_FRU_WRITE` | 1 | the application port may `SET` the unit fields; 0 allows `GET` only and `SET` answers `ERR WRITE_DISABLED` |
+| `IPMC_APP_FRU_WRITE` | 1 | the application port may `SET` the unit fields and run the IPMI Write FRU Data request; 0 refuses both with `ERR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
 | `IPMC_MENU_LINE_MAX`, `IPMC_MENU_TOKENS_MAX` | 128, 40 | console line and token limits |
 | `IPMC_FRU_DUMP_BYTES_PER_LINE` | 16 | bytes on one line of `FRU DUMP` (1..=16) |
 | `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `ipmc` | firmware name of the banner, `SYS VERSION` and the application `HELLO` answer; root prompt text |
@@ -969,14 +969,18 @@ the next byte of the transmit ring; the main loop reads with `getc` and writes w
 copies as much as the ring takes and never waits. `print` (the `out!` macro) writes a whole
 console message and waits only while the ring is full; `print_line_or_drop` writes a trace line
 and its CR LF whole when the ring has room for all of it, and otherwise drops it and counts it
-(`tx_lines_dropped`), so a trace line never stalls the IPMB. `flush` waits, bounded, until the
+(`tx_lines_dropped`), so a trace line never stalls the IPMB; `print_row_or_drop` does the same for the
+longer per-frame I2C trace row. `write` copies at most 64 bytes per critical section and loops. `flush` waits, bounded, until the
 last byte has left; it runs before a reset and before the fault park. Every wait polls the same
 `service` body, so it also ends where the interrupt cannot run (a HardFault). Receive overflow,
 overrun, transmit timeout and dropped lines are counted per port and printed by `SYS STATUS`. The
-interrupts run at NVIC priority 2 << 4, below the I2C slaves (1 << 4), so a burst of UART bytes
-never delays an IPMB byte. With `IPMC_APP_UART_FLOW` 1 the driver enables RTS/CTS in the
+interrupts run at NVIC priority 2 << 4, below the I2C slaves (1 << 4). The interrupt body runs
+inside the critical section of the port state, so an I2C interrupt that arrives meanwhile waits for
+it, a few microseconds. With `IPMC_APP_UART_FLOW` 1 the driver enables RTS/CTS in the
 peripheral (CTSE and RTSE, RM0368 19.3.14) and leaves a byte in the data register when the
-receive ring is full, so RTS stays deasserted until `getc` makes room; PA11 reads "not clear to send" when it is open.
+receive ring is full, so RTS stays deasserted until `getc` makes room. RTS deasserts only when the
+data register holds an unread byte, so a sender with a byte in flight can still overrun by one byte;
+the overrun counter counts it and the application port answers the line `ERR LINE_DAMAGED`; PA11 reads "not clear to send" when it is open.
 
 ### 6.7 `ipmc-emu`: x86 emulator
 
@@ -1326,7 +1330,8 @@ Error answers:
 | `ERR NVMRO` | the NVMRO pin is asserted; nothing is written |
 | `ERR BAD_DATE` | the date text is malformed or out of range |
 | `ERR FRU_IMAGE <name>` | the area is missing or damaged, or the rewritten image would fail `verify` |
-| `ERR WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is 0 |
+| `ERR WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is 0 and the request is `SET` or an `IPMI` Write FRU Data; nothing runs |
+| `ERR LINE_DAMAGED <n> bytes lost on the port` | the UART lost `<n>` bytes (overrun or receive ring full) since the previous line ended; the line does not run, and the answer carries the tag when the line had a valid one |
 | `ERR IPMI_FAILED <why>` | the request did not run: `TOO_LONG` (more data than one frame holds) or `DISPATCH` (a NetFn that is odd or above 3Eh) |
 | `ERR PENDING a save is waiting` | `SAVE` while a change waits for its flash save |
 | `ERR LOG_OFF` | `SAVE` with the flash log off (`IPMC_FRU_PERSIST` 0 or the store did not start) |
@@ -2105,7 +2110,10 @@ only when the egress queue is empty and no frame arrived for `IPMC_FRU_ERASE_QUI
 the image stays safe in RAM. `FRU RESTORE` erases at once when its record needs a sector, without
 that quiet gate. `PausedErase` suspends each running slave (a healthy one waits up to
 `IPMC_FRU_PAUSE_WAIT_MS` for idle; a faulted one is switched off at once), erases, resumes the
-slaves and prints the time the board was silent, measured with the DWT counter;
+slaves and reports the time the board was silent (a status line on the console and in the capture
+log), measured with the DWT counter. After the slaves are off the driver checks both receive queues;
+a frame accepted before that defers the erase (`FlashError::Deferred`): the slaves resume, nothing is
+printed, the write stays pending with the failure counter unchanged, and the next pass retries;
 `systick::catch_up` adds the stalled time to the clock. On the bench the sector erase paused the
 IPMB for 198 ms (DS10086 Table 45, x32 programming: typical 250 ms, maximum 500 ms); a request
 that arrives in that time is missed and the Chassis Manager retries it. A power cut between
@@ -2460,9 +2468,9 @@ is absent or reports no probe, and prints `Flash OK` only after the copy, the dr
 `FAIL.TXT` check pass. `-Swd` and `-Drive` force a path (both together are refused; `-Swd` never
 falls back), and a SWD program that starts and fails is an error, never a silent fallback. SWD
 needs the WinUSB driver on the ST-LINK debug interface. The two paths leave the FRU store in
-different states (section 9.1). `gen.ps1 console <command>` waits 3000 ms and reads at most 8192
-bytes of reply, which cuts a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud); read a long
-dump with a terminal log.
+different states (section 9.1). `gen.ps1 console <command>` reads a reply until the console has been quiet for
+600 ms, up to 60 s and 131072 bytes, so a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud)
+comes back whole.
 
 ### 12.2 Changing a tunable
 
@@ -2612,7 +2620,7 @@ procedure and expected result of each.
 |---|---|
 | Run-time sector erase of the FRU store | the IPMB was silent for 198 ms (console line `FRU log: erased the store sector at run time (IPMB paused 198 ms)`), against DS10086 Table 45 typical 250 ms and maximum 500 ms for a 16 KB sector at x32 programming; one erase per 60 saves, and only when the bus is quiet |
 | python-ipmi request sequence | every request goes out with sequence number 01h, so identical requests inside the duplicate-cache window (`IPMB_DUP_WINDOW_MS`) are answered from the cache, which is the IPMB rule; a bench loop varies the request |
-| `gen.ps1 console` reply | 3000 ms and 8192 bytes per reply; a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud) is cut, so the dump is read with a terminal log |
+| `gen.ps1 console` reply | read until 600 ms of silence, at most 60 s and 131072 bytes per reply; a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud) comes back whole |
 | Capture log | `IPMC_IPMI_TRACE` 0 removes the link and dispatcher lines from the log as well as from the console |
 
 <div style="page-break-after: always;"></div>
@@ -2743,7 +2751,7 @@ procedure and expected result of each.
   (`DEBUG DUMP`) runs as a paced job and is stopped by a key press.
 - **Capture log.** The log lives in RAM and is empty after a reset or power cycle; it holds the
   newest `IPMC_LOG_SIZE` - 1 bytes of records (a 23-byte frame takes 29 bytes). A dump of a full
-  log is about 25 KB, longer than one `gen.ps1 console` reply.
+  log is about 25 KB.
 - **Application port.** The IPMC answers one request line per main-loop pass and drops an answer the
   transmit ring cannot take whole. The port has no emulator model: it runs on the board only
   (COM5 on the bench). The six unit fields are the only FRU content it writes; `IPMI` runs

@@ -438,6 +438,13 @@ struct PausedErase<'a> {
     master: &'a SelectedMaster,
     /// What to do to each bus's slave.
     plan: [BusPause; FaultTracker::COUNT],
+    /// The two driver receive queues: a frame accepted before the slaves came off the bus waits
+    /// here, and the erase is deferred rather than racing it.
+    rx_a: &'a Option<RxConsumer>,
+    rx_b: &'a Option<RxConsumer>,
+    /// The last erase that ran: milliseconds the IPMB was paused and the result. The owner of
+    /// the log prints it through `IpmbLink::status`.
+    erase_report: Option<(u32, Result<(), FlashError>)>,
 }
 
 impl PausedErase<'_> {
@@ -469,6 +476,13 @@ impl PausedErase<'_> {
         Ok(paused)
     }
 
+    /// frame_waiting -- a received frame sits in a driver queue, not yet taken by `drain_rx`.
+    fn frame_waiting(&self) -> bool {
+        [self.rx_a, self.rx_b]
+            .into_iter()
+            .any(|rx| rx.as_ref().is_some_and(|c| c.peek().is_some()))
+    }
+
     /// resume_all -- gives the suspended buses back to their slaves.
     fn resume_all(&self, paused: [bool; FaultTracker::COUNT]) {
         for bus in Bus::BOTH {
@@ -496,26 +510,22 @@ impl FlashLog for PausedErase<'_> {
         self.flash.millis()
     }
 
-    /// erase -- both slaves off, the erase, both back on, one console line with the time the
-    /// board was silent (measured with the DWT cycle counter: SysTick does not run while the
-    /// core waits on flash).
+    /// erase -- both slaves off, then a check of both receive queues: a frame accepted before the
+    /// slaves came off the bus (a request the Chassis Manager is waiting on) gives the buses back
+    /// and defers the erase (`FlashError::Deferred`, retried on a later pass). Otherwise the
+    /// erase, both slaves back on, and `erase_report` holds the time the board was silent
+    /// (measured with the DWT cycle counter: SysTick does not run while the core waits on flash).
     fn erase(&mut self) -> Result<(), FlashError> {
         let paused = self.suspend_all()?;
+        if self.frame_waiting() {
+            self.resume_all(paused);
+            return Err(FlashError::Deferred);
+        }
         let start = ipmb_common::now();
         let result = self.flash.erase();
         let paused_ms = ipmb_common::now().wrapping_sub(start) / systick::cycles_per_ms().max(1);
         self.resume_all(paused);
-        match result {
-            Ok(()) => out!(
-                "FRU log: erased the store sector at run time (IPMB paused {} ms)\n",
-                paused_ms
-            ),
-            Err(error) => out!(
-                "FRU log: erase of the store sector failed at run time: {} (IPMB paused {} ms)\n",
-                error.name(),
-                paused_ms
-            ),
-        }
+        self.erase_report = Some((paused_ms, result));
         result
     }
 }
@@ -656,12 +666,18 @@ impl IpmbLink {
             flash,
             master: &self.master,
             plan,
+            rx_a: &self.rx_a,
+            rx_b: &self.rx_b,
+            erase_report: None,
         };
         // The built image replaces the FRU content; the Tier-3 settings byte is not FRU content
         // and stays as it is.
         let mut built = FruStore::new();
         built.load_nv_settings(self.dispatch.nv_settings());
-        match persist.restore(&mut paused, built.image(), built.nv_settings()) {
+        let restored = persist.restore(&mut paused, built.image(), built.nv_settings());
+        let report = paused.erase_report;
+        self.erase_line(report);
+        match restored {
             Ok(_) => {}
             Err(PersistError::Flash(FlashError::NvmroAsserted)) => return Err(RestoreError::Nvmro),
             Err(error) => return Err(RestoreError::Failed(error)),
@@ -718,6 +734,9 @@ impl IpmbLink {
             flash,
             master: &self.master,
             plan,
+            rx_a: &self.rx_a,
+            rx_b: &self.rx_b,
+            erase_report: None,
         };
         let nvmro = self.dispatch.addr.nvmro_asserted;
         let outcome = persist.poll(
@@ -728,6 +747,8 @@ impl IpmbLink {
             delay_ms,
             quiet,
         );
+        let report = paused.erase_report;
+        self.erase_line(report);
         // An attempt made while a reset is pending that fails falls back to the normal delay and
         // quiet-bus rule; the flag clears when no reset is pending.
         self.reset_save_failed =
@@ -744,6 +765,23 @@ impl IpmbLink {
                 }
             )),
             Some(Err(error)) => self.status(format_args!("FRU log: save failed: {}", error.name())),
+            None => {}
+        }
+    }
+
+    /// erase_line -- the status line of a run-time erase (`PausedErase::erase_report`); nothing
+    /// for an erase that did not run (a deferred one, or none).
+    fn erase_line(&mut self, report: Option<(u32, Result<(), FlashError>)>) {
+        match report {
+            Some((paused_ms, Ok(()))) => self.status(format_args!(
+                "FRU log: erased the store sector at run time (IPMB paused {} ms)",
+                paused_ms
+            )),
+            Some((paused_ms, Err(error))) => self.status(format_args!(
+                "FRU log: erase of the store sector failed at run time: {} (IPMB paused {} ms)",
+                error.name(),
+                paused_ms
+            )),
             None => {}
         }
     }
@@ -1177,7 +1215,12 @@ impl IpmbLink {
                     bytes,
                 },
             };
-            out!("{}\n", TraceRow(&record, &CoreNames(&self.ext)));
+            // Never waits: a row that does not fit the console TX ring whole is dropped and
+            // counted (`tx_lines_dropped`); the frame is in the capture log either way.
+            uart::print_row_or_drop(
+                uart::Port::Console,
+                format_args!("{}", TraceRow(&record, &CoreNames(&self.ext))),
+            );
         }
     }
 

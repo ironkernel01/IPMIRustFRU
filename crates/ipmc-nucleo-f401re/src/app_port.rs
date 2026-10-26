@@ -59,6 +59,16 @@ pub fn answers_dropped() -> u32 {
 /// AppPort -- the line assembler of the port; the main loop calls `poll` every pass.
 pub struct AppPort {
     assembler: LineAssembler<LINE_MAX>,
+    /// Bytes the port had lost (UART overrun plus RX ring overflow) when the previous line ended.
+    /// The baseline is taken at the end of the previous line, not at the first byte of this one,
+    /// so a lost first byte of a line is counted against that line.
+    lost_at_line_start: u32,
+}
+
+/// lost_bytes -- bytes the application port has lost since reset (overrun and RX overflow).
+fn lost_bytes() -> u32 {
+    let c = uart::counters(Port::App);
+    c.overrun.wrapping_add(c.rx_overflow)
 }
 
 impl AppPort {
@@ -66,6 +76,7 @@ impl AppPort {
     pub const fn new() -> Self {
         AppPort {
             assembler: LineAssembler::new(),
+            lost_at_line_start: 0,
         }
     }
 
@@ -90,8 +101,11 @@ impl AppPort {
                 )),
                 Fed::BadChar => link.log_text(format_args!("app request (not printable ASCII)")),
             }
+            // Bytes lost since the previous line ended: the line is answered, not run (R4).
+            let lost = lost_bytes().wrapping_sub(self.lost_at_line_start);
             let mut out = AnswerBuf::<ANSWER_MAX>::new();
-            ipmc_app::respond(fed, &mut LinkHost { link: &mut *link }, &mut out);
+            ipmc_app::respond(fed, lost, &mut LinkHost { link: &mut *link }, &mut out);
+            self.lost_at_line_start = lost_bytes();
             if out.overflowed() {
                 out.clear();
                 // The fixed text fits the empty buffer.

@@ -172,10 +172,17 @@ const FLUSH_MARGIN: u32 = 200_000;
 const BITS_PER_BYTE: u64 = 10;
 /// NVIC priority byte for USART1 and USART2 (upper bits are significant on this device): below
 /// the I2C slaves (priority 1 << 4), so a burst of console bytes never delays an IPMB byte; a
-/// UART byte lasts 86.8 us at 115200 baud, so the interrupt body is short and rare.
+/// UART byte lasts 86.8 us at 115200 baud, so the interrupt body is short and rare. The body runs
+/// inside the critical section of `with_port`, which masks every interrupt: an I2C interrupt that
+/// arrives meanwhile waits for it (a few microseconds), so the priority orders the interrupts only
+/// outside that section.
 const UART_PRIORITY: u8 = 2 << 4;
 /// Smallest legal BRR divisor: DIV_Mantissa >= 1 (RM0368 19.6.3), i.e. 16.
 const BRR_MIN: u32 = 16;
+/// PUT_CHUNK -- most bytes `put` copies in one critical section. The critical section masks the
+/// I2C interrupts, so the copy stays short (64 bytes take a few microseconds); `write` loops over
+/// chunks, each in its own critical section.
+const PUT_CHUNK: usize = 64;
 
 /// UartError -- rejects of `init` and the failures inside the transmit path; `name` gives the
 /// text for a log line.
@@ -216,9 +223,9 @@ trait Ops {
     fn service(&mut self, port: Port);
     /// getc -- next received byte.
     fn getc(&mut self) -> Option<u8>;
-    /// put -- copies bytes into the TX ring and starts the transmitter: what fits, or with
-    /// `whole` all of them or none. Returns the count copied.
-    fn put(&mut self, bytes: &[u8], whole: bool) -> usize;
+    /// put -- copies bytes into the TX ring and starts the transmitter: what fits, at most
+    /// PUT_CHUNK bytes per call (one critical section). Returns the count copied.
+    fn put(&mut self, bytes: &[u8]) -> usize;
     /// tx_free -- bytes the TX ring still takes.
     fn tx_free(&self) -> usize;
     /// tx_idle -- the TX ring is empty and the last byte has left the shift register.
@@ -274,7 +281,10 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
             if port.flow() && self.rx.free() == 0 {
                 // Flow control: leave the byte in DR. RTS stays deasserted while DR holds an
                 // unread byte (RM0368 19.3.14), so the sender stops; `getc` starts the reader
-                // again once the ring has room.
+                // again once the ring has room. RTS deasserts only when DR holds an unread
+                // byte, so a sender with a byte already in flight can still overrun by one
+                // byte: the overrun counter counts it and the application port answers the
+                // line `ERR LINE_DAMAGED` (ipmc-app).
                 regs.cr1().modify(|_, w| w.rxneie().disabled());
                 self.rx_stalled.set(true);
             } else {
@@ -308,13 +318,8 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
         byte
     }
 
-    fn put(&mut self, bytes: &[u8], whole: bool) -> usize {
-        let free = self.tx.free();
-        let take = if whole && bytes.len() > free {
-            0
-        } else {
-            bytes.len().min(free)
-        };
+    fn put(&mut self, bytes: &[u8]) -> usize {
+        let take = bytes.len().min(self.tx.free()).min(PUT_CHUNK);
         let Some(part) = bytes.get(..take) else {
             return 0;
         };
@@ -451,7 +456,11 @@ fn enable_clock(rcc: &RCC, port: Port) {
             rcc.apb2enr().modify(|_, w| w.usart1en().enabled());
         }
     }
-    let _ = rcc.apb1enr().read(); // short delay after enabling a clock
+    // Read back the register that was written: the delay RM0368 requires after enabling a clock.
+    let _ = match port {
+        Port::Console => rcc.apb1enr().read().bits(),
+        Port::App => rcc.apb2enr().read().bits(),
+    };
 }
 
 /// init -- configures the pins of `port`, starts its USART at the port's baud rate from `pclk_hz`
@@ -530,7 +539,16 @@ pub fn getc(port: Port) -> Option<u8> {
 /// write -- copies as much of `bytes` as the TX ring takes, starts the transmitter and returns
 /// the count. Never waits.
 pub fn write(port: Port, bytes: &[u8]) -> usize {
-    with_port(port, |u| u.put(bytes, false)).unwrap_or(0)
+    let mut copied = 0;
+    while let Some(rest) = bytes.get(copied..).filter(|rest| !rest.is_empty()) {
+        // One critical section per chunk: the interrupts wait only for PUT_CHUNK bytes.
+        let n = with_port(port, |u| u.put(rest)).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        copied += n;
+    }
+    copied
 }
 
 /// tx_free -- bytes the TX ring of `port` takes now (0 before `init`).
@@ -636,30 +654,43 @@ pub fn print(args: fmt::Arguments) {
     );
 }
 
-/// LINE_BUF -- bytes of the buffer a trace line is formatted into: the longest line the capture
-/// log keeps (IPMC_LOG_TEXT_MAX) plus CR LF.
-const LINE_BUF: usize = ipmc_defs::IPMC_LOG_TEXT_MAX as usize + 2;
+/// ROW_TEXT_MAX -- longest I2C trace row, bytes: the columns of a `TraceRow` (up to 104 characters
+/// with the longest names) plus IPMB_MSG_MAX three-character hex bytes (96), rounded up.
+const ROW_TEXT_MAX: usize = 224;
+const _: () = assert!(
+    ROW_TEXT_MAX + 2 <= ipmc_defs::IPMC_UART_TX_BUF as usize,
+    "the console TX ring must hold one whole I2C trace row"
+);
 
-/// print_line_or_drop -- one trace line plus CR LF, written whole when the TX ring of `port` has
-/// room for all of it, else dropped and counted (`tx_lines_dropped`); never a partial line and
-/// never a wait. A line longer than IPMC_LOG_TEXT_MAX is cut and ends in `...`, as the capture
-/// log cuts it.
-pub fn print_line_or_drop(port: Port, args: fmt::Arguments) {
-    let line = format_cut::<{ ipmc_defs::IPMC_LOG_TEXT_MAX as usize }>(args);
-    let mut out = [0u8; LINE_BUF];
+/// CRLF -- the end of every console line.
+const CRLF: &[u8] = b"\r\n";
+
+/// print_cut_or_drop -- one line of at most N bytes plus CR LF, written whole when the TX ring
+/// of `port` has room for all of it, else dropped and counted (`tx_lines_dropped`); never a
+/// partial line and never a wait. A longer line is cut and ends in `...`.
+fn print_cut_or_drop<const N: usize>(port: Port, args: fmt::Arguments) {
+    let line = format_cut::<N>(args);
     let text = line.bytes();
-    let len = text.len();
-    if let Some((dst, tail)) = out.split_at_mut_checked(len) {
-        dst.copy_from_slice(text);
-        if let Some(crlf) = tail.get_mut(..2) {
-            crlf.copy_from_slice(b"\r\n");
-        }
-    }
-    let whole = out.get(..len + 2).unwrap_or(&[]);
-    let stored = with_port(port, |u| u.put(whole, true)).unwrap_or(0);
-    if stored == 0 {
+    // Only the main loop writes a port and the interrupt only drains the ring, so the room found
+    // here is still there for the two writes.
+    if tx_free(port) >= text.len() + CRLF.len() {
+        write(port, text);
+        write(port, CRLF);
+    } else {
         COUNTERS[port.index()]
             .tx_lines_dropped
             .fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// print_line_or_drop -- a trace line of at most IPMC_LOG_TEXT_MAX bytes (the length the capture
+/// log keeps) through `print_cut_or_drop`.
+pub fn print_line_or_drop(port: Port, args: fmt::Arguments) {
+    print_cut_or_drop::<{ ipmc_defs::IPMC_LOG_TEXT_MAX as usize }>(port, args);
+}
+
+/// print_row_or_drop -- an I2C trace row (longer than a log text line, ROW_TEXT_MAX) through
+/// `print_cut_or_drop`.
+pub fn print_row_or_drop(port: Port, args: fmt::Arguments) {
+    print_cut_or_drop::<ROW_TEXT_MAX>(port, args);
 }

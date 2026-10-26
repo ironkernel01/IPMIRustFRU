@@ -10,7 +10,7 @@ use ipmc_core::fru_state::State;
 use ipmc_core::sensor::{PowerState, Summary};
 use ipmc_fru::{FieldError, FruStore, UnitField};
 
-use crate::commands::set_field;
+use crate::commands::{ipmi_request, set_field};
 use crate::{
     answer, respond, AnswerBuf, AppError, AppHost, Fed, IpmiData, LineAssembler, Request,
     SaveState, Status, ANSWER_MAX, COMMANDS,
@@ -450,7 +450,7 @@ fn run<const N: usize>(chunks: &[&[u8]]) -> Vec<String> {
     for chunk in chunks {
         for byte in *chunk {
             let mut out = AnswerBuf::<ANSWER_MAX>::new();
-            if respond(assembler.push(*byte), &mut host, &mut out) {
+            if respond(assembler.push(*byte), 0, &mut host, &mut out) {
                 answers.push(out.as_str().to_string());
             }
         }
@@ -480,6 +480,66 @@ fn the_assembler_gives_the_same_lines_for_split_and_joined_chunks() {
 fn cr_lf_cr_and_lf_each_end_a_line_and_empty_lines_are_not_requests() {
     assert_eq!(run::<32>(&[b"SAVE\r\n\r\n\n\rSAVE\rSAVE\n"]).len(), 3);
     assert!(run::<32>(&[b"\r\n\r\n"]).is_empty());
+}
+
+#[test]
+fn ipmi_write_fru_data_is_refused_when_writing_is_disabled() {
+    let mut host = FakeHost::new();
+    // (request, runs while writing is disabled): Write FRU Data (0Ah 12h) is refused; Get Device
+    // ID, Get FRU Inventory Area Info and Chassis Control still run.
+    let cases = [
+        ("0A 12 00 00 00", false),
+        ("0a 12", false),
+        ("06 01", true),
+        ("0A 10 00", true),
+        ("00 08 00", true),
+    ];
+    for (rest, runs) in cases {
+        host.ipmi_calls.clear();
+        let request = Request { word: "IPMI", rest };
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        ipmi_request(&request, &mut host, &mut out, false).unwrap();
+        assert_eq!(host.ipmi_calls.len(), usize::from(runs), "{rest}");
+        if !runs {
+            assert_eq!(out.as_str(), "ERR WRITE_DISABLED IPMC_APP_FRU_WRITE is 0");
+        }
+        // With the permission every request runs.
+        host.ipmi_calls.clear();
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        ipmi_request(&request, &mut host, &mut out, true).unwrap();
+        assert_eq!(host.ipmi_calls.len(), 1, "{rest}");
+    }
+}
+
+#[test]
+fn a_line_that_completes_after_lost_bytes_is_not_run() {
+    let mut host = FakeHost::new();
+    let cases = [
+        (
+            Fed::Line("#a7 SET ASSET_TAG abc"),
+            "#a7 ERR LINE_DAMAGED 3 bytes lost on the port",
+        ),
+        (
+            Fed::Line("SET ASSET_TAG abc"),
+            "ERR LINE_DAMAGED 3 bytes lost on the port",
+        ),
+        (
+            Fed::Line("#toolongtag1 STATUS"),
+            "ERR LINE_DAMAGED 3 bytes lost on the port",
+        ),
+        (Fed::TooLong, "ERR LINE_DAMAGED 3 bytes lost on the port"),
+    ];
+    for (fed, text) in cases {
+        let mut out = AnswerBuf::<ANSWER_MAX>::new();
+        assert!(respond(fed, 3, &mut host, &mut out));
+        assert_eq!(out.as_str(), text);
+    }
+    // The request did not run.
+    assert_eq!(reply(&mut host, "GET ASSET_TAG"), "OK ASSET_TAG");
+    // Nothing is answered before a line completes, whatever was lost.
+    let mut out = AnswerBuf::<ANSWER_MAX>::new();
+    assert!(!respond(Fed::Nothing, 3, &mut host, &mut out));
+    assert!(out.is_empty());
 }
 
 #[test]

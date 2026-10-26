@@ -44,6 +44,10 @@
 //! uses its number up, so a record the driver reported as failed but that did land cannot share
 //! its number with the next one.
 //!
+//! NVMRO asserting between the erase and the program of a save leaves the sector erased with the
+//! image in RAM: the same window as the accepted power cut above, and the write is saved again
+//! when NVMRO clears.
+//!
 //! Power cut at any word of an append: the previous record is still valid and wins (tested for
 //! every word of a record). The erase of the full sector is the one operation that can lose the
 //! image (see above).
@@ -186,6 +190,10 @@ pub enum FlashError {
     /// NVMRO is asserted: the driver refuses to start an erase or a program (VITA 46.11 Rule 8-3,
     /// Rec 4.1.10-1); the flash is untouched.
     NvmroAsserted,
+    /// The driver did not start an erase because a frame had been accepted on an IPMB bus (the
+    /// firmware checks after it takes the slaves off the bus); nothing was touched. Not a
+    /// failure: the write stays pending and the next pass retries.
+    Deferred,
 }
 
 impl FlashError {
@@ -200,6 +208,7 @@ impl FlashError {
             FlashError::Verify => "Verify",
             FlashError::Range => "Range",
             FlashError::NvmroAsserted => "NvmroAsserted",
+            FlashError::Deferred => "Deferred",
         }
     }
 }
@@ -666,7 +675,9 @@ impl Persist {
     ///    fails must not use up the delay), so a failing flash is retried once per delay, not
     ///    once per pass.
     /// 4. A save that has to erase the sector (`save_needs_erase`) waits until `erase_ok`: the
-    ///    firmware passes true when the bus has been quiet; the image stays safe in RAM.
+    ///    firmware passes true when the bus has been quiet; the image stays safe in RAM. An
+    ///    erase the driver defers (`FlashError::Deferred`) returns None with the failure counter,
+    ///    `last_error` and `last_write_ms` unchanged, and the next pass retries.
     ///
     /// Returns the outcome of a save attempted in this call, None when none was due.
     pub fn poll<F: FlashLog>(
@@ -689,6 +700,10 @@ impl Persist {
             return None;
         }
         let result = self.save(flash, store.image(), store.nv_settings());
+        // A deferred erase touched nothing and used no sequence number: not now, not a failure.
+        if result == Err(PersistError::Flash(FlashError::Deferred)) {
+            return None;
+        }
         match result {
             Ok(_) => {
                 self.pending = false;

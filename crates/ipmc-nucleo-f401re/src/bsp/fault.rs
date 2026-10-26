@@ -74,6 +74,8 @@ fn report_claim(error: PortError) {
 /// record_print_park -- the shared body of both handlers: records `kind` and `value` in the
 /// static record, prints one console line when the UART is up, then parks. `value` is the
 /// stacked PC for KIND_HARDFAULT and the sign-extended IRQ number for KIND_UNHANDLED_IRQ.
+/// A fault that fires while the console state is borrowed (inside a UART call) prints nothing:
+/// the state cannot be taken inside the fault (`with_port` returns None).
 fn record_print_park(kind: u32, value: u32) -> ! {
     FAULT_VALUE.store(value, Ordering::Relaxed);
     FAULT_KIND.store(kind, Ordering::Relaxed);

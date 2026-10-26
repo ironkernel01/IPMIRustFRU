@@ -60,8 +60,9 @@ $BaudLine = Select-String -Path $DefsHeader -Pattern '^#define\s+IPMC_CONSOLE_BA
 if (-not $BaudLine) { throw "IPMC_CONSOLE_BAUD not found in $DefsHeader" }
 $Baud = [int]$BaudLine.Matches[0].Groups[1].Value
 $CommandSettleMs = 400          # wait after sending a command before reading the reply
-$CommandDeadlineMs = 3000       # overall time allowed to collect one command's reply
-$ReplyBytesMax = 8192           # byte cap per command reply (the longest reply is about 700 bytes)
+$ReplyQuietMs = 600             # a reply is complete once the console has been silent this long
+$CommandDeadlineMs = 60000      # overall time allowed to collect one command's reply (a full DEBUG DUMP of the capture log takes tens of seconds at 115200 baud)
+$ReplyBytesMax = 131072         # byte cap per command reply (a full DEBUG DUMP is tens of kilobytes)
 $FlashSettleSec = 3             # the debug interface programs the image after the copy
 $RemountWaitSec = 10            # the volume may drop and return while programming
 $OpenOcdTimeoutMs = 60000       # longest OpenOCD run (a program of the whole image takes a few seconds)
@@ -221,7 +222,7 @@ function Invoke-Flash {
 
 function Invoke-Console {
     $port = New-Object System.IO.Ports.SerialPort $ComPort, $Baud, 'None', 8, 'One'
-    $port.ReadTimeout = 500
+    $port.ReadTimeout = $ReplyQuietMs
     $port.DtrEnable = $true
     $port.Open()
     try {
@@ -237,7 +238,7 @@ function Invoke-Console {
                 }
             } catch [System.TimeoutException] {}
             if ($clock.ElapsedMilliseconds -ge $CommandDeadlineMs -or $out.Length -ge $ReplyBytesMax) {
-                Write-Warning "reply to '$cmd' cut off (deadline $CommandDeadlineMs ms or $ReplyBytesMax bytes)"
+                Write-Warning "reply to '$cmd' cut off (deadline $CommandDeadlineMs ms or $ReplyBytesMax bytes; it was still arriving)"
             }
             $out.ToString()
         }

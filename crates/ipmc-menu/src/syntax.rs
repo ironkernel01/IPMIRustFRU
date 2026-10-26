@@ -77,18 +77,20 @@ pub(crate) const RESERVED_WORDS: [&str; 4] = ["HELP", "?", "UP", ".."];
 
 /// ends_with_rest_suffix -- `word` ends in `...}`.
 const fn ends_with_rest_suffix(word: &[u8]) -> bool {
-    let (n, m) = (word.len(), REST_SUFFIX.len());
-    if n < m {
+    let Some((_, mut tail)) = word.split_at_checked(word.len().saturating_sub(REST_SUFFIX.len()))
+    else {
         return false;
-    }
-    let mut i = 0;
-    while i < m {
-        if word[n - m + i] != REST_SUFFIX[i] {
+    };
+    let mut suffix = REST_SUFFIX;
+    // Slice patterns walk both without indexing; the lengths are equal unless `word` is shorter.
+    while let ([t, t_rest @ ..], [s, s_rest @ ..]) = (tail, suffix) {
+        if *t != *s {
             return false;
         }
-        i += 1;
+        tail = t_rest;
+        suffix = s_rest;
     }
-    true
+    word.len() >= REST_SUFFIX.len()
 }
 
 /// token_at -- the `n`th whitespace-separated token of `s` (0-based), classified by its first

@@ -27,6 +27,16 @@
 //! and 1 to 8 letters or digits; the answer then starts with the same tag, so a payload CPU
 //! that has several requests in flight can match answers to requests.
 //!
+//! # Lost bytes
+//!
+//! The UART counts the bytes it loses (overrun, receive ring full). A line that completes after
+//! the counters moved is not run: the answer is `ERR LINE_DAMAGED <n> bytes lost on the port`
+//! (with the tag when the line had a valid one) and the payload CPU sends the line again. A
+//! payload that writes a field also compares the `OK <FIELD> <value>` echo of `SET` with what it
+//! sent. With `IPMC_APP_UART_FLOW` 1 the IPMC deasserts RTS only when the data register holds an
+//! unread byte, so a sender that has a byte in flight can still overrun by one byte; the overrun
+//! counter counts it and the line is answered `ERR LINE_DAMAGED`.
+//!
 //! Two worked exchanges (`>` is the request, `<` the answer):
 //!
 //! ```text
@@ -51,7 +61,8 @@
 //! 1. The firmware reads bytes from the UART receive ring and gives each to
 //!    `LineAssembler::push`. A complete line comes back as `Fed::Line`.
 //! 2. `respond` passes the line to `answer`. A line that was too long or held a non-ASCII byte
-//!    gets its own `ERR` answer there.
+//!    gets its own `ERR` answer there, and so does any line that completes after bytes were lost
+//!    (`ERR LINE_DAMAGED`; the line does not run).
 //! 3. `answer` strips the optional tag, takes the first word as the command and finds the row of
 //!    `COMMANDS` with that keyword.
 //! 4. The row's handler asks the `AppHost` for whatever it needs and writes the answer line.

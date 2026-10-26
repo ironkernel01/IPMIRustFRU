@@ -29,6 +29,8 @@ struct Mock {
     erase_ms: u32,
     /// Every erase fails with Timeout and leaves the sector as it was.
     erase_fails: bool,
+    /// The next erase is deferred once (`FlashError::Deferred`), touching nothing.
+    defer_erase: bool,
     /// NVMRO is asserted: every erase and program is refused and touches nothing.
     nvmro: bool,
 }
@@ -45,6 +47,7 @@ impl Mock {
             now: 0,
             erase_ms: 0,
             erase_fails: false,
+            defer_erase: false,
             nvmro: false,
         }
     }
@@ -94,6 +97,9 @@ impl FlashLog for Mock {
     fn erase(&mut self) -> Result<(), FlashError> {
         if self.nvmro {
             return Err(FlashError::NvmroAsserted);
+        }
+        if std::mem::take(&mut self.defer_erase) {
+            return Err(FlashError::Deferred);
         }
         self.erases += 1;
         self.now = self.now.wrapping_add(self.erase_ms);
@@ -412,6 +418,30 @@ fn a_failing_flash_is_retried_once_per_delay() {
         (s.failures, s.saves, s.last_error.map(PersistError::name)),
         (1, 1, Some("Programming"))
     );
+}
+
+#[test]
+fn a_deferred_erase_is_not_a_failure_and_the_next_poll_saves() {
+    let mut flash = Mock::new();
+    let (mut log, _, _) = booted(&mut flash);
+    save_tags(&mut log, &mut flash, 1..=SLOTS as u8);
+    assert!(log.save_needs_erase());
+    let mut store = FruStore::new();
+    store.write(TAG_AT, &[9]).unwrap();
+    flash.defer_erase = true;
+    assert!(log
+        .poll(&mut flash, &mut store, 0, false, DELAY_MS, true)
+        .is_none());
+    let deferred = log.poll(&mut flash, &mut store, DELAY_MS, false, DELAY_MS, true);
+    assert!(deferred.is_none(), "deferred: no outcome to report");
+    let s = log.status();
+    assert_eq!((s.failures, s.last_error, s.pending), (0, None, true));
+    assert_eq!(flash.erases, 0);
+    // No wait for a new delay: the very next pass saves.
+    let saved = log.poll(&mut flash, &mut store, DELAY_MS + 1, false, DELAY_MS, true);
+    assert!(matches!(saved, Some(Ok(s)) if s.erased));
+    assert_eq!(loaded_tag(&mut flash), Some(9));
+    assert_eq!(log.status().failures, 0);
 }
 
 #[test]

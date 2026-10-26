@@ -24,12 +24,25 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// answers are `ERR UNKNOWN <word>` for a word as long as a request line and the `IPMI` answer
 /// with a full frame of data (3 characters per byte).
 pub const ANSWER_MAX: usize = 256;
+// The longest error answer that echoes a request word: "#" + 8 tag characters + a blank, then
+// "ERR UNKNOWN " (12 bytes) and the word (at most a whole request line).
+const _: () = assert!(
+    ANSWER_MAX >= 10 + 12 + ipmc_defs::IPMC_APP_LINE_MAX as usize,
+    "ANSWER_MAX must hold the longest error answer that echoes a request word"
+);
 
 /// VALUE_MAX -- room for the text of one unit field: 63 bytes is the longest FRU text field.
 const VALUE_MAX: usize = 64;
 
-/// WRITE_ENABLED -- `SET` is allowed (ipmi_defs.h IPMC_APP_FRU_WRITE).
+/// WRITE_ENABLED -- `SET` and the write requests of `WRITE_REFUSED` are allowed (ipmi_defs.h
+/// IPMC_APP_FRU_WRITE).
 const WRITE_ENABLED: bool = ipmc_defs::IPMC_APP_FRU_WRITE == 1;
+
+/// WRITE_REFUSED -- the (NetFn, command) pairs `IPMI` refuses while IPMC_APP_FRU_WRITE is 0:
+/// the requests that write the FRU data. Storage NetFn 0Ah, Write FRU Data 12h. A developer who
+/// adds a request that changes FRU content from the application port adds its pair here. FRU
+/// Control, Set IPMB State and Set Event Receiver are not FRU data writes and still run.
+const WRITE_REFUSED: &[(u8, u8)] = &[(0x0A, 0x12)];
 
 /// Request -- the parts of a request line after the tag, handed to a handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,11 +171,17 @@ pub fn answer(line: &str, host: &mut dyn AppHost, out: &mut dyn Write) {
     let _ = answer_line(line, host, out);
 }
 
+/// leading_tag -- the first word of `line` (leading blanks skipped) when it starts with `#`:
+/// the text after the `#` and the rest of the line. The tag is not checked here (`valid_tag`).
+fn leading_tag(line: &str) -> Option<(&str, &str)> {
+    let tagged = line.trim_start_matches(is_blank).strip_prefix('#')?;
+    Some(tagged.split_once(is_blank).unwrap_or((tagged, "")))
+}
+
 /// answer_line -- `answer` with the write errors returned.
 fn answer_line(line: &str, host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::Result {
     let line = line.trim_start_matches(is_blank);
-    let line = if let Some(tagged) = line.strip_prefix('#') {
-        let (tag, after) = tagged.split_once(is_blank).unwrap_or((tagged, ""));
+    let line = if let Some((tag, after)) = leading_tag(line) {
         if !valid_tag(tag) {
             return err(
                 out,
@@ -189,11 +208,26 @@ fn answer_line(line: &str, host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::
     }
 }
 
-/// respond -- answers what `LineAssembler::push` returned. A line goes to `answer`; a line that
-/// was too long or held a byte other than printable ASCII gets its own `ERR` answer (the request
-/// is lost, so no tag can be echoed). Returns true when an answer was written, false for
-/// `Fed::Nothing`.
-pub fn respond(fed: Fed<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> bool {
+/// respond -- answers what `LineAssembler::push` returned. `lost` is the bytes the port lost
+/// since the previous line ended (UART overrun and receive-ring overflow counters). A line that
+/// completes with `lost` above 0 is not run: it gets `ERR LINE_DAMAGED <n> bytes lost on the
+/// port`, with the tag echoed when the line had a valid one, because a changed request must
+/// never act. Otherwise a line goes to `answer`; a line that was too long or held a byte other
+/// than printable ASCII gets its own `ERR` answer (the request is lost, so no tag can be
+/// echoed). Returns true when an answer was written, false for `Fed::Nothing`.
+///
+/// A payload that writes a field compares the `OK <FIELD> <value>` echo of `SET` with what it
+/// sent; a byte lost without any counter (a framing error) shows there.
+pub fn respond(fed: Fed<'_>, lost: u32, host: &mut dyn AppHost, out: &mut dyn Write) -> bool {
+    if lost > 0 {
+        let line = match fed {
+            Fed::Nothing => return false,
+            Fed::Line(line) => line,
+            Fed::TooLong | Fed::BadChar => "",
+        };
+        let _ = damaged(line, lost, out);
+        return true;
+    }
     let _ = match fed {
         Fed::Nothing => return false,
         Fed::Line(line) => {
@@ -212,6 +246,19 @@ pub fn respond(fed: Fed<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> boo
         ),
     };
     true
+}
+
+/// damaged -- `ERR LINE_DAMAGED <lost> bytes lost on the port`, after the tag of `line` when it
+/// has a valid one.
+fn damaged(line: &str, lost: u32, out: &mut dyn Write) -> fmt::Result {
+    if let Some((tag, _)) = leading_tag(line).filter(|(tag, _)| valid_tag(tag)) {
+        write!(out, "#{tag} ")?;
+    }
+    err(
+        out,
+        "LINE_DAMAGED",
+        format_args!("{lost} bytes lost on the port"),
+    )
 }
 
 // ---- handlers ----
@@ -369,6 +416,15 @@ fn cmd_get(request: &Request<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
     }
 }
 
+/// write_disabled -- the `ERR WRITE_DISABLED` answer of `SET` and of a refused `IPMI` request.
+fn write_disabled(out: &mut dyn Write) -> fmt::Result {
+    err(
+        out,
+        "WRITE_DISABLED",
+        format_args!("IPMC_APP_FRU_WRITE is 0"),
+    )
+}
+
 /// cmd_set -- `SET <field> <value>` writes the field and answers `OK <FIELD> <value>` with the
 /// value as stored now. The value is the rest of the line after the one space that follows the
 /// field name; spaces inside it stay. `SET <field>` alone clears a text field. Refused with
@@ -388,11 +444,7 @@ pub(crate) fn set_field(
     write_enabled: bool,
 ) -> fmt::Result {
     if !write_enabled {
-        return err(
-            out,
-            "WRITE_DISABLED",
-            format_args!("IPMC_APP_FRU_WRITE is 0"),
-        );
+        return write_disabled(out);
     }
     let rest = request.rest.trim_start_matches(is_blank);
     let (word, value) = rest.split_once(is_blank).unwrap_or((rest, ""));
@@ -422,8 +474,21 @@ fn cmd_fields(_request: &Request<'_>, _host: &mut dyn AppHost, out: &mut dyn Wri
 /// if the Chassis Manager had sent it, and answers `OK IPMI CC=<cc> DATA=<hex bytes>`. Every
 /// number is a hex byte: `06`, `0x06` and `6` are the same. A completion code other than 00h is
 /// still an `OK` answer: the request ran and the IPMC said no. `ERR IPMI_FAILED <why>` means it
-/// did not run (a NetFn that is odd or above 3Eh, or more data than one frame holds).
+/// did not run (a NetFn that is odd or above 3Eh, or more data than one frame holds). While
+/// IPMC_APP_FRU_WRITE is 0, Write FRU Data (`WRITE_REFUSED`) answers `ERR WRITE_DISABLED`.
 fn cmd_ipmi(request: &Request<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -> fmt::Result {
+    ipmi_request(request, host, out, WRITE_ENABLED)
+}
+
+/// ipmi_request -- `cmd_ipmi` with the write permission as a parameter, so a test reaches the
+/// `WRITE_DISABLED` answer whatever the build setting is. With the permission off, a pair of
+/// `WRITE_REFUSED` answers `ERR WRITE_DISABLED` and does not run.
+pub(crate) fn ipmi_request(
+    request: &Request<'_>,
+    host: &mut dyn AppHost,
+    out: &mut dyn Write,
+    write_enabled: bool,
+) -> fmt::Result {
     let mut bytes = [0u8; IPMB_MAX_LEN];
     let mut count = 0;
     for token in request.tokens() {
@@ -443,6 +508,9 @@ fn cmd_ipmi(request: &Request<'_>, host: &mut dyn AppHost, out: &mut dyn Write) 
             format_args!("usage: IPMI <netfn> <cmd> [data...]"),
         );
     };
+    if !write_enabled && WRITE_REFUSED.contains(&(*netfn, *cmd)) {
+        return write_disabled(out);
+    }
     match host.ipmi(*netfn, *cmd, data) {
         Ok((code, response)) => {
             write!(out, "OK IPMI CC={code:02X} DATA=")?;

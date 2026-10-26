@@ -68,8 +68,8 @@
 #define IPMB_TXQ_DEPTH 4                          /* response frames the egress queue holds (1..16); a full queue drops and counts */
 #define IPMB_FAULT_STREAK 8                       /* consecutive bus-fault errors on one IPMB (stretch timeout, SCL or SDA stuck low, bus busy, slave BERR or TIMEOUT) before the bus is marked faulted in the IPMB Link sensor (2..=64); address and data NACKs are not bus faults; a good write or frame resets the count (VITA 46.11 Rule 9.3-10) */
 #define IPMB_FAULT_CLEAR_MS 1000                  /* both lines must read idle-high continuously this long before a faulted bus is cleared (100..=60000), milliseconds */
-#define IPMC_IPMI_TRACE 1                         /* 1 = trace every dispatched request on the console; 0 = silent */
-#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536, a power of two; usable size IPMC_LOG_SIZE - 1 because the ring keeps one slot empty): whole IPMB frames in and out and the trace lines, oldest overwritten first */
+#define IPMC_IPMI_TRACE 1                         /* 1 = trace every dispatched request on the console; 0 = silent: the link and dispatcher lines are compiled out, so they are absent from the console and from the capture log */
+#define IPMC_LOG_SIZE 8192                        /* capture log ring, bytes (1024..=65536, a power of two; usable size IPMC_LOG_SIZE - 1 because the ring keeps one slot empty): whole IPMB frames in and out and the trace lines, oldest overwritten first; each DEBUG DUMP row walks the log from its start, so a larger log makes DEBUG DUMP slower per row */
 #define IPMC_LOG_TEXT_MAX 160                     /* longest trace line kept in the log, bytes (32..=200); a longer line is cut and ends in ... */
 
 #define IPMB_STRAP_FROM_PINS 0                    /* strap value is read from the pins */
@@ -90,7 +90,7 @@
 #define IPMC_APP_UART_TX_BUF 1024                 /* application port TX ring, bytes; power of two */
 #define IPMC_APP_LINE_MAX 128                     /* longest application port request line, bytes (16..=IPMC_APP_UART_RX_BUF - 3); IPMC_APP_UART_RX_BUF holds at least one */
 #define IPMC_APP_BYTES_PER_POLL 32                /* most application port bytes one main-loop pass takes (1..=IPMC_APP_UART_RX_BUF) */
-#define IPMC_APP_FRU_WRITE 1                      /* 1 = the application port may SET the per-unit FRU fields; 0 = GET only */
+#define IPMC_APP_FRU_WRITE 1                      /* 1 = the application port may SET the per-unit FRU fields and run IPMI Write FRU Data; 0 = SET and IPMI Write FRU Data (NetFn 0Ah, command 12h) answer ERR WRITE_DISABLED and do not run, GET and the other IPMI requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager */
 #define IPMC_MENU_LINE_MAX 128                    /* longest accepted console line in bytes; a longer line is rejected */
 #define IPMC_MENU_TOKENS_MAX 40                   /* most whitespace-separated tokens in one console line or one command syntax */
 #define IPMC_FRU_DUMP_BYTES_PER_LINE 16           /* bytes on one line of the console FRU DUMP (1..16; 16 x 3 characters plus a 6-character offset fit an 80-column console) */
