@@ -132,6 +132,13 @@ impl FruStore {
         self.read(offset, count).is_ok()
     }
 
+    /// replace_image -- stores a whole new image (the per-unit field editor, `unit.rs`) and
+    /// marks the store dirty so the flash log saves it, as an accepted write does.
+    pub(crate) fn replace_image(&mut self, image: [u8; SIZE]) {
+        self.bytes = image;
+        self.dirty = true;
+    }
+
     /// write -- stores `data` at `offset`. Err(OutOfRange) when the range is not inside the
     /// area; nothing is written then. The caller checks NVMRO (VITA Rule 8-3) first. An accepted
     /// write marks the store dirty.

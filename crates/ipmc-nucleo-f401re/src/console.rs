@@ -26,6 +26,7 @@ use ipmc_menu::{
     MenuError, MenuOutput,
 };
 
+use crate::app_port::{self, AppPort};
 use crate::bsp::clock::{ClockFault, ClockInfo};
 use crate::bsp::led::{self, Shown};
 use crate::bsp::reset_cause::ResetCause;
@@ -48,6 +49,8 @@ pub struct Context {
     pub(crate) ipmb: &'static mut IpmbLink,
     /// The DEBUG DUMP in progress, continued by `Console::poll` (debug_cmds.rs).
     pub(crate) dump: Option<DumpJob>,
+    /// The application port: its line assembler, polled by `Console::service_app`.
+    app: AppPort,
 }
 
 /// ConsoleTrace -- console sink of the trace hook, shared by the sensors and the IPMB link:
@@ -389,6 +392,7 @@ impl Console {
                 sensing,
                 ipmb,
                 dump: None,
+                app: AppPort::new(),
             },
             menu: Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP_COMMANDS, &GROUPS),
             editor: LineEditor::new(),
@@ -417,6 +421,12 @@ impl Console {
         if let Some(snapshot) = self.ctx.sensing.take_fresh() {
             self.ctx.ipmb.feed_sensors(&snapshot);
         }
+    }
+
+    /// service_app -- one main-loop pass of the application port (`AppPort::poll`): takes the
+    /// received bytes and answers at most one request line.
+    pub fn service_app(&mut self) {
+        self.ctx.app.poll(self.ctx.ipmb);
     }
 
     /// service_link -- runs the IPMB link layer's main-loop step.
@@ -466,6 +476,7 @@ impl Console {
             }
         );
         out!("{}\n", addr::bootloader_pin_text(ga::bootloader_pin_high()));
+        print_app_port();
         out!("Type HELP or ? for commands.\n");
     }
 
@@ -558,6 +569,23 @@ fn print_clock(ctx: &Context) {
     out!("PCLK2 (APB2): {}\n", Mhz(c.pclk2_hz));
 }
 
+/// print_app_port -- the banner line of the application port.
+fn print_app_port() {
+    if app_port::ENABLED {
+        out!(
+            "App port:     USART1 {} 8N1, RTS/CTS {}\n",
+            ipmc_defs::IPMC_APP_UART_BAUD,
+            if ipmc_defs::IPMC_APP_UART_FLOW == 1 {
+                "on"
+            } else {
+                "off"
+            }
+        );
+    } else {
+        out!("App port:     off\n");
+    }
+}
+
 fn print_ga(g: &AddrInfo) {
     out!(
         "GA raw pins (at start-up): GA4..GA0={:05b} GAP={} NVMRO={} (1 = high)\n",
@@ -624,6 +652,7 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_uart(Port::Console);
     if ipmc_defs::IPMC_APP_UART_ENABLE == 1 {
         print_uart(Port::App);
+        out!("App answers:  dropped={}\n", app_port::answers_dropped());
     } else {
         out!("App UART:     off (IPMC_APP_UART_ENABLE 0)\n");
     }

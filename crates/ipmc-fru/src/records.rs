@@ -9,8 +9,8 @@
 //!
 //! ```text
 //! offset 00h  common header, 8 bytes
-//!        08h  board info area, a multiple of 8 bytes
-//!        ..   product info area, a multiple of 8 bytes
+//!        08h  board info area, a multiple of 8 bytes (fields, C1h, room for the per-unit fields)
+//!        ..   product info area, a multiple of 8 bytes (the same)
 //!        ..   00h padding up to IPMC_FRU_SIZE
 //! ```
 //!
@@ -41,15 +41,15 @@ const LANGUAGE_ENGLISH: u8 = 0;
 /// LENGTH_MASK -- bits 5:0 of a type/length byte, the data length in bytes (FRU spec section 13).
 const LENGTH_MASK: u8 = 0x3F;
 /// END_OF_FIELDS -- type/length byte C1h: no more fields (FRU spec section 13).
-const END_OF_FIELDS: u8 = 0xC1;
+pub(crate) const END_OF_FIELDS: u8 = 0xC1;
 /// FIELD_LEN_MAX -- longest field a 6-bit length holds.
 const FIELD_LEN_MAX: usize = 63;
 /// MFG_DATE_LEN -- the board manufacturing date/time is 3 bytes, LS byte first (FRU spec Table 11-1).
-const MFG_DATE_LEN: usize = 3;
+pub(crate) const MFG_DATE_LEN: usize = 3;
 /// Bytes of an area before its first type/length field: version, length, language code, and for
 /// the board area the 3-byte manufacturing date (FRU spec Tables 11-1 and 12-1).
-const PRODUCT_HEADER_LEN: usize = 3;
-const BOARD_HEADER_LEN: usize = PRODUCT_HEADER_LEN + MFG_DATE_LEN;
+pub(crate) const PRODUCT_HEADER_LEN: usize = 3;
+pub(crate) const BOARD_HEADER_LEN: usize = PRODUCT_HEADER_LEN + MFG_DATE_LEN;
 
 /// Common header byte positions (FRU spec Table 8-1).
 const HDR_VERSION: usize = 0;
@@ -72,11 +72,25 @@ const fn push_text(img: &mut Image, text: &str) {
     img.push_type_length_ascii(text, 0, FIELD_LEN_MAX);
 }
 
-/// finish_area -- closes the area that began at `start`: the C1h end-of-fields byte, 00h
-/// padding to a multiple of 8 bytes that leaves one byte for the checksum, the area length
-/// in byte 1 (in 8-byte units) and the zero checksum.
-const fn finish_area(img: &mut Image, start: usize) {
+/// reserve -- the bytes one per-unit field leaves free in the built area: the room the define
+/// reserves for it (`max`) less the length of its default string. An update up to `max` bytes
+/// then rewrites the field in place and no area moves (`unit.rs`). The guards in `ipmc-defs`
+/// keep the default within `max`.
+const fn reserve(max: u32, default: &str) -> usize {
+    max as usize - default.len()
+}
+
+/// finish_area -- closes the area that began at `start`: the C1h end-of-fields byte, `reserve`
+/// bytes of 00h (the room for the per-unit fields, FRU spec section 10 allows 00h padding after
+/// C1h up to the area length), 00h padding to a multiple of 8 bytes that leaves one byte for the
+/// checksum, the area length in byte 1 (in 8-byte units) and the zero checksum.
+const fn finish_area(img: &mut Image, start: usize, reserve: usize) {
     img.push(END_OF_FIELDS);
+    let mut left = reserve;
+    while left > 0 {
+        img.push(0);
+        left -= 1;
+    }
     while !(img.len() - start + 1).is_multiple_of(AREA_ALIGN) {
         img.push(0);
     }
@@ -117,7 +131,17 @@ const fn build() -> Image {
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_SERIAL);
     push_text(&mut img, ipmc_defs::IPMC_FRU_BOARD_PART);
     push_text(&mut img, ipmc_defs::IPMC_FRU_FILE_ID);
-    finish_area(&mut img, board);
+    finish_area(
+        &mut img,
+        board,
+        reserve(
+            ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
+            ipmc_defs::IPMC_FRU_BOARD_SERIAL,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
+            ipmc_defs::IPMC_FRU_BOARD_PART,
+        ),
+    );
 
     // Product Info Area (FRU spec Table 12-1). The product area has its own FRU File ID field;
     // owner decision 2 defines one file ID (the board's), so this one is the empty field.
@@ -130,7 +154,20 @@ const fn build() -> Image {
     push_text(&mut img, ipmc_defs::IPMC_FRU_PRODUCT_SERIAL);
     push_text(&mut img, ipmc_defs::IPMC_FRU_ASSET_TAG);
     push_text(&mut img, "");
-    finish_area(&mut img, product);
+    finish_area(
+        &mut img,
+        product,
+        reserve(
+            ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
+            ipmc_defs::IPMC_FRU_PRODUCT_PART,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
+            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
+            ipmc_defs::IPMC_FRU_ASSET_TAG,
+        ),
+    );
 
     // Common header (FRU spec Table 8-1): Internal Use, Chassis Info and MultiRecord are absent.
     img.bytes[HDR_VERSION] = FORMAT_VERSION;
@@ -449,59 +486,137 @@ mod tests {
     // section 13) for the default strings of ipmi_defs.h, with every checksum worked out apart
     // from `build`. A change to a default string changes them and fails these tests on purpose.
 
-    /// Common header: version 01h; internal 00h; chassis 00h (VITA Rule 8.1-3); board at unit 1
-    /// (offset 08h); product at unit 0Bh (offset 58h, the board area is 80 bytes); multirecord
-    /// 00h; pad 00h; checksum 100h - (01h + 01h + 0Bh) = F3h.
-    const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0B, 0x00, 0x00, 0xF3];
+    /// Room the defaults leave: the board area reserves (24 - 12) for the serial and (24 - 14) for
+    /// the part number, the product area (24 - 10) for the part, (24 - 12) for the serial and
+    /// (24 - 0) for the asset tag.
+    ///
+    /// Board area bytes: 6 header + (1+10) + (1+15) + (1+12) + (1+14) + (1+11) = 73 field
+    /// bytes, C1h = 74, + 22 reserved = 96, + 1 checksum = 97, rounded up to 8 = 104.
+    /// Product area bytes: 3 header + (1+10) + (1+21) + (1+10) + (1+3) + (1+12) + 1 + 1 = 66,
+    /// C1h = 67, + 50 reserved = 117, + 1 checksum = 118, rounded up to 8 = 120.
+    const BOARD_LEN: usize = 104;
+    const PRODUCT_LEN: usize = 120;
 
-    /// Board area at 08h: version 01h, length 0Ah (80 bytes), language 00h, date 16204320 =
-    /// F74220h -> 20 42 F7, "IronKernel" (CAh), "VPX Tier-1 IPMC" (CFh), "IK-T1-000001" (CCh),
-    /// "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h, 00h pad, checksum 51h.
-    const BOARD: [u8; 80] = [
-        0x01, 0x0A, 0x00, 0x20, 0x42, 0xF7, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E,
+    /// Common header: version 01h; internal 00h; chassis 00h (VITA Rule 8.1-3); board at unit 1
+    /// (offset 08h); product at unit 0Eh (offset 70h, the board area is 104 bytes); multirecord
+    /// 00h; pad 00h; checksum 100h - (01h + 01h + 0Eh) = F0h.
+    const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0E, 0x00, 0x00, 0xF0];
+
+    /// Board area at 08h up to and including the C1h byte: version 01h, length 0Dh (104 bytes),
+    /// language 00h, date 16204320 = F74220h -> 20 42 F7, "IronKernel" (CAh), "VPX Tier-1 IPMC"
+    /// (CFh), "IK-T1-000001" (CCh), "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h. After it
+    /// come 29 bytes of 00h (22 reserved, 7 alignment) and the checksum.
+    const BOARD_BODY: [u8; 74] = [
+        0x01, 0x0D, 0x00, 0x20, 0x42, 0xF7, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E,
         0x65, 0x6C, 0xCF, 0x56, 0x50, 0x58, 0x20, 0x54, 0x69, 0x65, 0x72, 0x2D, 0x31, 0x20, 0x49,
         0x50, 0x4D, 0x43, 0xCC, 0x49, 0x4B, 0x2D, 0x54, 0x31, 0x2D, 0x30, 0x30, 0x30, 0x30, 0x30,
         0x31, 0xCE, 0x49, 0x4B, 0x2D, 0x49, 0x50, 0x4D, 0x43, 0x2D, 0x54, 0x31, 0x2D, 0x4E, 0x55,
-        0x43, 0xCB, 0x69, 0x70, 0x6D, 0x63, 0x2D, 0x66, 0x72, 0x75, 0x2D, 0x76, 0x31, 0xC1, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x51,
+        0x43, 0xCB, 0x69, 0x70, 0x6D, 0x63, 0x2D, 0x66, 0x72, 0x75, 0x2D, 0x76, 0x31, 0xC1,
     ];
 
-    /// Product area at 58h: version 01h, length 09h (72 bytes), language 00h, "IronKernel" (CAh),
-    /// "Tier-1 IPMC Reference" (D5h), "IK-IPMC-T1" (CAh), "0.1" (C3h), "IK-T1-000001" (CCh), empty
-    /// asset tag (C0h), empty file ID (C0h), C1h, 00h pad, checksum 1Bh.
-    const PRODUCT: [u8; 72] = [
-        0x01, 0x09, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E, 0x65, 0x6C, 0xD5,
+    /// Product area at 70h up to and including the C1h byte: version 01h, length 0Fh (120 bytes),
+    /// language 00h, "IronKernel" (CAh), "Tier-1 IPMC Reference" (D5h), "IK-IPMC-T1" (CAh),
+    /// "0.1" (C3h), "IK-T1-000001" (CCh), empty asset tag (C0h), empty file ID (C0h), C1h.
+    /// After it come 52 bytes of 00h (50 reserved, 2 alignment) and the checksum.
+    const PRODUCT_BODY: [u8; 67] = [
+        0x01, 0x0F, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E, 0x65, 0x6C, 0xD5,
         0x54, 0x69, 0x65, 0x72, 0x2D, 0x31, 0x20, 0x49, 0x50, 0x4D, 0x43, 0x20, 0x52, 0x65, 0x66,
         0x65, 0x72, 0x65, 0x6E, 0x63, 0x65, 0xCA, 0x49, 0x4B, 0x2D, 0x49, 0x50, 0x4D, 0x43, 0x2D,
         0x54, 0x31, 0xC3, 0x30, 0x2E, 0x31, 0xCC, 0x49, 0x4B, 0x2D, 0x54, 0x31, 0x2D, 0x30, 0x30,
-        0x30, 0x30, 0x30, 0x31, 0xC0, 0xC0, 0xC1, 0x00, 0x00, 0x00, 0x00, 0x1B,
+        0x30, 0x30, 0x30, 0x31, 0xC0, 0xC0, 0xC1,
     ];
 
     const BOARD_AT: usize = 0x08;
-    const PRODUCT_AT: usize = 0x58;
+    const PRODUCT_AT: usize = 0x70;
+
+    /// sum8 -- the bytes added modulo 256.
+    fn sum8(bytes: &[u8]) -> u8 {
+        bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b))
+    }
 
     #[test]
     fn image_is_byte_exact() {
         let store = FruStore::new();
         assert_eq!(store.read(0, 8).unwrap(), &HEADER);
-        assert_eq!(store.read(BOARD_AT, BOARD.len()).unwrap(), &BOARD);
-        assert_eq!(store.read(PRODUCT_AT, PRODUCT.len()).unwrap(), &PRODUCT);
-        assert_eq!(IMAGE_LEN, 8 + 80 + 72);
+        for (at, len, body) in [
+            (BOARD_AT, BOARD_LEN, &BOARD_BODY[..]),
+            (PRODUCT_AT, PRODUCT_LEN, &PRODUCT_BODY[..]),
+        ] {
+            let area = store.read(at, len).unwrap();
+            assert_eq!(&area[..body.len()], body);
+            // Reserved room and alignment padding are 00h up to the checksum byte.
+            assert!(area[body.len()..len - 1].iter().all(|b| *b == 0));
+            assert_eq!(sum8(area), 0);
+        }
+        assert_eq!(IMAGE_LEN, 8 + BOARD_LEN + PRODUCT_LEN);
         // Everything after the areas is 00h padding.
         assert!(store.bytes()[IMAGE_LEN..].iter().all(|b| *b == 0));
         assert_eq!(store.bytes().len(), SIZE);
     }
 
     #[test]
+    fn built_areas_have_exactly_the_reserved_length() {
+        // Each reserve is MAX - default length (ipmi_defs.h IPMC_FRU_*_MAX); the area length is
+        // the field bytes with the defaults, C1h, the reserves and the checksum, rounded up to 8.
+        let reserve = |max: u32, default: &str| max as usize - default.len();
+        let field_bytes = |texts: &[&str]| texts.iter().map(|text| 1 + text.len()).sum::<usize>();
+        let board_fields = BOARD_HEADER_LEN
+            + field_bytes(&[
+                ipmc_defs::IPMC_FRU_BOARD_MFR,
+                ipmc_defs::IPMC_FRU_BOARD_PRODUCT,
+                ipmc_defs::IPMC_FRU_BOARD_SERIAL,
+                ipmc_defs::IPMC_FRU_BOARD_PART,
+                ipmc_defs::IPMC_FRU_FILE_ID,
+            ]);
+        let board_room = reserve(
+            ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
+            ipmc_defs::IPMC_FRU_BOARD_SERIAL,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
+            ipmc_defs::IPMC_FRU_BOARD_PART,
+        );
+        let product_fields = PRODUCT_HEADER_LEN
+            + field_bytes(&[
+                ipmc_defs::IPMC_FRU_PRODUCT_MFR,
+                ipmc_defs::IPMC_FRU_PRODUCT_NAME,
+                ipmc_defs::IPMC_FRU_PRODUCT_PART,
+                ipmc_defs::IPMC_FRU_PRODUCT_VERSION,
+                ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
+                ipmc_defs::IPMC_FRU_ASSET_TAG,
+                "",
+            ]);
+        let product_room = reserve(
+            ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
+            ipmc_defs::IPMC_FRU_PRODUCT_PART,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
+            ipmc_defs::IPMC_FRU_PRODUCT_SERIAL,
+        ) + reserve(
+            ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
+            ipmc_defs::IPMC_FRU_ASSET_TAG,
+        );
+        // fields + C1h + room + checksum, up to a multiple of 8.
+        let rounded = |used: usize| (used + 2).next_multiple_of(AREA_ALIGN);
+        let store = FruStore::new();
+        let head = common_header(store.bytes()).unwrap();
+        let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();
+        let product = area(store.bytes(), AreaKind::Product, head.product).unwrap();
+        assert_eq!(board.bytes.len(), rounded(board_fields + board_room));
+        assert_eq!(product.bytes.len(), rounded(product_fields + product_room));
+        assert_eq!(
+            (board.bytes.len(), product.bytes.len()),
+            (BOARD_LEN, PRODUCT_LEN)
+        );
+    }
+
+    #[test]
     fn areas_are_multiples_of_8_and_checksums_sum_to_zero() {
-        let sum = |bytes: &[u8]| bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b));
-        assert_eq!(sum(&HEADER), 0);
-        assert_eq!(sum(&BOARD), 0);
-        assert_eq!(sum(&PRODUCT), 0);
-        assert_eq!(BOARD.len() % 8, 0);
-        assert_eq!(PRODUCT.len() % 8, 0);
-        assert_eq!(usize::from(BOARD[1]) * 8, BOARD.len());
-        assert_eq!(usize::from(PRODUCT[1]) * 8, PRODUCT.len());
+        assert_eq!(sum8(&HEADER), 0);
+        let store = FruStore::new();
+        assert_eq!(usize::from(store.bytes()[BOARD_AT + 1]) * 8, BOARD_LEN);
+        assert_eq!(usize::from(store.bytes()[PRODUCT_AT + 1]) * 8, PRODUCT_LEN);
+        assert_eq!(BOARD_LEN % 8, 0);
+        assert_eq!(PRODUCT_LEN % 8, 0);
         assert_eq!(SIZE % 8, 0);
     }
 
@@ -522,7 +637,7 @@ mod tests {
                 internal: 0,
                 chassis: 0,
                 board: 1,
-                product: 0x0B,
+                product: 0x0E,
                 multirecord: 0,
                 pad: 0,
                 checksum_ok: true
@@ -530,7 +645,7 @@ mod tests {
         );
         let board = area(store.bytes(), AreaKind::Board, head.board).unwrap();
         assert!(board.checksum_ok);
-        assert_eq!(board.bytes, &BOARD);
+        assert_eq!(board.bytes.len(), BOARD_LEN);
         assert_eq!(board.mfg_minutes(), Some(16_204_320));
         let names: Vec<&[u8]> = board.fields().map(|f| f.data).collect();
         assert_eq!(
@@ -562,7 +677,7 @@ mod tests {
             Err(FruError::BadVersion)
         );
         let mut bytes = FruStore::new().bytes().to_vec();
-        bytes[8 + 79] ^= 0x01;
+        bytes[BOARD_AT + BOARD_LEN - 1] ^= 0x01;
         let board = area(&bytes, AreaKind::Board, 1).unwrap();
         assert!(!board.checksum_ok);
         bytes[9] = 0xFF; // length past the image
@@ -616,7 +731,7 @@ mod tests {
     fn header_and_area_faults_are_each_named() {
         // FRU Table 8-1: version 01h exactly. F1h keeps the version nibble but sets reserved
         // bits 7:4; this header sums to 0, so only the version check can reject it.
-        let reserved = [0xF1, 0x00, 0x00, 0x01, 0x0B, 0x00, 0x00, 0x03];
+        let reserved = [0xF1, 0x00, 0x00, 0x01, 0x0E, 0x00, 0x00, 0x00];
         assert_eq!(checksum(&reserved), 0);
         // Each case edits the image; the header checksum is rewritten after the edit so only
         // the named fault remains.
@@ -684,7 +799,7 @@ mod tests {
     fn an_area_without_the_c1_marker_has_no_end_marker() {
         // Replace the board's C1h by C0h (an empty field) and fix the area checksum.
         let marker = BOARD_AT + 73;
-        let last = BOARD_AT + BOARD.len() - 1;
+        let last = BOARD_AT + BOARD_LEN - 1;
         let bytes = altered(|b| {
             assert_eq!(b[marker], 0xC1);
             b[marker] = 0xC0;
@@ -693,12 +808,12 @@ mod tests {
         assert_eq!(verify(&bytes), Err(FruError::NoEndMarker));
     }
 
-    /// Image with a MultiRecord area at unit 14h (offset A0h, after the product area): one OEM
+    /// Image with a MultiRecord area at unit IMAGE_LEN / 8 (right after the product area): one OEM
     /// record, type C0h, end of list and version 2 (82h), 2 data bytes AAh 55h, record checksum
     /// 01h (AAh + 55h = FFh), header checksum -(C0h + 82h + 02h + 01h) = BBh.
     fn with_multirecord(change: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
         altered(|b| {
-            b[5] = 0x14;
+            b[5] = (IMAGE_LEN / AREA_ALIGN) as u8;
             b[7] = checksum(&b[..7]);
             b[IMAGE_LEN..IMAGE_LEN + 7]
                 .copy_from_slice(&[0xC0, 0x82, 0x02, 0x01, 0xBB, 0xAA, 0x55]);
@@ -757,7 +872,7 @@ mod tests {
     fn an_internal_use_area_needs_version_1() {
         let with_internal = |version: u8| {
             altered(|b| {
-                b[1] = 0x14;
+                b[1] = (IMAGE_LEN / AREA_ALIGN) as u8;
                 b[7] = checksum(&b[..7]);
                 b[IMAGE_LEN] = version;
             })

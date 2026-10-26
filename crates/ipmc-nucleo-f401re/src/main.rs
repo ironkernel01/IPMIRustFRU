@@ -4,7 +4,7 @@
 // ipmi_defs.h source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
 // before the I2C slaves exist), IPMB drivers (the own address is known; bus
 // recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
-// (console, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
+// (console, application port, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
 // TIM2 after the UART and stops the IPMB when the period is over (eval.rs).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
 // IPMC_FAULT_BLINK_CHZ (ipmi_defs.h) and the device parks (bsp::fault::park). A pin claim
@@ -21,6 +21,7 @@ macro_rules! out {
     ($($arg:tt)*) => { $crate::bsp::uart::print(format_args!($($arg)*)) };
 }
 
+mod app_port;
 mod bsp;
 mod console;
 mod data_cmds;
@@ -185,6 +186,7 @@ fn main() -> ! {
     let mut ipmb_ended = false;
     loop {
         console.poll();
+        console.service_app();
         console.service_sensors();
         #[cfg(not(ipmc_eval))]
         console.service_link();

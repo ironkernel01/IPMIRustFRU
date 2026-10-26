@@ -120,7 +120,7 @@ fn fru_id_commands_answer_fru_zero_and_refuse_everything_else() {
 // ---- Read FRU Data (Table 34-3) ----
 
 /// The common header the image starts with (FRU spec Table 8-1; ipmc-fru records.rs derives the same bytes).
-const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0B, 0x00, 0x00, 0xF3];
+const HEADER: [u8; 8] = [0x01, 0x00, 0x00, 0x01, 0x0E, 0x00, 0x00, 0xF0];
 
 #[test]
 fn read_fru_data_in_16_byte_chunks_like_the_chassis_manager() {

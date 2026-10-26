@@ -21,6 +21,7 @@ use ipmc_core::link::{LocalError, CM_ADDR8};
 use ipmc_core::queue::Bus;
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
 
+use crate::app_port;
 use crate::bsp::systick;
 use crate::bsp::uart::{self, Port};
 use crate::console::Context;
@@ -54,11 +55,7 @@ fn reported(message: fmt::Arguments) -> CmdError {
 
 /// hex_word -- one typed byte: `06`, `0x06` and `6` are all 06h.
 fn hex_word(text: &str) -> Result<u8, CmdError> {
-    let digits = text
-        .strip_prefix("0x")
-        .or_else(|| text.strip_prefix("0X"))
-        .unwrap_or(text);
-    ipmc_wire::hex_byte(digits).ok_or_else(|| reported(format_args!("'{text}' is not a hex byte")))
+    ipmc_wire::hex_word(text).ok_or_else(|| reported(format_args!("'{text}' is not a hex byte")))
 }
 
 /// hex_words -- the words of `args` from index `first` on as bytes in `buf`; the count.
@@ -80,8 +77,8 @@ fn hex_words(
 
 // ---- local requests ----
 
-/// Reply -- the response frame of a local request.
-struct Reply {
+/// Reply -- the response frame of a local request (also used by the application port).
+pub(crate) struct Reply {
     len: usize,
     bytes: [u8; IPMB_MAX_LEN],
 }
@@ -93,20 +90,25 @@ impl Reply {
     }
 
     /// completion_code -- the completion code of the response.
-    fn completion_code(&self) -> u8 {
+    pub(crate) fn completion_code(&self) -> u8 {
         self.frame()
             .and_then(|f| f.completion_code)
             .unwrap_or(cc::UNSPECIFIED)
     }
 
     /// data -- the response data after the completion code.
-    fn data(&self) -> &[u8] {
+    pub(crate) fn data(&self) -> &[u8] {
         self.frame().map_or(&[], |f| f.data)
     }
 }
 
 /// local -- runs a request locally (`IpmbLink::local_request`).
-fn local(link: &mut IpmbLink, netfn: u8, cmd: u8, data: &[u8]) -> Result<Reply, LocalError> {
+pub(crate) fn local(
+    link: &mut IpmbLink,
+    netfn: u8,
+    cmd: u8,
+    data: &[u8],
+) -> Result<Reply, LocalError> {
     let (len, bytes) = link.local_request(netfn, cmd, data)?;
     Ok(Reply { len, bytes })
 }
@@ -229,6 +231,12 @@ fn print_switches(link: &IpmbLink) {
 pub fn cmd_debug_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_log(ctx.ipmb);
     print_switches(ctx.ipmb);
+    if app_port::ENABLED {
+        out!(
+            "App port:        answers dropped {}\n",
+            app_port::answers_dropped()
+        );
+    }
     let receiver = receiver_state(ctx.ipmb);
     out!("Event receiver:  {}\n", receiver);
     out!(

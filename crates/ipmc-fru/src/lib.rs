@@ -8,6 +8,8 @@
 //! - `records.rs`: the common header, the board and product info areas, the compile-time image
 //!   built from the IPMC_FRU_* defines, the decoder and `verify`.
 //! - `store.rs`: `FruStore`, the scratchpad memory, and `FruError`.
+//! - `unit.rs`: the per-unit fields (serial numbers, part numbers, asset tag, manufacturing
+//!   date) and the editor that rewrites one in place inside the room `records.rs` reserves.
 //! - `persist.rs`: the stored record, the one-sector flash log behind the `FlashLog` trait, the
 //!   boot load and the save after a Write FRU Data.
 #![cfg_attr(not(test), no_std)]
@@ -19,9 +21,12 @@ pub mod persist;
 pub mod records;
 /// store -- the FRU scratchpad memory and the FRU error type.
 pub mod store;
+/// unit -- the per-unit FRU fields and their editor.
+pub mod unit;
 
 pub use records::{
     area, common_header, verify, Area, AreaKind, CommonHeader, Field, Fields, AREA_ALIGN,
     COMMON_HEADER_LEN, IMAGE_LEN, SIZE,
 };
 pub use store::{FruError, FruStore};
+pub use unit::{parse_date, unit_field, write_unit_field, FieldError, FieldValue, UnitField};

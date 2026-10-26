@@ -3,6 +3,8 @@
 //! The crate has no hardware access and no allocator, and builds for the host and for
 //! thumbv7em-none-eabihf. It holds one implementation of each primitive:
 //!
+//! - `hex_byte` / `hex_word`: the hex byte tokens of vector files, console lines and application
+//!   port lines.
 //! - `zero_checksum`: the two's-complement checksum of IPMB frames and FRU areas.
 //! - `Builder`: the const byte-record builder of the SDR records and the FRU image.
 //! - `Builder::push_type_length_ascii`: the IPMI type/length field of 8-bit ASCII text.
@@ -28,6 +30,17 @@ pub fn hex_byte(token: &str) -> Option<u8> {
         return None;
     }
     u8::from_str_radix(token, 16).ok()
+}
+
+/// hex_word -- one typed byte of a console or application port line: `06`, `0x06`, `0X06` and
+/// `6` are all 06h. The optional prefix is removed, then `hex_byte` decides; None for anything
+/// else.
+pub fn hex_word(text: &str) -> Option<u8> {
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    hex_byte(digits)
 }
 
 /// zero_checksum -- two's-complement checksum; returns the byte that makes `bytes` plus itself sum to 0.
@@ -182,20 +195,26 @@ mod tests {
     }
 
     #[test]
-    fn hex_byte_takes_one_or_two_digits_only() {
-        let cases: [(&str, Option<u8>); 9] = [
-            ("0A", Some(0x0A)),
-            ("a", Some(0x0A)),
-            ("ff", Some(0xFF)),
-            ("", None),
-            ("123", None),
-            ("+1", None),
-            ("0x1", None),
-            ("1h", None),
-            ("G0", None),
+    fn hex_tokens_parse_with_and_without_the_prefix() {
+        // (text, hex_byte, hex_word): `hex_word` also takes a 0x prefix.
+        let cases: [(&str, Option<u8>, Option<u8>); 13] = [
+            ("0A", Some(0x0A), Some(0x0A)),
+            ("a", Some(0x0A), Some(0x0A)),
+            ("ff", Some(0xFF), Some(0xFF)),
+            ("", None, None),
+            ("123", None, None),
+            ("+1", None, None),
+            ("0x1", None, Some(1)),
+            ("0X1f", None, Some(0x1F)),
+            ("0x", None, None),
+            ("0x123", None, None),
+            ("x06", None, None),
+            ("1h", None, None),
+            ("G0", None, None),
         ];
-        for (token, want) in cases {
-            assert_eq!(hex_byte(token), want, "token {token:?}");
+        for (text, byte, word) in cases {
+            assert_eq!(hex_byte(text), byte, "hex_byte {text:?}");
+            assert_eq!(hex_word(text), word, "hex_word {text:?}");
         }
     }
 

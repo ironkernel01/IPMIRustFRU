@@ -41,7 +41,7 @@ use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::sensor::{self, LocalStatus, SensorSnapshot};
 use ipmc_core::trace::Trace;
 use ipmc_fru::persist::{FlashError, FlashLog, PersistError, Status};
-use ipmc_fru::FruStore;
+use ipmc_fru::{FieldError, FruStore, UnitField};
 use ipmc_menu::{Args, CmdResult};
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
@@ -681,10 +681,22 @@ impl IpmbLink {
 
     /// fru_unsaved -- an accepted Write FRU Data is not in flash yet (the store's dirty mark or
     /// the log's pending save); false while the log is off (the store is RAM only then).
-    fn fru_unsaved(&self) -> bool {
+    pub fn fru_unsaved(&self) -> bool {
         self.fru_log
             .status()
             .is_some_and(|s| s.pending || self.dispatch.fru.is_dirty())
+    }
+
+    /// set_unit_field -- the application port's write of one per-unit FRU field. Refused while
+    /// the live NVMRO pin is asserted (VITA 46.11 Rule 8-3, as Write FRU Data and FRU RESTORE
+    /// are); otherwise the dispatch context edits the RAM image and reruns the self test. The
+    /// store is marked dirty, so `service_fru_log` saves the image after the usual delay: the
+    /// one save path of every FRU change.
+    pub fn set_unit_field(&mut self, field: UnitField, value: &str) -> Result<(), FieldError> {
+        if ga::nvmro_asserted() {
+            return Err(FieldError::Nvmro);
+        }
+        self.dispatch.set_unit_field(field, value)
     }
 
     /// service_fru_log -- the save step of the main loop (`Persist::poll`): one console line per

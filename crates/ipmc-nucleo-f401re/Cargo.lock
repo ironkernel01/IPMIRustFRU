@@ -111,6 +111,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipmc-app"
+version = "0.1.0"
+dependencies = [
+ "ipmc-core",
+ "ipmc-defs",
+ "ipmc-fru",
+ "ipmc-wire",
+]
+
+[[package]]
 name = "ipmc-core"
 version = "0.1.0"
 dependencies = [
@@ -154,6 +164,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "heapless",
+ "ipmc-app",
  "ipmc-core",
  "ipmc-defs",
  "ipmc-ext",

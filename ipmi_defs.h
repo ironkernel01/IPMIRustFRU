@@ -86,8 +86,11 @@
 #define IPMC_APP_UART_ENABLE 1                    /* 1 = the application port APP_UART (USART1: TX PB6, RX PB7, CTS PA11, RTS PA12) runs; 0 = USART1 off, its pins parked */
 #define IPMC_APP_UART_BAUD 115200                 /* application port baud rate, 8N1 */
 #define IPMC_APP_UART_FLOW 0                      /* 1 = RTS/CTS hardware handshake on PA12/PA11; 0 = TX/RX only */
-#define IPMC_APP_UART_RX_BUF 256                  /* application port RX ring, bytes; power of two; at least one application line (IPMC_APP_LINE_MAX, next brief) */
+#define IPMC_APP_UART_RX_BUF 256                  /* application port RX ring, bytes; power of two; at least one application line (IPMC_APP_LINE_MAX + 2) */
 #define IPMC_APP_UART_TX_BUF 1024                 /* application port TX ring, bytes; power of two */
+#define IPMC_APP_LINE_MAX 128                     /* longest application port request line, bytes (16..=IPMC_APP_UART_RX_BUF - 3); IPMC_APP_UART_RX_BUF holds at least one */
+#define IPMC_APP_BYTES_PER_POLL 32                /* most application port bytes one main-loop pass takes (1..=IPMC_APP_UART_RX_BUF) */
+#define IPMC_APP_FRU_WRITE 1                      /* 1 = the application port may SET the per-unit FRU fields; 0 = GET only */
 #define IPMC_MENU_LINE_MAX 128                    /* longest accepted console line in bytes; a longer line is rejected */
 #define IPMC_MENU_TOKENS_MAX 40                   /* most whitespace-separated tokens in one console line or one command syntax */
 #define IPMC_FRU_DUMP_BYTES_PER_LINE 16           /* bytes on one line of the console FRU DUMP (1..16; 16 x 3 characters plus a 6-character offset fit an 80-column console) */
@@ -131,6 +134,11 @@
 #define IPMC_FRU_PRODUCT_VERSION "0.1"            /* FRU product area: version; must equal the major.minor of the crate version (guard in ipmc-core identity.rs) */
 #define IPMC_FRU_PRODUCT_SERIAL "IK-T1-000001"    /* FRU product area: serial number */
 #define IPMC_FRU_ASSET_TAG ""                     /* FRU product area: asset tag, empty */
+#define IPMC_FRU_BOARD_SERIAL_MAX 24              /* room reserved for the board serial number, bytes (17..=63); the built board area holds this many bytes for it whatever the default's length, so an update up to this length rewrites it in place; at least 17, the text form of a MAC address 00:11:22:33:44:55 */
+#define IPMC_FRU_BOARD_PART_MAX 24                /* room reserved for the board part number, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_PART_MAX 24              /* room reserved for the product part or model number, bytes (2..=63) */
+#define IPMC_FRU_PRODUCT_SERIAL_MAX 24            /* room reserved for the product serial number, bytes (17..=63); at least 17 for a MAC address text */
+#define IPMC_FRU_ASSET_TAG_MAX 24                 /* room reserved for the asset tag, bytes (2..=63) */
 #define IPMC_FRU_MFG_MINUTES 16204320             /* FRU board area manufacturing date, minutes since 1996-01-01 00:00 (FRU spec section 11, 3 bytes little endian, 000000h = unspecified); 2026-10-23 00:00 = (30 years x 365 + 8 leap days + 295 days) = 11253 days x 1440 = 16204320; at most 16777215 */
 #define IPMC_FRU_SIZE 256                         /* FRU inventory area size in bytes (Get FRU Inventory Area Info); a multiple of 8, at least the built image (compile-time guard in ipmc-fru records.rs), at most 65535; the persisted record (ipmc-fru persist.rs) is 16 bytes longer than this */
 #define IPMC_FRU_PERSIST 1                        /* 1 = Write FRU Data survives reset (FRU image kept in the flash store, sector 1 alone, 16 KB); 0 = RAM only, a reset restores the built image */

@@ -267,6 +267,18 @@ const _: () = assert!(
     "IPMC_APP_UART_TX_BUF must be a power of two, 64..=16384"
 );
 const _: () = assert!(
+    IPMC_APP_LINE_MAX >= 16 && IPMC_APP_LINE_MAX + 2 < IPMC_APP_UART_RX_BUF,
+    "IPMC_APP_LINE_MAX must be 16.. and, with CR LF, fit the usable IPMC_APP_UART_RX_BUF - 1"
+);
+const _: () = assert!(
+    IPMC_APP_BYTES_PER_POLL >= 1 && IPMC_APP_BYTES_PER_POLL <= IPMC_APP_UART_RX_BUF,
+    "IPMC_APP_BYTES_PER_POLL must be 1..=IPMC_APP_UART_RX_BUF"
+);
+const _: () = assert!(
+    IPMC_APP_FRU_WRITE == 0 || IPMC_APP_FRU_WRITE == 1,
+    "IPMC_APP_FRU_WRITE must be 0 or 1"
+);
+const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,
     "IPMC_MENU_LINE_MAX must be 1..IPMC_UART_RX_BUF (usable ring bytes must cover a line)"
 );
@@ -446,6 +458,38 @@ const _: () = assert!(
     IPMC_FRU_SIZE.is_multiple_of(8) && IPMC_FRU_SIZE >= 8 && IPMC_FRU_SIZE <= 0xFFFF,
     "IPMC_FRU_SIZE must be a multiple of 8, 8..=65535"
 );
+// Reserved room for the per-unit FRU fields (ipmc-fru records.rs builds each area with this
+// many bytes for the field, whatever the default's length). A serial number holds at least the
+// text form of a MAC address (owner 10-25-2026); a default string must fit its own room.
+/// MAC_TEXT_LEN -- `00:11:22:33:44:55`, six hex pairs and five colons.
+const MAC_TEXT_LEN: u32 = 17;
+/// fru_room_guard -- `fru_room_guard!(MAX_DEFINE, DEFAULT_DEFINE, min)` checks the room define
+/// is `min..=63` and holds the default string; a failure names the define.
+macro_rules! fru_room_guard {
+    ($max:ident, $default:ident, $min:expr) => {
+        const _: () = assert!(
+            $max >= $min && $max <= FRU_STRING_MAX as u32,
+            concat!(stringify!($max), " is out of range (see ipmi_defs.h)")
+        );
+        const _: () = assert!(
+            $default.len() as u32 <= $max,
+            concat!(stringify!($default), " is longer than ", stringify!($max))
+        );
+    };
+}
+fru_room_guard!(
+    IPMC_FRU_BOARD_SERIAL_MAX,
+    IPMC_FRU_BOARD_SERIAL,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(IPMC_FRU_BOARD_PART_MAX, IPMC_FRU_BOARD_PART, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_PART_MAX, IPMC_FRU_PRODUCT_PART, 2);
+fru_room_guard!(
+    IPMC_FRU_PRODUCT_SERIAL_MAX,
+    IPMC_FRU_PRODUCT_SERIAL,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(IPMC_FRU_ASSET_TAG_MAX, IPMC_FRU_ASSET_TAG, 2);
 // The flash persistence switch is a boolean; the save delay is long enough to coalesce a chunked
 // Write FRU Data and short enough that a write is on flash before a person resets the board.
 const _: () = assert!(

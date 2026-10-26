@@ -26,7 +26,7 @@ use crate::sensor::{
 };
 use crate::tier;
 use crate::trace::Trace;
-use ipmc_fru::FruStore;
+use ipmc_fru::{FieldError, FruStore, UnitField};
 
 /// cc -- completion codes.
 pub mod cc {
@@ -244,6 +244,19 @@ impl Context {
     pub fn set_fru(&mut self, fru: FruStore) {
         self.fru = fru;
         self.self_test = selftest::run(self.fru.bytes(), &self.sdr);
+    }
+
+    /// set_unit_field -- the application port's write of one per-unit FRU field (`SET` of
+    /// ipmc-app): refused with `FieldError::Nvmro` while NVMRO is asserted (VITA 46.11 Rule 8-3,
+    /// as Write FRU Data is), else `FruStore::set_unit_field` and the self test on the new image,
+    /// as after a Write FRU Data. The store is marked dirty, so the flash log saves the image.
+    pub fn set_unit_field(&mut self, field: UnitField, value: &str) -> Result<(), FieldError> {
+        if self.addr.nvmro_asserted {
+            return Err(FieldError::Nvmro);
+        }
+        self.fru.set_unit_field(field, value)?;
+        self.self_test = selftest::run(self.fru.bytes(), &self.sdr);
+        Ok(())
     }
 
     /// initial_checks -- the FRU initial criteria (Rule 4.1.5.4.1-2) as they stand now.
@@ -630,6 +643,28 @@ mod tests {
 
     fn context() -> Context {
         Context::new(addr::resolve(0x7F))
+    }
+
+    #[test]
+    fn set_unit_field_edits_the_image_reruns_the_self_test_and_honours_nvmro() {
+        let mut ctx = context();
+        assert!(!ctx.fru.is_dirty());
+        ctx.set_unit_field(UnitField::BoardSerial, "00:11:22:33:44:55")
+            .unwrap();
+        assert!(ctx.fru.is_dirty());
+        assert!(ctx.self_test.passed());
+        assert_eq!(
+            ipmc_fru::unit_field(ctx.fru.bytes(), UnitField::BoardSerial),
+            Ok(ipmc_fru::FieldValue::Text("00:11:22:33:44:55"))
+        );
+        // NVMRO asserted: refused, the image stays.
+        let before = *ctx.fru.image();
+        ctx.addr.nvmro_asserted = true;
+        assert_eq!(
+            ctx.set_unit_field(UnitField::AssetTag, "abc"),
+            Err(FieldError::Nvmro)
+        );
+        assert_eq!(ctx.fru.image(), &before);
     }
 
     fn request_bytes(netfn: u8, cmd: u8, data: &[u8]) -> ([u8; ipmb::IPMB_MAX_LEN], usize) {

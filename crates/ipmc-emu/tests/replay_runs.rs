@@ -88,14 +88,16 @@ fn tier1() -> bool {
 
 /// tier1_numbers -- the Tier-1 replay numbers of the capture under the capture's own buses.
 fn tier1_numbers(r: &ReplayReport) {
-    // Match 46: Reserve Device SDR Repository 40 (the IDs run 1, 2, 3 ... as on the captured
-    // board), Read FRU Data 5 (the image bytes agree in those ranges) and Set IPMB State 1.
-    assert_eq!(r.totals.matched, 46);
-    // SameCc 40: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 10,
+    // Match 43: Reserve Device SDR Repository 40 (the IDs run 1, 2, 3 ... as on the captured
+    // board), Read FRU Data 2 (the image bytes agree in those ranges: the built areas hold room
+    // for the per-unit fields, so the product area starts at 70h and most chunks differ) and
+    // Set IPMB State 1.
+    assert_eq!(r.totals.matched, 43);
+    // SameCc 43: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 13,
     // Inventory Area Info), SDR content (Get Device SDR 16, SDR Info), the sensor readings (8,
     // the emulated sensors differ), the VSO capabilities and the locator record ID differ from
     // the captured board.
-    assert_eq!(r.totals.same_cc, 40);
+    assert_eq!(r.totals.same_cc, 43);
     // CcDiff 134: Get Device SDR requests for chunks (10, C9h) or records (124, CBh) this IPMC's
     // 8-record repository does not have; the captured board answered 00h.
     assert_eq!(r.totals.cc_diff, 134);
