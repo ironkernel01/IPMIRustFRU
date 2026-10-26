@@ -1,84 +1,60 @@
-//! ipmc-defs - the one Rust reader of ipmi_defs.h, with the compile-time checks on its values.
+//! ipmc-defs - the build configuration of the IPMC as Rust, with the compile-time checks on it.
 //!
-//! build.rs parses the header (rules in defs_parser.rs) and writes one `pub const` per define:
-//! `u32` for an integer, `&str` for a string. Every crate reads a constant as
-//! `ipmc_defs::NAME`; there is no second path. The guards below fail the build when a value
-//! breaks a spec or datasheet rule, naming the define.
+//! `defs.rs` is the configuration: one `pub const NAME: T = value;` per tunable, each with the
+//! type its consumers need (`bool` for a switch, `usize` for a size or depth, a fixed-width
+//! integer for a wire or register value, a small enum for a choice between alternatives, `&str`
+//! for a text). There is no parser and no generated file. This file re-exports every item as
+//! `ipmc_defs::NAME` and checks every value at compile time: a value that breaks a spec or
+//! datasheet rule stops the build and names the define. When the private Tier-2/3 folder is
+//! present, `build.rs` sets `cfg(tier23)` and this file mounts that folder's `defs_tier23.rs` and
+//! `defs_guards.rs`; otherwise `IPMC_TIER` is 1. `build.rs` holds the one detection of the
+//! extension and of the evaluation build.
 #![no_std]
 #![forbid(unsafe_code)]
 
-// The generated consts carry no rustdoc; their meaning is the comment beside each in the header.
-include!(concat!(env!("OUT_DIR"), "/ipmi_defs.rs"));
+mod defs;
+pub use defs::*;
 
-// Compile-time type and {0, 1} assertions for every define (types.rs).
-mod types;
+// The Tier-2/3 tunables, mounted only when the private folder is present (build.rs sets
+// cfg(tier23)); the Tier-1 build reports Tier 1.
+#[cfg(tier23)]
+#[rustfmt::skip] // formatted by the Tier23 gate; absent, rustfmt cannot open it
+#[path = "../../../../IPMIRustFRU_Tier23/defs_tier23.rs"]
+mod defs_tier23;
+#[cfg(tier23)]
+pub use defs_tier23::*;
+/// IPMC_TIER -- the Tier the IPMC reports in Get VSO Capabilities; the Tier-1 build has no
+/// Tier-2/3 file and reports 1.
+#[cfg(not(tier23))]
+pub const IPMC_TIER: u32 = 1;
 
 /// i2c_timing -- the IPMB timing arithmetic: cycles, SCL phases and peripheral divisors.
 pub mod i2c_timing;
 
 /// TIER23_BUILT -- true when build.rs found the Tier-2/3 extension folder (or IPMC_TIER23=1
-/// demanded it) and compiled its header into these constants; false in the Tier-1 build.
+/// demanded it) and mounted its defs_tier23.rs into these constants; false in the Tier-1 build.
 /// The bridge crate `ipmc-ext` selects the extension from the same detection.
 pub const TIER23_BUILT: bool = cfg!(tier23);
 
-// The guards of the Tier-2/3 defines live with that header in the extension folder.
+// The guards of the Tier-2/3 defines live with defs_tier23.rs in the extension folder.
 #[cfg(tier23)]
 #[rustfmt::skip] // formatted by the Tier23 gate; absent, rustfmt cannot open it
 #[path = "../../../../IPMIRustFRU_Tier23/defs_guards.rs"]
 mod tier23_guards;
 
-// IPMC_TIER comes from ipmi_defs_tier23.h, or is 1 when the extension is not built.
 const _: () = assert!(
     IPMC_TIER >= 1 && IPMC_TIER <= 3,
     "IPMC_TIER must be 1, 2 or 3 (VITA 46.11 section 4)"
 );
 
-// The alternatives carry their documented values: a collapsed pair (both 0) would make the `==`
-// checks below select the first.
-const _: () = assert!(
-    IPMB_MASTER_HW == 0 && IPMB_MASTER_BITBANG == 1,
-    "IPMB_MASTER_HW must be 0 and IPMB_MASTER_BITBANG 1"
-);
-const _: () = assert!(
-    IPMB_TX_ALTERNATE == 0 && IPMB_TX_ARRIVAL == 1,
-    "IPMB_TX_ALTERNATE must be 0 and IPMB_TX_ARRIVAL 1"
-);
-const _: () = assert!(
-    IPMB_STRAP_FROM_PINS == 0 && IPMB_STRAP_FORCED == 1,
-    "IPMB_STRAP_FROM_PINS must be 0 and IPMB_STRAP_FORCED 1"
-);
-const _: () = assert!(
-    IPMB_MASTER_MODE == IPMB_MASTER_HW || IPMB_MASTER_MODE == IPMB_MASTER_BITBANG,
-    "IPMB_MASTER_MODE must be IPMB_MASTER_HW or IPMB_MASTER_BITBANG"
-);
-const _: () = assert!(
-    IPMB_TX_POLICY == IPMB_TX_ALTERNATE || IPMB_TX_POLICY == IPMB_TX_ARRIVAL,
-    "IPMB_TX_POLICY must be IPMB_TX_ALTERNATE or IPMB_TX_ARRIVAL"
-);
-const _: () = assert!(
-    IPMB_GA_SOURCE == IPMB_STRAP_FROM_PINS || IPMB_GA_SOURCE == IPMB_STRAP_FORCED,
-    "IPMB_GA_SOURCE must be IPMB_STRAP_FROM_PINS or IPMB_STRAP_FORCED"
-);
-const _: () = assert!(
-    IPMB_NVMRO_SOURCE == IPMB_STRAP_FROM_PINS || IPMB_NVMRO_SOURCE == IPMB_STRAP_FORCED,
-    "IPMB_NVMRO_SOURCE must be IPMB_STRAP_FROM_PINS or IPMB_STRAP_FORCED"
-);
 const _: () = assert!(
     IPMB_GA_FORCED >= 1 && IPMB_GA_FORCED <= 0x1F,
     "IPMB_GA_FORCED must be 1..=0x1F (GA[4:0], 0 is invalid)"
 );
-const _: () = assert!(
-    IPMB_NVMRO_FORCED == 0 || IPMB_NVMRO_FORCED == 1,
-    "IPMB_NVMRO_FORCED must be 0 or 1"
-);
 const _: () = assert!(IPMB_MSG_MAX == 32, "IPMB_MSG_MAX must be 32");
 const _: () = assert!(
-    IPMB_BUS_A_ENABLE == 1,
+    IPMB_BUS_A_ENABLE,
     "IPMB_BUS_A_ENABLE must be 1 (VITA 46.11 Rule 4.1.1-1: IPMB-A is mandatory)"
-);
-const _: () = assert!(
-    matches!(IPMB_BUS_B_ENABLE, 0 | 1),
-    "IPMB_BUS_B_ENABLE must be 0 or 1 (IPMB-B is optional)"
 );
 const _: () = assert!(
     IPMB_CM_ADDR8 != 0 && IPMB_CM_ADDR8 <= 0xFE && IPMB_CM_ADDR8 & 1 == 0,
@@ -202,7 +178,6 @@ const _: () = assert!(
     IPMB_FAULT_CLEAR_MS >= 100 && IPMB_FAULT_CLEAR_MS <= 60000,
     "IPMB_FAULT_CLEAR_MS must be 100..=60000"
 );
-const _: () = assert!(IPMC_IPMI_TRACE <= 1, "IPMC_IPMI_TRACE must be 0 or 1");
 
 // The capture log ring (ipmc-core capture.rs): 1 KiB holds a few frames, 16 KiB is the most the
 // RAM budget below allows; a trace line is kept to IPMC_LOG_TEXT_MAX bytes, 32 holds a short
@@ -251,11 +226,6 @@ const _: () = assert!(
     "IPMC_UART_TX_BUF must be a power of two, 256..=16384, above IPMC_LOG_TEXT_MAX + 2"
 );
 const _: () = assert!(
-    (IPMC_APP_UART_ENABLE == 0 || IPMC_APP_UART_ENABLE == 1)
-        && (IPMC_APP_UART_FLOW == 0 || IPMC_APP_UART_FLOW == 1),
-    "IPMC_APP_UART_ENABLE and IPMC_APP_UART_FLOW must be 0 or 1"
-);
-const _: () = assert!(
     IPMC_APP_UART_BAUD >= 1 && IPMC_APP_UART_BAUD <= USART1_BAUD_MAX,
     "IPMC_APP_UART_BAUD must be 1..=5250000 (USART1 limit at PCLK2 = 84 MHz)"
 );
@@ -278,14 +248,6 @@ const _: () = assert!(
 const _: () = assert!(
     IPMC_APP_BYTES_PER_POLL >= 1 && IPMC_APP_BYTES_PER_POLL <= IPMC_APP_UART_RX_BUF,
     "IPMC_APP_BYTES_PER_POLL must be 1..=IPMC_APP_UART_RX_BUF"
-);
-const _: () = assert!(
-    IPMC_APP_FRU_WRITE == 0 || IPMC_APP_FRU_WRITE == 1,
-    "IPMC_APP_FRU_WRITE must be 0 or 1"
-);
-const _: () = assert!(
-    IPMC_FRU_CONSOLE_WRITE == 0 || IPMC_FRU_CONSOLE_WRITE == 1,
-    "IPMC_FRU_CONSOLE_WRITE must be 0 or 1"
 );
 const _: () = assert!(
     IPMC_MENU_LINE_MAX >= 1 && IPMC_MENU_LINE_MAX < IPMC_UART_RX_BUF,
@@ -367,61 +329,25 @@ const _: () = assert!(
     "IPMC_INA226_AVG_CODE and IPMC_INA226_CT_CODE must be 0..=7"
 );
 
-// ---- simulated input start levels ----
-
-const _: () = assert!(
-    IPMC_SIM_PGOOD_HIGH <= 1
-        && IPMC_SIM_FAULT_N_HIGH <= 1
-        && IPMC_SIM_OVERTEMP_N_HIGH <= 1
-        && IPMC_SIM_RESET_N_HIGH <= 1,
-    "every IPMC_SIM_*_HIGH level must be 0 or 1"
-);
-
 // ---- Device ID (IPMI v2.0 Table 20-2) ----
 
-/// fits -- true when `value` fits in `bits` bits (bits below 32).
-const fn fits(value: u32, bits: u32) -> bool {
-    value >> bits == 0
-}
-
 const _: () = assert!(
-    fits(IPMC_DEVICE_ID, 8),
-    "IPMC_DEVICE_ID must fit in one byte"
-);
-const _: () = assert!(
-    fits(IPMC_DEVICE_REVISION, 4),
+    matches!(IPMC_DEVICE_REVISION, 0..=15),
     "IPMC_DEVICE_REVISION must be 0..=15 (byte 3 bits 3:0)"
-);
-const _: () = assert!(
-    fits(IPMC_DEVICE_PROVIDES_SDRS, 1),
-    "IPMC_DEVICE_PROVIDES_SDRS must be 0 or 1"
 );
 const _: () = assert!(
     IPMC_IPMI_VERSION == 0x02,
     "IPMC_IPMI_VERSION must be 0x02 (IPMI 2.0, BCD with the least significant digit in bits 7:4)"
 );
-const _: () = assert!(
-    fits(IPMC_SUPPORT_SENSOR, 1)
-        && fits(IPMC_SUPPORT_SDR_REPOSITORY, 1)
-        && fits(IPMC_SUPPORT_SEL, 1)
-        && fits(IPMC_SUPPORT_FRU_INVENTORY, 1)
-        && fits(IPMC_SUPPORT_EVENT_RECEIVER, 1)
-        && fits(IPMC_SUPPORT_EVENT_GENERATOR, 1)
-        && fits(IPMC_SUPPORT_BRIDGE, 1)
-        && fits(IPMC_SUPPORT_CHASSIS, 1),
-    "every IPMC_SUPPORT_* bit must be 0 or 1"
-);
-// Get Device ID bytes 8:10 hold a 20-bit manufacturer ID (bits 23:20 reserved, zero); 0FFFFFh is
-// reserved (IPMI v2.0 Table 20-2). Bytes 11:12 hold the product ID; FFFFh is reserved.
 const MANUFACTURER_ID_RESERVED: u32 = 0x0F_FFFF;
-const PRODUCT_ID_RESERVED: u32 = 0xFFFF;
+const PRODUCT_ID_RESERVED: u16 = 0xFFFF;
 const _: () = assert!(
-    fits(IPMC_MANUFACTURER_ID, 20) && IPMC_MANUFACTURER_ID != MANUFACTURER_ID_RESERVED,
+    IPMC_MANUFACTURER_ID >> 20 == 0 && IPMC_MANUFACTURER_ID != MANUFACTURER_ID_RESERVED,
     "IPMC_MANUFACTURER_ID must fit in 20 bits and not be 0FFFFFh (reserved)"
 );
 const _: () = assert!(
-    fits(IPMC_PRODUCT_ID, 16) && IPMC_PRODUCT_ID != PRODUCT_ID_RESERVED,
-    "IPMC_PRODUCT_ID must fit in 16 bits and not be FFFFh (reserved)"
+    IPMC_PRODUCT_ID != PRODUCT_ID_RESERVED,
+    "IPMC_PRODUCT_ID must not be FFFFh (reserved)"
 );
 
 // ---- FRU strings ----
@@ -470,17 +396,17 @@ const _: () = assert!(
 // many bytes for the field, whatever the default's length). A serial number holds at least the
 // text form of a MAC address (owner 10-25-2026); a default string must fit its own room.
 /// MAC_TEXT_LEN -- `00:11:22:33:44:55`, six hex pairs and five colons.
-const MAC_TEXT_LEN: u32 = 17;
+const MAC_TEXT_LEN: usize = 17;
 /// fru_room_guard -- `fru_room_guard!(MAX_DEFINE, DEFAULT_DEFINE, min)` checks the room define
 /// is `min..=63` and holds the default string; a failure names the define.
 macro_rules! fru_room_guard {
     ($max:ident, $default:ident, $min:expr) => {
         const _: () = assert!(
-            $max >= $min && $max <= FRU_STRING_MAX as u32,
-            concat!(stringify!($max), " is out of range (see ipmi_defs.h)")
+            $max >= $min && $max <= FRU_STRING_MAX,
+            concat!(stringify!($max), " is out of range (see defs.rs)")
         );
         const _: () = assert!(
-            $default.len() as u32 <= $max,
+            $default.len() <= $max,
             concat!(stringify!($default), " is longer than ", stringify!($max))
         );
     };
@@ -507,10 +433,6 @@ fru_room_guard!(IPMC_FRU_PRODUCT_VERSION_MAX, IPMC_FRU_PRODUCT_VERSION, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_FILE_ID_MAX, IPMC_FRU_PRODUCT_FILE_ID, 2);
 // The flash persistence switch is a boolean; the save delay is long enough to coalesce a chunked
 // Write FRU Data and short enough that a write is on flash before a person resets the board.
-const _: () = assert!(
-    IPMC_FRU_PERSIST == 0 || IPMC_FRU_PERSIST == 1,
-    "IPMC_FRU_PERSIST must be 0 or 1"
-);
 const _: () = assert!(
     IPMC_FRU_PERSIST_DELAY_MS >= 100 && IPMC_FRU_PERSIST_DELAY_MS <= 10_000,
     "IPMC_FRU_PERSIST_DELAY_MS must be 100..=10000"
@@ -565,31 +487,6 @@ sdr_name_guard!(IPMC_SDR_IPMC_NAME);
 
 // ---- sensors and board I/O ----
 
-const _: () = assert!(
-    IPMC_SRC_HW == 0 && IPMC_SRC_SIM == 1 && IPMC_SRC_I2C == 2 && IPMC_SRC_SPI == 3,
-    "IPMC_SRC_HW, _SIM, _I2C, _SPI must be 0, 1, 2, 3"
-);
-/// source_valid -- true when `value` is one of the four source switch values. The firmware
-/// build (ipmc-nucleo-f401re sensing.rs) accepts only HW and SIM until a bus is assigned to external parts.
-const fn source_valid(value: u32) -> bool {
-    value == IPMC_SRC_HW || value == IPMC_SRC_SIM || value == IPMC_SRC_I2C || value == IPMC_SRC_SPI
-}
-const _: () = assert!(
-    source_valid(IPMC_ADC_INTERNAL_SOURCE)
-        && source_valid(IPMC_ADC_EXTERNAL_SOURCE)
-        && source_valid(IPMC_FAULT_SOURCE)
-        && source_valid(IPMC_POWER_SOURCE),
-    "every IPMC_*_SOURCE must be one of the IPMC_SRC_* values"
-);
-const _: () = assert!(IPMC_POWER_AT_BOOT <= 1, "IPMC_POWER_AT_BOOT must be 0 or 1");
-const _: () = assert!(
-    IPMC_TRACE_OFF == 0 && IPMC_TRACE_EVENTS == 1 && IPMC_TRACE_ALL == 2,
-    "IPMC_TRACE_OFF, _EVENTS, _ALL must be 0, 1, 2"
-);
-const _: () = assert!(
-    IPMC_SENSOR_TRACE <= IPMC_TRACE_ALL,
-    "IPMC_SENSOR_TRACE must be IPMC_TRACE_OFF, IPMC_TRACE_EVENTS or IPMC_TRACE_ALL"
-);
 // Longest period: one minute. Shortest: one sample blocks the main loop for about 2 ms of ADC
 // conversions (11 channel reads x IPMC_ADC_AVERAGE 8 x 23.4 us), so 10 ms keeps the loop
 // mostly free.
@@ -609,7 +506,7 @@ const _: () = assert!(
     "IPMC_PGOOD_TIMEOUT_MS must be at least IPMC_SENSOR_PERIOD_MS"
 );
 // Rails 0..=4 are the board table in ipmc-sensors board_sensors.rs.
-const BOARD_RAIL_COUNT: u32 = 5;
+const BOARD_RAIL_COUNT: usize = 5;
 const _: () = assert!(
     IPMC_RAILS_MAX >= BOARD_RAIL_COUNT && IPMC_RAILS_MAX <= 32,
     "IPMC_RAILS_MAX must be 5..=32 (the board table has 5 rails)"
@@ -708,7 +605,7 @@ const _: () = assert!(
     "IPMC_EMU_TX_DONE_DELAY_MS must be 1..=227 (VITA 46.11 T5 response limit)"
 );
 /// Characters a vector line may spend on the time field, the bus tag and the separators.
-const VECTOR_LINE_PREFIX_CHARS: u32 = 40;
+const VECTOR_LINE_PREFIX_CHARS: usize = 40;
 const _: () = assert!(
     IPMC_EMU_VECTOR_LINE_MAX >= VECTOR_LINE_PREFIX_CHARS + 3 * IPMB_MSG_MAX,
     "IPMC_EMU_VECTOR_LINE_MAX must hold a time, a bus tag and IPMB_MSG_MAX three-character tokens"
@@ -718,10 +615,7 @@ const _: () = assert!(
     "IPMC_EMU_REPORT_LINES_MAX must be at least 1"
 );
 // The serve-mode port is a user port: below 1024 is privileged, above 65535 is not a port.
-const _: () = assert!(
-    IPMC_EMU_PORT >= 1024 && IPMC_EMU_PORT <= 65535,
-    "IPMC_EMU_PORT must be 1024..=65535"
-);
+const _: () = assert!(IPMC_EMU_PORT >= 1024, "IPMC_EMU_PORT must be 1024..=65535");
 // A serve-mode response leaves at most two loop steps plus the transmission time after its
 // request (the step that takes the request in, then the step at the end of the transmission);
 // that must stay inside the VITA 46.11 T5 response limit (227 ms, as above).

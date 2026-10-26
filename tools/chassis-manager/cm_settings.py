@@ -4,7 +4,7 @@ Chassis Manager (`chassis_manager.py`, `cm_link.py`, `ipmc_emu_interface.py`) an
 adapter (`tools/conformance/adapter.py`) read their tool-chosen values here; command-line options
 override the run-level ones. Values fixed by VITA 46.11 or IPMI (T3, T6, C1, T9, the sequence
 width, the IPMB address of the Chassis Manager) stay in `cm_link.py` beside their rule. Values
-the IPMC and a tool must agree on (IPMC_EMU_PORT) live in `ipmi_defs.h`. Each value below names
+the IPMC and a tool must agree on (IPMC_EMU_PORT) live in `crates/ipmc-defs/src/defs.rs`. Each value below names
 its reason; a person tuning the tools changes it here only.
 """
 

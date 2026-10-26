@@ -18,7 +18,7 @@
 //!        ..   00h padding up to IPMC_FRU_SIZE
 //! ```
 //!
-//! The image is built at compile time from the IPMC_FRU_* defines of ipmi_defs.h: a string
+//! The image is built at compile time from the IPMC_FRU_* defines of defs.rs: a string
 //! the area cannot hold, or an image larger than IPMC_FRU_SIZE, fails the build. `verify`
 //! checks a (possibly rewritten) image against the same layouts; the startup self test and
 //! every accepted Write FRU Data call it through ipmc-core `selftest`.
@@ -27,8 +27,8 @@ use crate::date;
 use crate::store::FruError;
 use ipmc_wire::{zero_checksum as checksum, Builder, TYPE_ASCII, TYPE_MASK};
 
-/// SIZE -- the FRU inventory area size in bytes (ipmi_defs.h IPMC_FRU_SIZE).
-pub const SIZE: usize = ipmc_defs::IPMC_FRU_SIZE as usize;
+/// SIZE -- the FRU inventory area size in bytes (defs.rs IPMC_FRU_SIZE).
+pub const SIZE: usize = ipmc_defs::IPMC_FRU_SIZE;
 
 /// AREA_ALIGN -- areas start at, and are, multiples of 8 bytes (FRU spec section 8, Table 8-1).
 pub const AREA_ALIGN: usize = 8;
@@ -98,8 +98,8 @@ const fn push_text(img: &mut Image, text: &str) {
 /// for it (`max`) less the length of its default string. An update up to `max` bytes then
 /// rewrites the field in place and no area moves (`unit.rs`). The guards in `ipmc-defs` keep the
 /// default within `max`. An area's pad is the sum of this over its fields.
-const fn reserve(max: u32, default: &str) -> usize {
-    max as usize - default.len()
+const fn reserve(max: usize, default: &str) -> usize {
+    max - default.len()
 }
 
 /// finish_area -- closes the area that began at `start`: the C1h end-of-fields byte, `reserve`
@@ -268,7 +268,7 @@ pub(crate) static IMAGE: Image = build();
 pub const IMAGE_LEN: usize = build().len();
 const _: () = assert!(
     SIZE >= IMAGE_LEN,
-    "IPMC_FRU_SIZE in ipmi_defs.h is smaller than the built FRU image"
+    "IPMC_FRU_SIZE in defs.rs is smaller than the built FRU image"
 );
 const _: () = assert!(
     SIZE.is_multiple_of(AREA_ALIGN),
@@ -652,7 +652,7 @@ mod tests {
     use crate::store::FruStore;
 
     // The expected bytes are written out from the FRU spec layouts (Tables 8-1, 11-1, 12-1,
-    // section 13) for the default strings of ipmi_defs.h, with every checksum worked out apart
+    // section 13) for the default strings of defs.rs, with every checksum worked out apart
     // from `build`. A change to a default string changes them and fails these tests on purpose.
 
     /// Room the defaults leave, per field (MAX - default length): board area 14 (manufacturer),
@@ -742,14 +742,14 @@ mod tests {
 
     #[test]
     fn built_areas_have_exactly_the_reserved_length() {
-        // Each reserve is MAX - default length (ipmi_defs.h IPMC_FRU_*_MAX); the area length is
+        // Each reserve is MAX - default length (ipmc-defs IPMC_FRU_*_MAX); the area length is
         // the field bytes with the defaults, C1h, the reserves and the checksum, rounded up to 8.
-        let rooms = |pairs: &[(u32, &str)]| -> (usize, usize) {
+        let rooms = |pairs: &[(usize, &str)]| -> (usize, usize) {
             (
                 pairs.iter().map(|(_, text)| 1 + text.len()).sum::<usize>(),
                 pairs
                     .iter()
-                    .map(|(max, text)| *max as usize - text.len())
+                    .map(|(max, text)| *max - text.len())
                     .sum::<usize>(),
             )
         };

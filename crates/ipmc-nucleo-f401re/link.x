@@ -291,7 +291,7 @@ ASSERT(_stack_start - _stack_end >= _stack_reserve, "
 ERROR(ipmc): the RAM left for the stack is smaller than _stack_reserve (memory.x).
 The statics (.data, .bss, .uninit) fill too much of the RAM. Make IPMC_LOG_SIZE (capture log,
 1024..=16384), IPMC_UART_RX_BUF, IPMC_UART_TX_BUF, IPMC_APP_UART_RX_BUF or IPMC_APP_UART_TX_BUF
-in ipmi_defs.h smaller, or re-measure the stack and change _stack_reserve in memory.x.");
+in defs.rs smaller, or re-measure the stack and change _stack_reserve in memory.x.");
 
 /* # Position checks */
 

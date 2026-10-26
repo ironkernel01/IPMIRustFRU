@@ -18,7 +18,7 @@
 //!   part number, version, serial number, asset tag and file ID of the product) at the first boot
 //!   of a real system.
 //!
-//! The FRU image reserves room for those fields (the `IPMC_FRU_*_MAX` defines in ipmi_defs.h),
+//! The FRU image reserves room for those fields (the `IPMC_FRU_*_MAX` defines in defs.rs),
 //! so an update rewrites its field in place and no area moves. The manufacturing date is
 //! `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59. It lives in the VITA 46.11
 //! Alternate Manufacturing Date/Time record, because the standard 3-byte field of the FRU board

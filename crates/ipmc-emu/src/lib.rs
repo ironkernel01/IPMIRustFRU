@@ -25,7 +25,7 @@
 //! cargo run -p ipmc-emu -- help
 //! ```
 //!
-//! `sdr` builds the emulator with the `ipmi_defs.h` defaults and prints its Device SDR
+//! `sdr` builds the emulator with the `defs.rs` defaults and prints its Device SDR
 //! repository, one line per record from 0000h along the next-ID chain: the record ID as four hex
 //! digits, then the record bytes in hex separated by spaces. `tools/captured_sdr.py` decodes
 //! these lines next to the captured records. Exit status 0, or 1 when the chain names a missing
@@ -70,7 +70,7 @@
 //! The last line is `PASS`, or `FAIL: ` and the reasons (unanswered, answered more than once,
 //! dispatch errors, egress dropped, responses lost) with their counts.
 //!
-//! Options (defaults come from `ipmi_defs.h` through `EmuConfig::from_defs`):
+//! Options (defaults come from `defs.rs` through `EmuConfig::from_defs`):
 //!
 //! | Option | Effect |
 //! |---|---|
@@ -94,8 +94,8 @@
 //! # Serve mode
 //!
 //! `serve` runs the emulator in real time (std `Instant`, one step every `IPMC_EMU_SERVE_POLL_MS`
-//! in `ipmi_defs.h`) and listens on 127.0.0.1. `--port N` sets the TCP port (default
-//! `IPMC_EMU_PORT` in `ipmi_defs.h`; 0 picks a free port). The first stdout line is `listening
+//! in `defs.rs`) and listens on 127.0.0.1. `--port N` sets the TCP port (default
+//! `IPMC_EMU_PORT` in `defs.rs`; 0 picks a free port). The first stdout line is `listening
 //! 127.0.0.1:<port>`. One client at a time is served; a new client starts a fresh board in its
 //! start-up state, as a power cycle (IPMB-B disabled until Set IPMB State, Rule 4.1.1-4).
 //! `--b-fitted` and `--policy` are as for replay.

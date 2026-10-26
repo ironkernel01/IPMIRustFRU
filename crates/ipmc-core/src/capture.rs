@@ -30,10 +30,10 @@ use crate::trace::Trace;
 
 /// HEADER_LEN -- bytes of a record header (flags, length, time_ms).
 pub const HEADER_LEN: usize = 6;
-/// TEXT_MAX -- longest trace line kept (ipmi_defs.h IPMC_LOG_TEXT_MAX).
-pub const TEXT_MAX: usize = ipmc_defs::IPMC_LOG_TEXT_MAX as usize;
-/// LOG_SIZE -- bytes of the firmware's ring (ipmi_defs.h IPMC_LOG_SIZE).
-pub const LOG_SIZE: usize = ipmc_defs::IPMC_LOG_SIZE as usize;
+/// TEXT_MAX -- longest trace line kept (defs.rs IPMC_LOG_TEXT_MAX).
+pub const TEXT_MAX: usize = ipmc_defs::IPMC_LOG_TEXT_MAX;
+/// LOG_SIZE -- bytes of the firmware's ring (defs.rs IPMC_LOG_SIZE).
+pub const LOG_SIZE: usize = ipmc_defs::IPMC_LOG_SIZE;
 /// PAYLOAD_MAX -- the longest payload a record holds: a frame or a text line.
 pub const PAYLOAD_MAX: usize = if IPMB_MAX_LEN > TEXT_MAX {
     IPMB_MAX_LEN
@@ -49,7 +49,7 @@ const _: () = assert!(
     "IPMC_LOG_SIZE must be a power of two"
 );
 const _: () = assert!(
-    ByteRing::<LOG_SIZE>::capacity() >= 4 * (HEADER_LEN + ipmc_defs::IPMB_MSG_MAX as usize),
+    ByteRing::<LOG_SIZE>::capacity() >= 4 * (HEADER_LEN + ipmc_defs::IPMB_MSG_MAX),
     "IPMC_LOG_SIZE - 1 must hold four whole frames"
 );
 const _: () = assert!(
@@ -278,7 +278,7 @@ pub struct CaptureLog<const N: usize> {
     enabled: bool,
 }
 
-/// DefaultLog -- the ring of the firmware and the emulator (ipmi_defs.h IPMC_LOG_SIZE).
+/// DefaultLog -- the ring of the firmware and the emulator (defs.rs IPMC_LOG_SIZE).
 pub type DefaultLog = CaptureLog<LOG_SIZE>;
 
 impl<const N: usize> CaptureLog<N> {

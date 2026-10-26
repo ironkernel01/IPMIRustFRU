@@ -36,9 +36,9 @@ const NS_PER_US: u32 = 1_000;
 /// Polls of the cycle counter that must show it advancing, at `start_cycle_counter`.
 const COUNTER_CHECK_POLLS: u32 = 1_000;
 
-/// B_FITTED -- IPMB-B is built in (ipmi_defs.h IPMB_BUS_B_ENABLE).
-const B_FITTED: bool = ipmc_defs::IPMB_BUS_B_ENABLE == 1;
-/// ARB_RETRIES -- retries of a write after arbitration loss (ipmi_defs.h IPMB_ARB_RETRIES).
+/// B_FITTED -- IPMB-B is built in (defs.rs IPMB_BUS_B_ENABLE).
+const B_FITTED: bool = ipmc_defs::IPMB_BUS_B_ENABLE;
+/// ARB_RETRIES -- retries of a write after arbitration loss (defs.rs IPMB_ARB_RETRIES).
 const ARB_RETRIES: u32 = ipmc_defs::IPMB_ARB_RETRIES;
 
 /// TimebaseError -- why a master's `new` refused.
@@ -118,7 +118,7 @@ impl BusTimes {
     }
 }
 
-/// start_timebase -- the start of every master's `new`: converts the times of ipmi_defs.h with
+/// start_timebase -- the start of every master's `new`: converts the times of defs.rs with
 /// `make` (the master's own cycle table, None when the clock is unusable -> CoreClock), then
 /// starts the DWT cycle counter (`start_cycle_counter`).
 pub fn start_timebase<T>(

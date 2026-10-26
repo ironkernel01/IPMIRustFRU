@@ -47,7 +47,7 @@ pub struct EmuConfig {
 }
 
 impl EmuConfig {
-    /// from_defs -- the ipmi_defs.h values, with the board's start-up behaviour: IPMB-B disabled
+    /// from_defs -- the defs.rs values, with the board's start-up behaviour: IPMB-B disabled
     /// until Set IPMB State, payload power requested at boot as the firmware does.
     pub const fn from_defs() -> EmuConfig {
         let link = LinkConfig::from_defs();
@@ -56,7 +56,7 @@ impl EmuConfig {
             b_fitted: link.b_fitted,
             b_enabled_at_start: false,
             tx_policy: link.tx_policy,
-            power_on_at_start: ipmc_defs::IPMC_POWER_AT_BOOT == 1,
+            power_on_at_start: ipmc_defs::IPMC_POWER_AT_BOOT,
         }
     }
 }
@@ -125,8 +125,8 @@ impl PowerSwitch for NoHardware {
     }
 }
 
-/// FRU_PERSIST -- Write FRU Data is saved to the flash log (ipmi_defs.h IPMC_FRU_PERSIST).
-const FRU_PERSIST: bool = ipmc_defs::IPMC_FRU_PERSIST == 1;
+/// FRU_PERSIST -- Write FRU Data is saved to the flash log (defs.rs IPMC_FRU_PERSIST).
+const FRU_PERSIST: bool = ipmc_defs::IPMC_FRU_PERSIST;
 
 /// FlashCopy -- what the FRU flash log holds: the FRU image and the Tier-3 settings byte saved
 /// with it (`FruStore::nv_settings`). A reset restores the FRU store from it, and a power cycle
@@ -163,7 +163,7 @@ struct Board {
 }
 
 impl Board {
-    /// boot -- the Monitor over the simulators at their ipmi_defs.h start values, payload power
+    /// boot -- the Monitor over the simulators at their defs.rs start values, payload power
     /// requested at `now_ms` when `power_on_at_start` (the firmware start-up) and
     /// `power_on_check` (`ipmc_core::ext::check_power_on` for the context and extension of this
     /// boot: an activation lock keeps the payload off) allows it.
@@ -229,7 +229,7 @@ pub struct Emulator {
 
 impl Emulator {
     /// new -- a board in its start-up state for `config`: Link and Context for the resolved
-    /// address, a Monitor over the simulators at their ipmi_defs.h start values, payload power
+    /// address, a Monitor over the simulators at their defs.rs start values, payload power
     /// requested when `power_on_at_start`, IPMB-B enabled when `b_enabled_at_start`.
     /// Err(BusNotFitted) when IPMB-B is asked to start enabled but is not fitted;
     /// Err(PowerOnRefused) when the power controller refuses the request.
@@ -336,10 +336,10 @@ impl Emulator {
         self.link.on_frame(bus, bytes, now_ms)
     }
 
-    /// follow_payload_supply -- the emulator's payload supply: with `IPMC_SIM_PGOOD_HIGH` 1 the
+    /// follow_payload_supply -- the emulator's payload supply: with `IPMC_SIM_PGOOD_HIGH` true the
     /// PGOOD input reads high while PWR_EN is asserted and low once it is released, so a
     /// deactivation ends in the complete shutdown that takes the FRU from M6 to M1
-    /// (`SensorSnapshot::payload_shut_down`, Rule 4.1.5.4.5-1). With 0 PGOOD stays at its
+    /// (`SensorSnapshot::payload_shut_down`, Rule 4.1.5.4.5-1). With false PGOOD stays at its
     /// simulated level (low) whatever PWR_EN does, so the PGOOD timeout and the power failure
     /// stay reachable (`pgood_follows_pwr_en`).
     fn follow_payload_supply(&mut self) {
@@ -528,10 +528,10 @@ impl Emulator {
 }
 
 /// pgood_follows_pwr_en -- the level the emulated PGOOD input takes while PWR_EN is `pwr_en`:
-/// `Some(pwr_en)` when `IPMC_SIM_PGOOD_HIGH` (`level_define`) is 1, None (the input keeps its
+/// `Some(pwr_en)` when `IPMC_SIM_PGOOD_HIGH` (`level_high`) is true, None (the input keeps its
 /// simulated level, low for 0) otherwise.
-const fn pgood_follows_pwr_en(level_define: u32, pwr_en: bool) -> Option<bool> {
-    if level_define == 1 {
+const fn pgood_follows_pwr_en(level_high: bool, pwr_en: bool) -> Option<bool> {
+    if level_high {
         Some(pwr_en)
     } else {
         None
@@ -545,10 +545,10 @@ mod pgood_tests {
     #[test]
     fn pgood_follows_pwr_en_only_when_the_simulated_level_is_high() {
         for (define, pwr_en, want) in [
-            (1, true, Some(true)),
-            (1, false, Some(false)),
-            (0, true, None),
-            (0, false, None),
+            (true, true, Some(true)),
+            (true, false, Some(false)),
+            (false, true, None),
+            (false, false, None),
         ] {
             assert_eq!(
                 pgood_follows_pwr_en(define, pwr_en),

@@ -39,7 +39,7 @@ use super::ipmb_pins::{BusPins, IpmbPins};
 use super::static_slot::{self, StaticSlot};
 use super::{led, systick};
 
-// ---- sizes, from ipmi_defs.h ----
+// ---- sizes, from defs.rs ----
 
 /// GENERAL_CALL -- the address byte a broadcast frame starts with (IPMI v2.0 section 20.9). Peer:
 /// ipmc-core link.rs GENERAL_CALL strips it; a different value here makes Broadcast Get Device
@@ -52,12 +52,12 @@ const GENERAL_CALL: u8 = 0x00;
 /// phase (own address byte, or 00h for a general call). A broadcast frame is then 00h followed
 /// by a normal frame, the same length as a frame that carries its own address (IPMB_MSG_MAX)
 /// plus the general-call byte in front. A longer frame is an overrun and is dropped.
-pub const RX_FRAME_MAX: usize = ipmc_defs::IPMB_MSG_MAX as usize + 1;
+pub const RX_FRAME_MAX: usize = ipmc_defs::IPMB_MSG_MAX + 1;
 const _: () = assert!(RX_FRAME_MAX <= 255, "RxFrame::len is a u8");
 
 /// RX_QUEUE_LEN -- heapless::spsc::Queue<_, N> holds N - 1 frames (one slot separates a full
 /// queue from an empty one), so N = IPMB_RX_QUEUE_DEPTH + 1 holds DEPTH frames.
-pub const RX_QUEUE_LEN: usize = ipmc_defs::IPMB_RX_QUEUE_DEPTH as usize + 1;
+pub const RX_QUEUE_LEN: usize = ipmc_defs::IPMB_RX_QUEUE_DEPTH + 1;
 
 /// RxFrame -- one received frame as posted by the interrupt: `bytes[..len]`, STOP time in
 /// SysTick milliseconds.

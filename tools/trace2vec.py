@@ -19,7 +19,7 @@ import sys
 
 RUN_MIN = 4
 FRAME_MIN_REQ = 7
-FRAME_MAX = 32  # IPMB_MSG_MAX in ipmi_defs.h
+FRAME_MAX = 32  # IPMB_MSG_MAX in crates/ipmc-defs/src/defs.rs
 
 # IPMB response frame offsets (IPMI v2.0 IPMB message format): rqSA, netFn<<2|rqLUN, chk1,
 # rsSA, seq<<2|rsLUN, cmd, completion code, data..., chk2.

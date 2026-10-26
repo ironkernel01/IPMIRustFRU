@@ -159,7 +159,7 @@ pub const fn parse_text(text: &str) -> Option<u32> {
     parse_parts(text.as_bytes(), b' ')
 }
 
-/// DEFAULT_MINUTES -- the default date of the build (ipmi_defs.h IPMC_FRU_MFG_DATE), as minutes.
+/// DEFAULT_MINUTES -- the default date of the build (defs.rs IPMC_FRU_MFG_DATE), as minutes.
 /// The build fails when the define is not a date this module accepts.
 pub const DEFAULT_MINUTES: u32 = match parse_text(ipmc_defs::IPMC_FRU_MFG_DATE) {
     Some(minutes) => minutes,

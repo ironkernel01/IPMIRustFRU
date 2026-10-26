@@ -39,8 +39,8 @@ const PRODUCT_LABELS: [&str; 7] = [
     "Asset tag",
     "FRU file ID",
 ];
-/// Bytes per FRU DUMP line: ipmi_defs.h IPMC_FRU_DUMP_BYTES_PER_LINE (u32 there), cast once here.
-const DUMP_BYTES_PER_LINE: usize = ipmc_defs::IPMC_FRU_DUMP_BYTES_PER_LINE as usize;
+/// Bytes per FRU DUMP line (defs.rs IPMC_FRU_DUMP_BYTES_PER_LINE).
+const DUMP_BYTES_PER_LINE: usize = ipmc_defs::IPMC_FRU_DUMP_BYTES_PER_LINE;
 
 /// print_text -- an ASCII field's bytes; anything outside printable ASCII shows as '.'.
 fn print_text(data: &[u8]) {

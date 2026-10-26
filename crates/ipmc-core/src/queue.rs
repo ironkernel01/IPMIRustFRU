@@ -4,14 +4,14 @@
 //! keeps it queued until the driver reports the result. A full FIFO rejects the new item and
 //! counts it; it never overwrites a queued item. The link layer's ingress FIFO and drop log
 //! use the same `Fifo`.
-//! Egress capacity: IPMB_TXQ_DEPTH frames of IPMB_MAX_LEN bytes (ipmi_defs.h; no C peer, the
+//! Egress capacity: IPMB_TXQ_DEPTH frames of IPMB_MAX_LEN bytes (defs.rs; no C peer, the
 //! firmware drains this queue). Too small a depth drops responses under bursts and the
 //! Chassis Manager retries the request.
 
 use crate::ipmb::IPMB_MAX_LEN;
 
-/// TXQ_DEPTH -- queue capacity in frames, from ipmi_defs.h.
-pub const TXQ_DEPTH: usize = ipmc_defs::IPMB_TXQ_DEPTH as usize;
+/// TXQ_DEPTH -- queue capacity in frames, from defs.rs.
+pub const TXQ_DEPTH: usize = ipmc_defs::IPMB_TXQ_DEPTH;
 
 /// Bus -- the IPMB a frame arrived on or leaves on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

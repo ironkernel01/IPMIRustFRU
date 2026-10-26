@@ -1,9 +1,9 @@
-//! routing.rs - picks, per source switch of ipmi_defs.h, which driver answers a group.
+//! routing.rs - picks, per source switch of ipmc-defs, which driver answers a group.
 //!
 //! The routers hold the on-chip driver (None when the build has none) and the simulator, and
 //! choose per call from the switches given at construction. A switch set to hardware with no
 //! driver present reports `SourceError::Unavailable`; the reading is then marked unavailable
-//! rather than invented. The switch values `IPMC_SRC_I2C` and `IPMC_SRC_SPI` name external
+//! rather than invented. The switch values `Source::I2c` and `Source::Spi` name external
 //! parts (drivers/i2c, drivers/spi); no bus is assigned to them, so the routers answer
 //! `Unavailable` and the firmware build refuses the values (ipmc-nucleo-f401re sensing.rs). A board
 //! integrator who assigns a bus adds an arm for the new source here.
@@ -11,34 +11,11 @@
 use crate::drivers::sim::{SimAnalog, SimInputs, SimPower};
 use crate::hal::{AnalogSource, DigitalInputs, Divider, Input, PowerSwitch, SourceError};
 
-/// Source -- which driver answers a group: the `IPMC_SRC_*` switch values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    /// The on-chip driver (drivers/stm32f401).
-    Hw,
-    /// The simulator (drivers/sim).
-    Sim,
-    /// An external I2C part (drivers/i2c); no bus assigned yet.
-    I2c,
-    /// An external SPI part (drivers/spi); no bus assigned yet.
-    Spi,
-}
-
-impl Source {
-    /// from_define -- the switch value of ipmi_defs.h. ipmc-defs guards the range 0..=3, so any
-    /// value that is not SIM, I2C or SPI is hardware.
-    pub const fn from_define(value: u32) -> Source {
-        if value == ipmc_defs::IPMC_SRC_SIM {
-            Source::Sim
-        } else if value == ipmc_defs::IPMC_SRC_I2C {
-            Source::I2c
-        } else if value == ipmc_defs::IPMC_SRC_SPI {
-            Source::Spi
-        } else {
-            Source::Hw
-        }
-    }
-}
+/// Source -- which driver answers a group (the `IPMC_*_SOURCE` switches of ipmc-defs): the
+/// on-chip driver (drivers/stm32f401) for `Hw`, the simulator (drivers/sim) for `Sim`, an external
+/// I2C part (drivers/i2c) for `I2c` and an external SPI part (drivers/spi) for `Spi`; no bus is
+/// assigned to the last two yet.
+pub use ipmc_defs::Source;
 
 /// backend -- the backend of a router: `route` over the router's hardware option (coerced to
 /// the trait object `$tr`) and its simulator field `$sim`. A macro because the hardware type
@@ -302,14 +279,6 @@ mod tests {
         assert!(!sim_only.is_enabled());
         assert_eq!(sim_only.set_enable(true), Ok(()));
         assert!(sim_only.is_enabled());
-    }
-
-    #[test]
-    fn from_define_maps_the_switch_values() {
-        assert_eq!(Source::from_define(ipmc_defs::IPMC_SRC_HW), Source::Hw);
-        assert_eq!(Source::from_define(ipmc_defs::IPMC_SRC_SIM), Source::Sim);
-        assert_eq!(Source::from_define(ipmc_defs::IPMC_SRC_I2C), Source::I2c);
-        assert_eq!(Source::from_define(ipmc_defs::IPMC_SRC_SPI), Source::Spi);
     }
 
     #[test]

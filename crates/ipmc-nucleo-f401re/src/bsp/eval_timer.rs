@@ -14,7 +14,7 @@ use stm32f4::stm32f401::{RCC, TIM2};
 use super::clock::ClockInfo;
 
 /// TICK_HZ -- counter rate, Hz: 10 kHz gives 0.1 ms resolution and 7158 minutes of range in
-/// 32 bits, far past any evaluation length. The ipmi_defs_tier23.h guard on
+/// 32 bits, far past any evaluation length. The defs_tier23.rs guard on
 /// IPMC_EVAL_MINUTES (defs_guards.rs) assumes this rate.
 pub const TICK_HZ: u32 = 10_000;
 

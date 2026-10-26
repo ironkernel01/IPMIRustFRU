@@ -129,7 +129,7 @@ pub struct PowerController {
 
 impl PowerController {
     /// new -- Off, no fault. `timeout_ms` is the longest wait for PGOOD after the request
-    /// (ipmi_defs.h IPMC_PGOOD_TIMEOUT_MS).
+    /// (defs.rs IPMC_PGOOD_TIMEOUT_MS).
     pub const fn new(timeout_ms: u32) -> Self {
         PowerController {
             state: PowerState::Off,

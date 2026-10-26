@@ -20,9 +20,9 @@ use super::systick;
 
 const OWNER: &str = "led";
 const LED_PIN_MASK: u16 = 1 << 5;
-/// RATE_MIN_CHZ -- lowest accepted flash rate in centihertz (ipmi_defs.h IPMC_LED_RATE_MIN_CHZ).
+/// RATE_MIN_CHZ -- lowest accepted flash rate in centihertz (defs.rs IPMC_LED_RATE_MIN_CHZ).
 pub const RATE_MIN_CHZ: u32 = ipmc_defs::IPMC_LED_RATE_MIN_CHZ;
-/// RATE_MAX_CHZ -- highest accepted flash rate in centihertz (ipmi_defs.h IPMC_LED_RATE_MAX_CHZ).
+/// RATE_MAX_CHZ -- highest accepted flash rate in centihertz (defs.rs IPMC_LED_RATE_MAX_CHZ).
 pub const RATE_MAX_CHZ: u32 = ipmc_defs::IPMC_LED_RATE_MAX_CHZ;
 
 struct Led {

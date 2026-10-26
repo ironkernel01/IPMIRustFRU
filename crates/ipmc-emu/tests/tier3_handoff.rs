@@ -48,7 +48,7 @@ fn exchange(emu: &mut Emulator, cmd: u8, seq: u8, data: &[u8], now_ms: u32) -> u
 
 #[test]
 fn a_power_on_in_progress_does_not_reach_m4_with_al_set() {
-    if ipmc_defs::IPMC_TIER < 3 || ipmc_defs::IPMC_SIM_PGOOD_HIGH != 1 {
+    if ipmc_defs::IPMC_TIER < 3 || !ipmc_defs::IPMC_SIM_PGOOD_HIGH {
         return;
     }
     let config = EmuConfig {

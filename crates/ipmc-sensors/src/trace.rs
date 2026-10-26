@@ -11,7 +11,7 @@ use crate::board_sensors::{INPUTS, RAILS, TENTHS};
 use ipmc_core::sensor::{RailStatus, SensorSnapshot, Summary};
 use ipmc_core::trace::Trace;
 
-/// Level -- which sensor lines reach the console (ipmi_defs.h IPMC_SENSOR_TRACE and the
+/// Level -- which sensor lines reach the console (defs.rs IPMC_SENSOR_TRACE and the
 /// IPMC_TRACE_* values). Sampling runs at every level; only the printing changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -25,18 +25,15 @@ pub enum Level {
 }
 
 impl Level {
-    /// ALL_LEVELS -- every level, in define order (IPMC_TRACE_OFF, _EVENTS, _ALL).
+    /// ALL_LEVELS -- every level, in define order (Off, Events, All).
     const ALL_LEVELS: [Level; 3] = [Level::Off, Level::Events, Level::All];
 
-    /// from_define -- the level of an ipmi_defs.h IPMC_TRACE_* value. ipmc-defs guards the
-    /// range 0..=2, so a value that is neither OFF nor EVENTS is ALL.
-    pub const fn from_define(value: u32) -> Level {
-        if value == ipmc_defs::IPMC_TRACE_OFF {
-            Level::Off
-        } else if value == ipmc_defs::IPMC_TRACE_EVENTS {
-            Level::Events
-        } else {
-            Level::All
+    /// from_define -- the level of the ipmc-defs `TraceLevel` value.
+    pub const fn from_define(value: ipmc_defs::TraceLevel) -> Level {
+        match value {
+            ipmc_defs::TraceLevel::Off => Level::Off,
+            ipmc_defs::TraceLevel::Events => Level::Events,
+            ipmc_defs::TraceLevel::All => Level::All,
         }
     }
 
@@ -384,12 +381,10 @@ pub(crate) mod tests {
 
     #[test]
     fn levels_follow_the_defines_and_parse_their_names() {
-        assert_eq!(Level::from_define(ipmc_defs::IPMC_TRACE_OFF), Level::Off);
-        assert_eq!(
-            Level::from_define(ipmc_defs::IPMC_TRACE_EVENTS),
-            Level::Events
-        );
-        assert_eq!(Level::from_define(ipmc_defs::IPMC_TRACE_ALL), Level::All);
+        use ipmc_defs::TraceLevel;
+        assert_eq!(Level::from_define(TraceLevel::Off), Level::Off);
+        assert_eq!(Level::from_define(TraceLevel::Events), Level::Events);
+        assert_eq!(Level::from_define(TraceLevel::All), Level::All);
         assert_eq!(Level::from_name("EVENTS"), Some(Level::Events));
         assert_eq!(Level::from_name("all"), Some(Level::All));
         assert_eq!(Level::from_name("Off"), Some(Level::Off));

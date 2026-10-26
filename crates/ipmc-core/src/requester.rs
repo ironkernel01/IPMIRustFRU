@@ -34,12 +34,12 @@ pub const T6_MIN_MS: u32 = 60;
 const SEQ_COUNT: usize = 64;
 /// SEQ_MASK -- the 6 bits of rqSeq.
 const SEQ_MASK: u8 = 0x3F;
-/// TIMEOUT_MS -- wait for a response before a retry (ipmi_defs.h IPMB_REQ_TIMEOUT_MS).
+/// TIMEOUT_MS -- wait for a response before a retry (defs.rs IPMB_REQ_TIMEOUT_MS).
 pub const TIMEOUT_MS: u32 = ipmc_defs::IPMB_REQ_TIMEOUT_MS;
-/// RETRIES -- retransmissions after the first one (ipmi_defs.h IPMB_REQ_RETRIES, guarded 3..=10;
+/// RETRIES -- retransmissions after the first one (defs.rs IPMB_REQ_RETRIES, guarded 3..=10;
 /// 10 is C1max, Rule 4.1.1-10).
-pub const RETRIES: u8 = ipmc_defs::IPMB_REQ_RETRIES as u8;
-/// GAP_MS -- least time between two new requests (ipmi_defs.h IPMB_REQ_GAP_MS).
+pub const RETRIES: u8 = ipmc_defs::IPMB_REQ_RETRIES;
+/// GAP_MS -- least time between two new requests (defs.rs IPMB_REQ_GAP_MS).
 const GAP_MS: u32 = ipmc_defs::IPMB_REQ_GAP_MS;
 /// MAX_TRANSMISSIONS -- the first transmission and every retry.
 pub const MAX_TRANSMISSIONS: u8 = 1 + RETRIES;

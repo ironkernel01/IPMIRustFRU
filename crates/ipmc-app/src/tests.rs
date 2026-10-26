@@ -409,8 +409,6 @@ fn set_is_refused_when_writing_is_disabled() {
     set_field(&request, &mut host, &mut out, false).unwrap();
     assert_eq!(out.as_str(), "ERR WRITE_DISABLED IPMC_APP_FRU_WRITE is 0");
     assert_eq!(reply(&mut host, "GET ASSET_TAG"), "OK ASSET_TAG");
-    // With the build setting, SET works (the default build allows it).
-    assert_eq!(ipmc_defs::IPMC_APP_FRU_WRITE, 1);
 }
 
 #[test]
@@ -685,7 +683,7 @@ fn the_answer_buffer_stores_whole_writes_only() {
 fn the_longest_answers_fit_the_answer_buffer() {
     let mut host = FakeHost::new();
     // An unknown word as long as a request line.
-    let word = "X".repeat(ipmc_defs::IPMC_APP_LINE_MAX as usize - 10);
+    let word = "X".repeat(ipmc_defs::IPMC_APP_LINE_MAX - 10);
     let long = reply(&mut host, &format!("#abcdefgh {word}"));
     assert!(long.len() < ANSWER_MAX);
     // A full frame of response data.

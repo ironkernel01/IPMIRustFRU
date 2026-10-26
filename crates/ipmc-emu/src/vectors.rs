@@ -12,9 +12,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// LINE_MAX_CHARS -- longest accepted line, from ipmi_defs.h IPMC_EMU_VECTOR_LINE_MAX (guarded
+/// LINE_MAX_CHARS -- longest accepted line, from defs.rs IPMC_EMU_VECTOR_LINE_MAX (guarded
 /// there to hold a time, a bus tag and IPMB_MSG_MAX three-character hex tokens).
-pub const LINE_MAX_CHARS: usize = ipmc_defs::IPMC_EMU_VECTOR_LINE_MAX as usize;
+pub const LINE_MAX_CHARS: usize = ipmc_defs::IPMC_EMU_VECTOR_LINE_MAX;
 /// FRAME_MAX_BYTES -- longest accepted frame: the ipmc-core frame maximum (IPMB_MSG_MAX). A
 /// longer frame cannot be a valid IPMB frame, so the reader rejects it instead of passing it on.
 pub const FRAME_MAX_BYTES: usize = IPMB_MAX_LEN;

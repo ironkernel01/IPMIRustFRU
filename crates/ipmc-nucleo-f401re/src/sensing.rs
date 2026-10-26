@@ -1,7 +1,7 @@
 // sensing.rs - firmware composition of the sensors crate and the SENSORS, POWER and SIM console
 // groups.
 //
-// This module builds the backends from the ipmi_defs.h source switches (ADC1 and the board
+// This module builds the backends from the ipmc-defs source switches (ADC1 and the board
 // GPIO from ipmc-sensors, simulators beside them), owns the Monitor that samples and runs the
 // power state machine, and holds the handlers of the three command groups. console.rs only
 // registers the tables. The decisions live in ipmc-sensors and ipmc-core; this file moves
@@ -40,25 +40,25 @@ use crate::ipmb_link::HandOffs;
 // No bus is assigned to external sensor parts (the STM32's I2C1 and I2C3 are the IPMB buses), so
 // the I2C and SPI source values are not accepted in a firmware build.
 /// buildable -- true for the source values this firmware can serve: hardware or simulation.
-const fn buildable(source: u32) -> bool {
-    source == ipmc_defs::IPMC_SRC_HW || source == ipmc_defs::IPMC_SRC_SIM
+const fn buildable(source: Source) -> bool {
+    matches!(source, Source::Hw | Source::Sim)
 }
 const _: () = assert!(
     buildable(ipmc_defs::IPMC_ADC_INTERNAL_SOURCE)
         && buildable(ipmc_defs::IPMC_ADC_EXTERNAL_SOURCE)
         && buildable(ipmc_defs::IPMC_FAULT_SOURCE)
         && buildable(ipmc_defs::IPMC_POWER_SOURCE),
-    "no bus assigned to external sensor parts: IPMC_SRC_I2C and IPMC_SRC_SPI cannot be selected"
+    "no bus assigned to external sensor parts: Source::I2c and Source::Spi cannot be selected"
 );
 
-/// hardware_needs -- which on-chip hardware the ipmi_defs.h source switches ask for. main.rs
+/// hardware_needs -- which on-chip hardware the ipmc-defs source switches ask for. main.rs
 /// starts only that: a simulated group claims and configures no pin.
 pub const fn hardware_needs() -> HardwareNeeds {
     HardwareNeeds::of(
-        Source::from_define(ipmc_defs::IPMC_ADC_INTERNAL_SOURCE),
-        Source::from_define(ipmc_defs::IPMC_ADC_EXTERNAL_SOURCE),
-        Source::from_define(ipmc_defs::IPMC_FAULT_SOURCE),
-        Source::from_define(ipmc_defs::IPMC_POWER_SOURCE),
+        ipmc_defs::IPMC_ADC_INTERNAL_SOURCE,
+        ipmc_defs::IPMC_ADC_EXTERNAL_SOURCE,
+        ipmc_defs::IPMC_FAULT_SOURCE,
+        ipmc_defs::IPMC_POWER_SOURCE,
     )
 }
 
@@ -77,7 +77,7 @@ pub struct Sensing {
 
 impl Sensing {
     /// new -- builds the routers over the hardware backends and the simulators at their
-    /// ipmi_defs.h start values. `adc` is None when no group uses the ADC, `io` is None when no
+    /// ipmc-defs start values. `adc` is None when no group uses the ADC, `io` is None when no
     /// group uses the board pins; an ADC that refused to start is kept as a fault to show.
     pub fn new(adc: Option<Result<Adc, InitError>>, io: Option<BoardIo>) -> Self {
         let (adc, adc_fault) = match adc {
@@ -94,15 +94,15 @@ impl Sensing {
             analog: RoutedAnalog::new(
                 adc,
                 sim_analog(),
-                Source::from_define(ipmc_defs::IPMC_ADC_INTERNAL_SOURCE),
-                Source::from_define(ipmc_defs::IPMC_ADC_EXTERNAL_SOURCE),
+                ipmc_defs::IPMC_ADC_INTERNAL_SOURCE,
+                ipmc_defs::IPMC_ADC_EXTERNAL_SOURCE,
             ),
             io: RoutedIo::new(
                 io,
                 SimInputs::new(),
                 SimPower::new(),
-                Source::from_define(ipmc_defs::IPMC_FAULT_SOURCE),
-                Source::from_define(ipmc_defs::IPMC_POWER_SOURCE),
+                ipmc_defs::IPMC_FAULT_SOURCE,
+                ipmc_defs::IPMC_POWER_SOURCE,
             ),
             adc_fault,
             fresh: false,
@@ -152,10 +152,10 @@ impl Sensing {
         }
     }
 
-    /// start -- requests payload power when ipmi_defs.h IPMC_POWER_AT_BOOT is 1 and
+    /// start -- requests payload power when ipmc-defs IPMC_POWER_AT_BOOT is 1 and
     /// `power_on_check` (`IpmbLink::power_on_check`) allows it; a refusal prints one line.
     pub fn start(&mut self, power_on_check: Result<(), PowerOnRefused>) {
-        if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+        if !ipmc_defs::IPMC_POWER_AT_BOOT {
             return;
         }
         match power_on_check {
@@ -268,7 +268,7 @@ fn print_reading(
 /// not_simulated -- prints that a group is not simulated; the command fails as reported.
 fn not_simulated(group: &str, define: &str) -> CmdResult {
     out!(
-        "Not simulated: the {} source is hardware (ipmi_defs.h {})\n",
+        "Not simulated: the {} source is hardware (ipmc-defs {})\n",
         group,
         define
     );
@@ -486,7 +486,7 @@ pub fn cmd_power_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     out!(
         "PGOOD timeout: {} ms, power at boot: {}, enable source: {}\n",
         ipmc_defs::IPMC_PGOOD_TIMEOUT_MS,
-        on_off(ipmc_defs::IPMC_POWER_AT_BOOT == 1),
+        on_off(ipmc_defs::IPMC_POWER_AT_BOOT),
         SourceName(ctx.sensing.io.power_source())
     );
     Ok(())

@@ -43,23 +43,23 @@ use crate::trace::Trace;
 /// tools/sync_ipmi_commands.py reads this line to mark the Broadcast row implemented.
 pub const BROADCAST_GET_DEVICE_ID: bool = true;
 
-/// INGRESS_DEPTH -- received requests held between the driver and the main loop (ipmi_defs.h).
-pub const INGRESS_DEPTH: usize = ipmc_defs::IPMB_INGRESS_DEPTH as usize;
-/// TX_RETRIES -- most resends of one response frame (ipmi_defs.h guard: 3..=10, so it fits u8).
-pub const TX_RETRIES: u8 = ipmc_defs::IPMB_TX_RETRIES as u8;
+/// INGRESS_DEPTH -- received requests held between the driver and the main loop (defs.rs).
+pub const INGRESS_DEPTH: usize = ipmc_defs::IPMB_INGRESS_DEPTH;
+/// TX_RETRIES -- most resends of one response frame (defs.rs: a u8, guarded 3..=10).
+pub const TX_RETRIES: u8 = ipmc_defs::IPMB_TX_RETRIES;
 /// RESPONSE_DEADLINE_MS -- T5max, request STOP to response STOP (VITA 46.11 Table 4.1.1-1,
 /// Rule 4.1.1-11). A response whose transmission completes later than this after the request
 /// STOP is late (`Link::late_responses`).
 pub const RESPONSE_DEADLINE_MS: u32 = 227;
 
-/// CM_ADDR8 -- the Chassis Manager's 8-bit IPMB address (ipmi_defs.h IPMB_CM_ADDR8, guarded
+/// CM_ADDR8 -- the Chassis Manager's 8-bit IPMB address (defs.rs IPMB_CM_ADDR8, guarded
 /// 2..=0xFE with bit 0 clear in ipmc-defs, so the cast is exact).
-pub const CM_ADDR8: u8 = ipmc_defs::IPMB_CM_ADDR8 as u8;
+pub const CM_ADDR8: u8 = ipmc_defs::IPMB_CM_ADDR8;
 
 /// General-call address byte that precedes a broadcast frame (IPMI 1.5 section 17.9).
 const GENERAL_CALL: u8 = 0x00;
-/// TRACE_ON -- IPMC_IPMI_TRACE from ipmi_defs.h; false removes every trace call.
-const TRACE_ON: bool = ipmc_defs::IPMC_IPMI_TRACE == 1;
+/// TRACE_ON -- IPMC_IPMI_TRACE from defs.rs; false removes every trace call.
+const TRACE_ON: bool = ipmc_defs::IPMC_IPMI_TRACE;
 
 /// TxOutcome -- what a driver reports for one transmission: sent, or failed with the cause the
 /// master saw. A plain `bool` converts (true sent, false an unspecified failure).
@@ -137,31 +137,16 @@ impl core::fmt::Display for RequestWhat {
     }
 }
 
-/// TxPolicy -- how the bus of a response is chosen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TxPolicy {
-    /// Alternate successive transmissions between the enabled buses (VITA 46.11 Rule 4.1.1-6).
-    Alternate,
-    /// Send the response on the bus the request arrived on.
-    Arrival,
-}
+/// TxPolicy -- how the bus of a response is chosen (IPMB_TX_POLICY in ipmc-defs): Alternate
+/// sends successive transmissions on the enabled buses in turn (VITA 46.11 Rule 4.1.1-6),
+/// Arrival sends the response on the bus the request arrived on.
+pub use ipmc_defs::TxPolicy;
 
-impl TxPolicy {
-    /// from_define -- the policy named by IPMB_TX_POLICY (the lib.rs guard allows two values).
-    pub const fn from_define(value: u32) -> TxPolicy {
-        if value == ipmc_defs::IPMB_TX_ARRIVAL {
-            TxPolicy::Arrival
-        } else {
-            TxPolicy::Alternate
-        }
-    }
-
-    /// name -- text for console lines.
-    pub const fn name(self) -> &'static str {
-        match self {
-            TxPolicy::Alternate => "alternate",
-            TxPolicy::Arrival => "arrival",
-        }
+/// tx_policy_name -- text of a policy for console lines.
+pub const fn tx_policy_name(policy: TxPolicy) -> &'static str {
+    match policy {
+        TxPolicy::Alternate => "alternate",
+        TxPolicy::Arrival => "arrival",
     }
 }
 
@@ -178,11 +163,11 @@ pub struct LinkConfig {
 }
 
 impl LinkConfig {
-    /// from_defs -- the configuration of ipmi_defs.h.
+    /// from_defs -- the configuration of ipmc-defs.
     pub const fn from_defs() -> LinkConfig {
         LinkConfig {
-            b_fitted: ipmc_defs::IPMB_BUS_B_ENABLE == 1,
-            tx_policy: TxPolicy::from_define(ipmc_defs::IPMB_TX_POLICY),
+            b_fitted: ipmc_defs::IPMB_BUS_B_ENABLE,
+            tx_policy: ipmc_defs::IPMB_TX_POLICY,
             requests_allowed: ipmc_defs::IPMC_TIER >= 2,
         }
     }
@@ -615,7 +600,7 @@ pub struct Link {
     requester: Requester,
 }
 
-/// REQUESTS_BUILT -- this build can send requests: Tier 2 or 3 (ipmi_defs.h IPMC_TIER), and every
+/// REQUESTS_BUILT -- this build can send requests: Tier 2 or 3 (defs.rs IPMC_TIER), and every
 /// unit test of the requester path. A Tier-1 image never reaches the requester code behind this
 /// constant, so the optimiser drops it.
 const REQUESTS_BUILT: bool = cfg!(test) || ipmc_defs::IPMC_TIER >= 2;
@@ -1538,21 +1523,10 @@ mod tests {
     }
 
     #[test]
-    fn default_config_follows_ipmi_defs() {
+    fn default_config_follows_defs() {
         let c = LinkConfig::default();
-        assert_eq!(c.b_fitted, ipmc_defs::IPMB_BUS_B_ENABLE == 1);
-        assert_eq!(
-            c.tx_policy,
-            TxPolicy::from_define(ipmc_defs::IPMB_TX_POLICY)
-        );
-        assert_eq!(
-            TxPolicy::from_define(ipmc_defs::IPMB_TX_ARRIVAL),
-            TxPolicy::Arrival
-        );
-        assert_eq!(
-            TxPolicy::from_define(ipmc_defs::IPMB_TX_ALTERNATE),
-            TxPolicy::Alternate
-        );
+        assert_eq!(c.b_fitted, ipmc_defs::IPMB_BUS_B_ENABLE);
+        assert_eq!(c.tx_policy, ipmc_defs::IPMB_TX_POLICY);
     }
 
     #[test]

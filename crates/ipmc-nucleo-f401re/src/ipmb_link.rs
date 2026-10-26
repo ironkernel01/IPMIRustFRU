@@ -56,17 +56,17 @@ use crate::fru_log::FruLog;
 
 /// RX_DRAIN_MAX -- most frames one `service` pass takes from the queues: both queues full at
 /// once (2 x IPMB_RX_QUEUE_DEPTH). Frames that arrive during the pass wait for the next one.
-const RX_DRAIN_MAX: usize = 2 * (ipmc_defs::IPMB_RX_QUEUE_DEPTH as usize);
+const RX_DRAIN_MAX: usize = 2 * ipmc_defs::IPMB_RX_QUEUE_DEPTH;
 
-/// PAUSE_WAIT_MS -- longest wait for a healthy slave to go idle before an erase (ipmi_defs.h
+/// PAUSE_WAIT_MS -- longest wait for a healthy slave to go idle before an erase (defs.rs
 /// IPMC_FRU_PAUSE_WAIT_MS, guarded in ipmc-defs): a frame in progress ends within T1 = 20 ms
 /// (VITA 46.11 Table 4.1.1-1). A slave that is still busy makes the erase fail with `Timeout`; the
 /// save is retried one delay later.
 const PAUSE_WAIT_MS: u32 = ipmc_defs::IPMC_FRU_PAUSE_WAIT_MS;
 /// FRU_ERASE_QUIET_MS -- a run-time erase starts only after this long without an IPMB frame
-/// (ipmi_defs.h IPMC_FRU_ERASE_QUIET_MS).
+/// (defs.rs IPMC_FRU_ERASE_QUIET_MS).
 const FRU_ERASE_QUIET_MS: u32 = ipmc_defs::IPMC_FRU_ERASE_QUIET_MS;
-/// FRU_PERSIST_DELAY_MS -- quiet time before a Write FRU Data is saved (ipmi_defs.h).
+/// FRU_PERSIST_DELAY_MS -- quiet time before a Write FRU Data is saved (defs.rs).
 const FRU_PERSIST_DELAY_MS: u32 = ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
 /// URGENT_LINK_WAIT_MS -- longest an urgent save before a Cold Reset waits for the link to hold
 /// no accepted request and no untransmitted response before it erases anyway: the T5 response
@@ -92,8 +92,8 @@ pub struct IpmbIo {
     pub periph: [Option<I2cPeripheral>; FaultTracker::COUNT],
 }
 
-/// B_FITTED -- IPMB-B is built in (ipmi_defs.h IPMB_BUS_B_ENABLE).
-const B_FITTED: bool = ipmc_defs::IPMB_BUS_B_ENABLE == 1;
+/// B_FITTED -- IPMB-B is built in (defs.rs IPMB_BUS_B_ENABLE).
+const B_FITTED: bool = ipmc_defs::IPMB_BUS_B_ENABLE;
 
 /// BringUp -- what `bring_up` takes besides the bus: the clock and interrupt controllers, the PCLK1
 /// the I2C timing derives from and the own address. Owned by the link after start-up, so a bus
@@ -632,8 +632,8 @@ impl IpmbLink {
             urgent_since: None,
             urgent_forced: false,
             applied_speed: [BusSpeed::Standard; FaultTracker::COUNT],
-            capture: DefaultLog::new(ipmc_defs::IPMC_LOG_AT_BOOT == 1),
-            i2c_trace: ipmc_defs::IPMC_I2C_TRACE_AT_BOOT == 1,
+            capture: DefaultLog::new(ipmc_defs::IPMC_LOG_AT_BOOT),
+            i2c_trace: ipmc_defs::IPMC_I2C_TRACE_AT_BOOT,
             ipmi_console: true,
             #[cfg(ipmc_eval)]
             ipmb_stopped: false,
@@ -1491,8 +1491,8 @@ pub fn cmd_ipmb_state(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
         );
     }
     out!(
-        "TX policy: {} (ipmi_defs.h IPMB_TX_POLICY)\n",
-        link.config().tx_policy.name()
+        "TX policy: {} (ipmc-defs IPMB_TX_POLICY)\n",
+        ipmc_core::link::tx_policy_name(link.config().tx_policy)
     );
     let mut data = [0u8; sensor::READING_LEN];
     let reading = ctx.ipmb.dispatch.read_sensor(

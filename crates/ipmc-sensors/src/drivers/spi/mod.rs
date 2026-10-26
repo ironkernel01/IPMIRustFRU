@@ -12,7 +12,7 @@
 //! 2. Declare it with `pub mod <part>;` here and test it against `mock::MockSpi`.
 //! 3. In board_sensors.rs / routing.rs, hold the driver in the matching router (an
 //!    `Option<H>` slot) and answer the `Source::Spi` arm with it instead of `Unavailable`.
-//! 4. Select it in ipmi_defs.h with `IPMC_SRC_SPI` on IPMC_ADC_EXTERNAL_SOURCE (or the switch
+//! 4. Select it in defs.rs with `IPMC_SRC_SPI` on IPMC_ADC_EXTERNAL_SOURCE (or the switch
 //!    of the group the part serves). The firmware build refuses the value until a bus is
 //!    assigned: hand the firmware an SPI device and remove the guard in ipmc-nucleo-f401re sensing.rs.
 

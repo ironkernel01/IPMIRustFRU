@@ -3,7 +3,7 @@
 //! field in place.
 //!
 //! `records.rs` builds each area with room for these fields (the `IPMC_FRU_*_MAX` defines of
-//! ipmi_defs.h): after the C1h end-of-fields byte the area holds 00h bytes up to its length. An
+//! defs.rs): after the C1h end-of-fields byte the area holds 00h bytes up to its length. An
 //! update rewrites only its own area. It decodes the fields, writes them back in the same order
 //! with the one field replaced, then C1h, 00h up to the area's old length and the zero checksum.
 //! The area length never changes, so no other area moves. When the new fields do not fit (an
@@ -96,13 +96,13 @@ impl FruField {
     /// max_len -- the longest value in bytes: the room the `IPMC_FRU_*_MAX` define reserves, or
     /// the 16 characters of the date text.
     pub const fn max_len(self) -> usize {
-        (match self {
+        match self {
             FruField::BoardMfr => ipmc_defs::IPMC_FRU_BOARD_MFR_MAX,
             FruField::BoardProduct => ipmc_defs::IPMC_FRU_BOARD_PRODUCT_MAX,
             FruField::BoardSerial => ipmc_defs::IPMC_FRU_BOARD_SERIAL_MAX,
             FruField::BoardPart => ipmc_defs::IPMC_FRU_BOARD_PART_MAX,
             FruField::BoardFileId => ipmc_defs::IPMC_FRU_BOARD_FILE_ID_MAX,
-            FruField::MfgDate => date::TEXT_LEN as u32,
+            FruField::MfgDate => date::TEXT_LEN,
             FruField::ProductMfr => ipmc_defs::IPMC_FRU_PRODUCT_MFR_MAX,
             FruField::ProductName => ipmc_defs::IPMC_FRU_PRODUCT_NAME_MAX,
             FruField::ProductPart => ipmc_defs::IPMC_FRU_PRODUCT_PART_MAX,
@@ -110,7 +110,7 @@ impl FruField {
             FruField::ProductSerial => ipmc_defs::IPMC_FRU_PRODUCT_SERIAL_MAX,
             FruField::AssetTag => ipmc_defs::IPMC_FRU_ASSET_TAG_MAX,
             FruField::ProductFileId => ipmc_defs::IPMC_FRU_PRODUCT_FILE_ID_MAX,
-        }) as usize
+        }
     }
 
     /// from_name -- the field called `name`, upper or lower case; None for an unknown name.
@@ -842,7 +842,7 @@ mod tests {
             // 2000-02-29 12:00: 1461 days to 2000-01-01 (1996 is a leap year), 59 more days
             // (31 + 28) to the leap day: 1520 days x 1440 + 720 minutes.
             ("2000-02-29 12:00", 2_189_520),
-            // 2026-10-23 00:00: 11253 days x 1440 (the default of ipmi_defs.h).
+            // 2026-10-23 00:00: 11253 days x 1440 (the default of defs.rs).
             ("2026-10-23 00:00", 16_204_320),
             // The last value the standard 3-byte field holds: 11650 days and 1215 minutes.
             ("2027-11-24 20:15", 0x00FF_FFFF),

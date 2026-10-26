@@ -17,8 +17,8 @@ Limits (named constants in `lib.rs`):
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `MENU_LINE_MAX` | 128 (`IPMC_MENU_LINE_MAX` in ipmi_defs.h) | Longest input line in bytes. A longer line is rejected with `LineTooLong`, never truncated. |
-| `MENU_TOKENS_MAX` | 40 (`IPMC_MENU_TOKENS_MAX` in ipmi_defs.h) | Most tokens in a line or in a syntax string. More is `TooManyTokens` (line) or `SyntaxTooLong` (table). |
+| `MENU_LINE_MAX` | 128 (`IPMC_MENU_LINE_MAX` in crates/ipmc-defs/src/defs.rs) | Longest input line in bytes. A longer line is rejected with `LineTooLong`, never truncated. |
+| `MENU_TOKENS_MAX` | 40 (`IPMC_MENU_TOKENS_MAX` in crates/ipmc-defs/src/defs.rs) | Most tokens in a line or in a syntax string. More is `TooManyTokens` (line) or `SyntaxTooLong` (table). |
 
 Input path: the firmware reads UART bytes and feeds each to `LineEditor::push_byte`, which
 returns an event (echo this byte, erase one character, line complete, line too long). The

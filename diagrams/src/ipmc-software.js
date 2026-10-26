@@ -34,8 +34,8 @@ const cy = (y, h) => y + h / 2;
   box(s, c2, 2.65, w, 0.85, "ipmc-core", ["all IPMI logic", "codec, link layer, commands, SDR,", "sensors, FRU state, self test"], W);
   box(s, c2, 3.8, w, 0.6, "ipmc-fru", ["FRU records and scratchpad", "image, store, flash log"], W);
   box(s, c2, 4.7, w, 0.6, "ipmc-wire", ["IPMI byte primitives", "checksum, builder, type/length, CRC-32"], W);
-  box(s, c1, 4.7, w, 0.6, "ipmc-defs", ["only reader of ipmi_defs.h", "constants and compile-time guards"], W);
-  box(s, c1, 6.1, w, 0.6, "ipmi_defs.h", ["build configuration", "C #define syntax"], Y);
+  box(s, c1, 4.7, w, 0.6, "ipmc-defs", ["typed constants (defs.rs)", "and compile-time guards"], W);
+  box(s, c1, 6.1, w, 0.6, "defs.rs", ["build configuration", "Rust pub const items"], Y);
   box(s, 6.5, 2.95, 2.2, 0.75, "ipmc-ext", ["bridge crate: Active is", "NoExtension or the", "extension, by ipmc-defs"], W);
   box(s, 8.2, 6.1, 4.2, 0.6, "Tier-2/3 extension", ["(commercial release build, private)", "sibling folder, mounted by ipmc-ext"], W);
   const x2 = cx(c2, w), x1 = cx(c1, w);
@@ -56,13 +56,13 @@ const cy = (y, h) => y + h / 2;
   wire(s, 8.45, 2.8, c2, 2.8);
   wire(s, x1, 2.35, x1, 4.7);
   wire(s, x1, 6.1, x1, 5.3, { dash: "dash" });
-  label(s, x1 + 0.1, 5.75, 1.5, "build.rs reads");
+  label(s, x1 + 0.1, 5.75, 1.5, "lib.rs: mod defs");
   wire(s, 8.7, 3.3, c2, 3.3);
   wire(s, 7.2, 3.7, 7.2, 4.7);
   wire(s, 8.4, 3.7, 8.4, 6.1, { dash: "dash" });
   label(s, 8.5, 5.75, 1.6, "#[path] mount, when found");
   notes(s, 0.6, 3.95, 3.5, 2.8, [
-    "Every crate reads ipmi_defs.h values through ipmc-defs only; those arrows are not drawn.",
+    "Every crate reads defs.rs values as ipmc_defs::NAME; those arrows are not drawn.",
     "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). The ipmc-defs build.rs finds the extension folder; without it ipmc-ext holds NoExtension and the build is Tier-1.",
     "ipmc-nucleo-f401re uses ipmc-core, -fru, -app, -menu, -sensors (feature stm32f401) and -defs. ipmc-emu uses core, fru, sensors, wire and defs. ipmc-app uses core, fru, wire and defs. ipmc-sensors uses core and defs. ipmc-core uses fru, wire and defs. ipmc-fru uses wire and defs. ipmc-menu uses defs. Arrows that would cross are not drawn.",
     "The firmware crate builds on its own (thumbv7em-none-eabihf). ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs, ipmc-menu and ipmc-app are no_std with forbid(unsafe_code); ipmc-sensors allows unsafe only in drivers/stm32f401.",
@@ -157,7 +157,7 @@ const cy = (y, h) => y + h / 2;
   wire(s, 2.5, 1.725, 2.75, 1.725, { end: false });
   wire(s, 2.5, 2.55, 2.75, 2.55, { end: false });
   wire(s, 2.75, 0.9, 2.75, 2.55, { end: false });
-  box(s, 3.0, 1.3, 1.5, 0.8, "Routing", ["routing.rs, per", "ipmi_defs.h", "source switch"]);
+  box(s, 3.0, 1.3, 1.5, 0.8, "Routing", ["routing.rs, per", "defs.rs", "source switch"]);
   wire(s, 2.75, rc, 3.0, rc);
   box(s, 4.9, 1.25, 1.8, 0.9, "Monitor", ["monitor.rs: sample,", "power state machine,", "PWR_EN drive, trace lines"]);
   wire(s, 4.5, rc, 4.9, rc);

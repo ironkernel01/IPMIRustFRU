@@ -3,7 +3,7 @@
 //!
 //! Hardware-free so the host tests check it: the firmware (ipmc-nucleo-f401re bsp/i2c_bitbang.rs,
 //! bsp/i2c_hw.rs, bsp/ipmb_common.rs) only applies the numbers. Every time here comes from
-//! ipmi_defs.h (`IPMB_BITBANG_HALF_NS`, `IPMB_BITBANG_FAST_LOW_NS`, `IPMB_BITBANG_FAST_HIGH_NS`,
+//! defs.rs (`IPMB_BITBANG_HALF_NS`, `IPMB_BITBANG_FAST_LOW_NS`, `IPMB_BITBANG_FAST_HIGH_NS`,
 //! `IPMB_I2C_HZ`, `IPMB_I2C_FAST_HZ`) or from the I2C-bus specification (the minimum high times).
 
 use crate::{

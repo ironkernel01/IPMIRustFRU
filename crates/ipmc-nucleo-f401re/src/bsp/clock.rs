@@ -1,7 +1,7 @@
 // bsp/clock.rs - PLL bring-up to IPMC_SYSCLK_HZ (HSE bypass, HSI fallback) and RCC clock-tree decode.
 //
 // The ST-LINK MCU drives its MCO signal into OSC_IN (UM1724 6.7.1), so the HSE oscillator runs
-// in bypass. The input frequency (ipmi_defs.h IPMC_HSE_HZ) and the target SYSCLK (IPMC_SYSCLK_HZ)
+// in bypass. The input frequency (defs.rs IPMC_HSE_HZ) and the target SYSCLK (IPMC_SYSCLK_HZ)
 // are header values; the PLL M, N, P, Q below are datasheet-derived, and a compile-time check
 // proves they produce IPMC_SYSCLK_HZ from IPMC_HSE_HZ and from HSI.
 //
@@ -17,7 +17,7 @@
 
 use stm32f4::stm32f401::{FLASH, PWR, RCC};
 
-/// HSE_HZ -- HSE input frequency, Hz (ipmi_defs.h IPMC_HSE_HZ).
+/// HSE_HZ -- HSE input frequency, Hz (defs.rs IPMC_HSE_HZ).
 pub const HSE_HZ: u32 = ipmc_defs::IPMC_HSE_HZ; // ST-LINK MCO, UM1724 6.7.1
 /// HSI_HZ -- internal RC oscillator frequency, Hz (RM0368 6.2.2).
 pub const HSI_HZ: u32 = 16_000_000; // internal RC oscillator, RM0368 6.2.2
@@ -53,7 +53,7 @@ const VCO_MAX_HZ: u32 = 432_000_000;
 /// RM0368 6.3.2: VCO input range.
 const VCO_IN_MIN_HZ: u32 = 1_000_000;
 const VCO_IN_MAX_HZ: u32 = 2_000_000;
-/// Target SYSCLK (ipmi_defs.h IPMC_SYSCLK_HZ) and the 48 MHz PLLQ output (the USB and SDIO
+/// Target SYSCLK (defs.rs IPMC_SYSCLK_HZ) and the 48 MHz PLLQ output (the USB and SDIO
 /// clock requirement, RM0368 6.3.2).
 const SYSCLK_TARGET_HZ: u32 = ipmc_defs::IPMC_SYSCLK_HZ;
 const PLLQ_TARGET_HZ: u32 = 48_000_000;

@@ -3,7 +3,7 @@
 //
 // Two implementations: the bit-bang master (bsp/i2c_bitbang.rs, `IPMB_MASTER_BITBANG`) and the
 // hardware I2C master (bsp/i2c_hw.rs, `IPMB_MASTER_HW`). Both implement the same trait, so the
-// main loop (ipmb_link.rs) is written once. `SelectedMaster` is the method ipmi_defs.h
+// main loop (ipmb_link.rs) is written once. `SelectedMaster` is the method ipmc-defs
 // IPMB_MASTER_MODE chooses.
 
 use cortex_m::peripheral::{DCB, DWT};
@@ -180,7 +180,7 @@ pub struct MasterState {
 
 impl MasterState {
     /// new -- takes the IPMB pins, enables the DWT cycle counter (`start_timebase`) and converts
-    /// the times of ipmi_defs.h to cycles of `core_hz`. Err when the clock does not give usable
+    /// the times of ipmc-defs to cycles of `core_hz`. Err when the clock does not give usable
     /// cycle counts or the counter does not run.
     pub fn new(
         dcb: &mut DCB,
@@ -283,12 +283,14 @@ pub trait IpmbMaster {
     }
 }
 
-/// SelectedMaster -- the master method of ipmi_defs.h IPMB_MASTER_MODE.
-pub type SelectedMaster = <Select<{ ipmc_defs::IPMB_MASTER_MODE }> as MasterFor>::Master;
+/// SelectedMaster -- the master method of ipmc-defs IPMB_MASTER_MODE.
+pub type SelectedMaster = <Select<{ BITBANG }> as MasterFor>::Master;
 
-/// Select / MasterFor -- compile-time map from IPMB_MASTER_MODE to the master type. Any other
-/// value has no implementation and fails the build.
-pub struct Select<const MODE: u32>;
+/// BITBANG -- whether IPMB_MASTER_MODE is the bit-bang method (false = the hardware master).
+const BITBANG: bool = matches!(ipmc_defs::IPMB_MASTER_MODE, ipmc_defs::MasterMode::BitBang);
+
+/// Select / MasterFor -- compile-time map from IPMB_MASTER_MODE (`BITBANG`) to the master type.
+pub struct Select<const BITBANG_METHOD: bool>;
 
 pub trait MasterFor {
     type Master;
@@ -309,10 +311,10 @@ pub fn new_selected(
     core_hz: u32,
     pins: IpmbPins,
 ) -> Result<SelectedMaster, TimebaseError> {
-    <Select<{ ipmc_defs::IPMB_MASTER_MODE }> as MasterFor>::build(dcb, dwt, core_hz, pins)
+    <Select<{ BITBANG }> as MasterFor>::build(dcb, dwt, core_hz, pins)
 }
 
-impl MasterFor for Select<{ ipmc_defs::IPMB_MASTER_BITBANG }> {
+impl MasterFor for Select<true> {
     type Master = i2c_bitbang::BitbangMaster;
 
     fn build(
@@ -325,7 +327,7 @@ impl MasterFor for Select<{ ipmc_defs::IPMB_MASTER_BITBANG }> {
     }
 }
 
-impl MasterFor for Select<{ ipmc_defs::IPMB_MASTER_HW }> {
+impl MasterFor for Select<false> {
     type Master = i2c_hw::HwMaster;
 
     fn build(

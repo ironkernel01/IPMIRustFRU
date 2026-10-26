@@ -6,14 +6,14 @@
 #   .\gen.ps1 flash -Swd             build, then program the ELF over SWD with OpenOCD (forced)
 #   .\gen.ps1 console <cmd> [...]    open COM3, send each argument as a command, print the reply
 #   -Eval                            with build or flash: the evaluation image (IPMC_EVAL=1): the IPMB
-#                                    stops after IPMC_EVAL_MINUTES (ipmi_defs_tier23.h). Needs the
+#                                    stops after IPMC_EVAL_MINUTES (defs_tier23.rs). Needs the
 #                                    Tier23 folder. The image is ipmc-nucleo-f401re-eval.bin (and
 #                                    .elf) beside the normal one, so it is never mistaken for a full
 #                                    image. Without -Eval the cargo call gets IPMC_EVAL=0, so a
 #                                    build after an evaluation build carries no evaluation code.
 #   -VolumeLabel <pattern>           flash target volume label (default NOD_F401RE)
 #   Tier-2/3 extension: build sets IPMC_TIER23 for cargo (unless already set) to 1 when
-#   ..\..\..\IPMIRustFRU_Tier23\ipmi_defs_tier23.h exists and to 0 otherwise, so a folder that
+#   ..\..\..\IPMIRustFRU_Tier23\defs_tier23.rs exists and to 0 otherwise, so a folder that
 #   appears or disappears after an earlier build takes effect (cargo reruns the ipmc-defs build
 #   script when the variable changes). Set IPMC_TIER23 yourself to override.
 # Flash paths. SWD runs: openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
@@ -49,16 +49,17 @@ $ErrorActionPreference = 'Continue'
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 $root = $PSScriptRoot
 $elf = Join-Path $root 'target\thumbv7em-none-eabihf\release\ipmc-nucleo-f401re'
-$tier23Header = Join-Path $root '..\..\..\IPMIRustFRU_Tier23\ipmi_defs_tier23.h'
+$tier23Header = Join-Path $root '..\..\..\IPMIRustFRU_Tier23\defs_tier23.rs'
 $bin = "$elf.bin"
 $programElf = $elf
 if ($Eval) { $bin = "$elf-eval.bin"; $programElf = "$elf-eval.elf" }
 $ComPort = 'COM3'
-# The baud rate is the IPMC_CONSOLE_BAUD line of ipmi_defs.h, the same define the firmware reads.
-$DefsHeader = Join-Path $root '..\..\ipmi_defs.h'
-$BaudLine = Select-String -Path $DefsHeader -Pattern '^#define\s+IPMC_CONSOLE_BAUD\s+(\d+)' -ErrorAction Stop | Select-Object -First 1
-if (-not $BaudLine) { throw "IPMC_CONSOLE_BAUD not found in $DefsHeader" }
-$Baud = [int]$BaudLine.Matches[0].Groups[1].Value
+# The baud rate is IPMC_CONSOLE_BAUD of crates\ipmc-defs\src\defs.rs, the same define the firmware
+# reads; tools\defs.py is the one reader of that file outside the Rust build.
+$DefsReader = Join-Path $root '..\..\tools\defs.py'
+$BaudText = (& python -I $DefsReader IPMC_CONSOLE_BAUD)
+if ($LASTEXITCODE -ne 0 -or -not $BaudText) { throw "IPMC_CONSOLE_BAUD not read by $DefsReader" }
+$Baud = [int]$BaudText
 $CommandSettleMs = 400          # wait after sending a command before reading the reply
 $ReplyQuietMs = 600             # a reply is complete once the console has been silent this long
 $CommandDeadlineMs = 60000      # overall time allowed to collect one command's reply (a full DEBUG DUMP of the capture log takes tens of seconds at 115200 baud)
@@ -112,8 +113,7 @@ function Invoke-Build {
         if ($len -le 0) { throw "image is empty: ${bin}" }
         Write-Host "Image: $bin ($len bytes)"
         if ($Eval) {
-            $minutes = (Select-String -Path $tier23Header -Pattern '^#define\s+IPMC_EVAL_MINUTES\s+(\d+)' -ErrorAction Stop | Select-Object -First 1).Matches[0].Groups[1].Value
-            Write-Host "EVALUATION image: $bin (IPMB stops after $minutes minutes)"
+            Write-Host "EVALUATION image: $bin (the IPMB stops after IPMC_EVAL_MINUTES of defs_tier23.rs)"
         }
     } finally {
         $env:IPMC_TIER23 = $savedTier23

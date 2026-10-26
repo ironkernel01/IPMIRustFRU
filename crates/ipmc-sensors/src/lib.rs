@@ -6,7 +6,7 @@
 //!   hal/              the three traits the sensor logic uses (no hardware, no logic)
 //!   eval/             hardware-free evaluation: rails, temperature, faults, power state machine
 //!   drivers/          implementations of the traits: sim, stm32f401 (feature), i2c, spi
-//!   routing.rs        picks the driver per ipmi_defs.h source switch
+//!   routing.rs        picks the driver per defs.rs source switch
 //!   board_sensors.rs  the board table and the snapshot builder
 //!   pin_claims.rs     GPIO pin ownership table and register-field masks (hardware-free)
 //!   reset_pulse.rs    the timing of one payload reset pulse (hardware-free)

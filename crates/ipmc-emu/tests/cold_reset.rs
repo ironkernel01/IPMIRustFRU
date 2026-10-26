@@ -394,7 +394,7 @@ fn no_sequence_number_sent_inside_t9_is_used_again_after_a_cold_reset() {
 
 #[test]
 fn a_cold_reset_restarts_the_payload_power_as_a_boot_does() {
-    if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+    if !ipmc_defs::IPMC_POWER_AT_BOOT {
         return;
     }
     let mut emu = board();
@@ -426,7 +426,7 @@ fn run_to_power_on(emu: &mut Emulator, lines: &mut Lines) {
 
 #[test]
 fn a_warm_reset_rebuilds_the_link_and_keeps_everything_else() {
-    if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+    if !ipmc_defs::IPMC_POWER_AT_BOOT {
         return;
     }
     let mut emu = board();
@@ -560,7 +560,7 @@ fn a_locked_extension_keeps_the_power_on_request_from_the_payload() {
 
 #[test]
 fn the_payload_supply_follows_pwr_en_so_a_shutdown_can_finish() {
-    if ipmc_defs::IPMC_POWER_AT_BOOT != 1 {
+    if !ipmc_defs::IPMC_POWER_AT_BOOT {
         return;
     }
     let mut emu = board();
@@ -599,7 +599,7 @@ fn a_power_cycle_keeps_the_flash_log_and_a_default_lock_holds_the_payload_off() 
     let on = fresh.payload_power() != PowerState::Off;
     assert_eq!(
         on,
-        ipmc_defs::IPMC_TIER < 3 && ipmc_defs::IPMC_POWER_AT_BOOT == 1
+        ipmc_defs::IPMC_TIER < 3 && ipmc_defs::IPMC_POWER_AT_BOOT
     );
     // A board that never saved starts from the built image and settings 00h.
     let erased = Emulator::new(config).expect("emulator");

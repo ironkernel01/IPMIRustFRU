@@ -36,14 +36,14 @@ use crate::bsp::uart::{self, Port};
 use crate::debug_cmds::local;
 use crate::ipmb_link::IpmbLink;
 
-/// ENABLED -- the application port is built in (ipmi_defs.h IPMC_APP_UART_ENABLE).
-pub const ENABLED: bool = ipmc_defs::IPMC_APP_UART_ENABLE == 1;
+/// ENABLED -- the application port is built in (ipmc-defs IPMC_APP_UART_ENABLE).
+pub const ENABLED: bool = ipmc_defs::IPMC_APP_UART_ENABLE;
 
-/// LINE_MAX -- longest request line, bytes (ipmi_defs.h IPMC_APP_LINE_MAX).
-const LINE_MAX: usize = ipmc_defs::IPMC_APP_LINE_MAX as usize;
+/// LINE_MAX -- longest request line, bytes (ipmc-defs IPMC_APP_LINE_MAX).
+const LINE_MAX: usize = ipmc_defs::IPMC_APP_LINE_MAX;
 
-/// BYTES_PER_POLL -- most bytes one main-loop pass takes (ipmi_defs.h IPMC_APP_BYTES_PER_POLL).
-const BYTES_PER_POLL: u32 = ipmc_defs::IPMC_APP_BYTES_PER_POLL;
+/// BYTES_PER_POLL -- most bytes one main-loop pass takes (ipmc-defs IPMC_APP_BYTES_PER_POLL).
+const BYTES_PER_POLL: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL;
 
 /// CRLF -- the end of every answer line.
 const CRLF: &[u8] = b"\r\n";
@@ -51,7 +51,7 @@ const CRLF: &[u8] = b"\r\n";
 // The TX ring keeps one slot empty, so it takes IPMC_APP_UART_TX_BUF - 1 bytes: a longest answer
 // and its CR LF must fit whole, or `send` drops it.
 const _: () = assert!(
-    ipmc_defs::IPMC_APP_UART_TX_BUF as usize > ANSWER_MAX + CRLF.len(),
+    ipmc_defs::IPMC_APP_UART_TX_BUF > ANSWER_MAX + CRLF.len(),
     "IPMC_APP_UART_TX_BUF must take the longest answer (ipmc_app::ANSWER_MAX) plus CR LF"
 );
 

@@ -76,10 +76,10 @@ const APP_PINS: [PinSpec; 4] = [
 /// Alternate function of every UART pin of both ports.
 const AF_USART: u8 = 7;
 
-const CONSOLE_RX: usize = ipmc_defs::IPMC_UART_RX_BUF as usize;
-const CONSOLE_TX: usize = ipmc_defs::IPMC_UART_TX_BUF as usize;
-const APP_RX: usize = ipmc_defs::IPMC_APP_UART_RX_BUF as usize;
-const APP_TX: usize = ipmc_defs::IPMC_APP_UART_TX_BUF as usize;
+const CONSOLE_RX: usize = ipmc_defs::IPMC_UART_RX_BUF;
+const CONSOLE_TX: usize = ipmc_defs::IPMC_UART_TX_BUF;
+const APP_RX: usize = ipmc_defs::IPMC_APP_UART_RX_BUF;
+const APP_TX: usize = ipmc_defs::IPMC_APP_UART_TX_BUF;
 
 impl Port {
     /// COUNT -- number of ports.
@@ -114,7 +114,7 @@ impl Port {
         }
     }
 
-    /// baud -- the configured baud rate (ipmi_defs.h).
+    /// baud -- the configured baud rate (defs.rs).
     const fn baud(self) -> u32 {
         match self {
             Port::Console => ipmc_defs::IPMC_CONSOLE_BAUD,
@@ -132,7 +132,7 @@ impl Port {
 
     /// flow -- hardware flow control on (the application port only).
     const fn flow(self) -> bool {
-        matches!(self, Port::App) && ipmc_defs::IPMC_APP_UART_FLOW == 1
+        matches!(self, Port::App) && ipmc_defs::IPMC_APP_UART_FLOW
     }
 }
 
@@ -675,7 +675,7 @@ pub fn print(args: fmt::Arguments) {
 /// with the longest names) plus IPMB_MSG_MAX three-character hex bytes (96), rounded up.
 const ROW_TEXT_MAX: usize = 224;
 const _: () = assert!(
-    ROW_TEXT_MAX + 2 <= ipmc_defs::IPMC_UART_TX_BUF as usize,
+    ROW_TEXT_MAX + 2 <= ipmc_defs::IPMC_UART_TX_BUF,
     "the console TX ring must hold one whole I2C trace row"
 );
 
@@ -703,7 +703,7 @@ fn print_cut_or_drop<const N: usize>(port: Port, args: fmt::Arguments) {
 /// print_line_or_drop -- a trace line of at most IPMC_LOG_TEXT_MAX bytes (the length the capture
 /// log keeps) through `print_cut_or_drop`.
 pub fn print_line_or_drop(port: Port, args: fmt::Arguments) {
-    print_cut_or_drop::<{ ipmc_defs::IPMC_LOG_TEXT_MAX as usize }>(port, args);
+    print_cut_or_drop::<{ ipmc_defs::IPMC_LOG_TEXT_MAX }>(port, args);
 }
 
 /// print_row_or_drop -- an I2C trace row (longer than a log text line, ROW_TEXT_MAX) through

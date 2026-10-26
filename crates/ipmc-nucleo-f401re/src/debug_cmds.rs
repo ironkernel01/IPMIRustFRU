@@ -170,7 +170,7 @@ pub(crate) enum EventsResult {
 
 /// set_events -- Set Event Receiver, locally: the CM address (events on, VITA 46.11 Rule 7-5) or
 /// FFh (off), LUN 0. The one function of DEBUG EVENTS and of the start-up with
-/// IPMC_EVENTS_AT_BOOT 0.
+/// IPMC_EVENTS_AT_BOOT false.
 pub(crate) fn set_events(link: &mut IpmbLink, on: bool) -> EventsResult {
     let receiver = if on { CM_ADDR8 } else { RECEIVER_OFF };
     match local(link, NETFN_SE, CMD_SET_EVENT_RECEIVER, &[receiver, 0]) {
@@ -183,16 +183,16 @@ pub(crate) fn set_events(link: &mut IpmbLink, on: bool) -> EventsResult {
     }
 }
 
-/// events_off_at_boot -- the start-up with IPMC_EVENTS_AT_BOOT 0: sends the IPMC itself Set
+/// events_off_at_boot -- the start-up with IPMC_EVENTS_AT_BOOT false: sends the IPMC itself Set
 /// Event Receiver FFh and says so, unless the build has no event messages (C1h).
 pub(crate) fn events_off_at_boot(link: &mut IpmbLink) {
-    if ipmc_defs::IPMC_EVENTS_AT_BOOT == 1 {
+    if ipmc_defs::IPMC_EVENTS_AT_BOOT {
         return;
     }
     match set_events(link, false) {
         EventsResult::NoEvents => {}
         EventsResult::Set => {
-            out!("Events: off from start-up (ipmi_defs.h IPMC_EVENTS_AT_BOOT 0)\n");
+            out!("Events: off from start-up (defs.rs IPMC_EVENTS_AT_BOOT false)\n");
         }
         EventsResult::Refused(code) => {
             out!("Events: start-up Set Event Receiver FFh answered CC {code:02X}h\n");
@@ -282,7 +282,7 @@ const ROW_MAX: usize = if TEXT_ROW_MAX > FRAME_ROW_MAX {
     FRAME_ROW_MAX
 };
 const _: () = assert!(
-    ROW_MAX < ipmc_defs::IPMC_UART_TX_BUF as usize,
+    ROW_MAX < ipmc_defs::IPMC_UART_TX_BUF,
     "IPMC_UART_TX_BUF must be larger than the longest dump row (ROW_MAX in debug_cmds.rs)"
 );
 

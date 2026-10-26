@@ -257,7 +257,7 @@ the private Tier-2/3 extension enters the build.
 
 | Crate | Kind | Holds |
 |---|---|---|
-| `ipmc-defs` | `no_std` library | the only Rust reader of `ipmi_defs.h` (and of the extension's header when the extension is built in): one `pub const` per define, compile-time guards on every value, the IPMB timing arithmetic (`i2c_timing.rs`) and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
+| `ipmc-defs` | `no_std` library | the build configuration as Rust (`src/defs.rs`, and the extension's `defs_tier23.rs` when the extension is built in): one typed `pub const` per define, no parser, compile-time guards on every value, the IPMB timing arithmetic (`i2c_timing.rs`) and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
 | `ipmc-wire` | `no_std` library | IPMI byte primitives: zero checksum, const record builder, type/length ASCII field, CRC-32, hex-byte parser |
 | `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the FRU field editor (`unit.rs`) and the manufacturing date (`date.rs`), the RAM scratchpad (`FruStore`) and the flash store (`persist`) |
 | `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, byte ring, capture log, command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
@@ -292,7 +292,7 @@ the private Tier-2/3 extension enters the build.
 - One implementation of each function, judged by behaviour (`tools/dupcheck.py` is a gate): one
   checksum, one frame parser and encoder, one GA decode, one sensor-read function, one record
   builder, one retry loop shared by both master methods.
-- One file for every tunable value: `ipmi_defs.h` (section 5). Values fixed by a specification
+- One file for every tunable value: `crates/ipmc-defs/src/defs.rs` (section 5). Values fixed by a specification
   or datasheet stay in the module that owns them, with the rule cited beside each.
 
 ### Key design choices
@@ -361,8 +361,8 @@ detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7
 | Build | Selected by | `IPMC_TIER` | `ipmc_ext::Active` |
 |---|---|---:|---|
 | Public Tier-1 | sibling folder absent, or `IPMC_TIER23=0` | 1 | `NoExtension` |
-| Commercial release, Tier-2 | folder present, its header sets `IPMC_TIER` 2 | 2 | the extension |
-| Commercial release, Tier-3 (the default) | its header sets `IPMC_TIER` 3 | 3 | the extension |
+| Commercial release, Tier-2 | folder present, its `defs_tier23.rs` sets `IPMC_TIER` 2 | 2 | the extension |
+| Commercial release, Tier-3 (the default) | its `defs_tier23.rs` sets `IPMC_TIER` 3 | 3 | the extension |
 | Evaluation (section 8.4) | `IPMC_EVAL=1` with the extension, release profile | as the commercial build | the extension |
 
 `crates/ipmc-defs/build.rs` is the one detection point; its rules are pure functions in
@@ -370,15 +370,16 @@ detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7
 
 | `IPMC_TIER23` | Result |
 |---|---|
-| unset | on when both marker files exist (the extension's header `ipmi_defs_tier23.h` and its library source), off when neither exists; exactly one present fails the build ("half a Tier23 checkout") |
+| unset | on when both marker files exist (the extension's `defs_tier23.rs` and its library source), off when neither exists; exactly one present fails the build ("half a Tier23 checkout") |
 | `0` | off, whatever exists: the public Tier-1 build |
 | `1` | on; a missing marker file fails the build and names it |
 | any other value | fails the build |
 
-- Defines: off uses `ipmi_defs.h` plus `IPMC_TIER` = 1 in the generated file; on, the extension's
-  header is parsed by the same parser and merged; a name in both headers fails the build, and so
-  does `IPMC_TIER` in `ipmi_defs.h` or missing from the extension's header. The guards of the
-  extension's defines are mounted from the extension folder.
+- Defines: off uses `defs.rs` plus `IPMC_TIER` = 1 (a `cfg(not(tier23))` constant in `lib.rs`);
+  on, `lib.rs` mounts the extension's `defs_tier23.rs` (a `#[path]` module under `cfg(tier23)`)
+  and re-exports it beside `defs.rs`; a name in both files is ambiguous where it is used and
+  fails the build. The guards of the extension's defines are mounted from the extension folder
+  (`defs_guards.rs`).
 - `ipmc-defs` publishes the decision. It declares `links = "ipmc_defs"` and prints
   `cargo:tier23=1` or `0` (and `cargo:eval=1` or `0`); cargo hands these to each direct dependent
   as `DEP_IPMC_DEFS_TIER23` and `DEP_IPMC_DEFS_EVAL`. `build.rs` also sets `cfg(tier23)` for
@@ -427,42 +428,61 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 
 ## 5. Build-Time Configuration
 
-`ipmi_defs.h` at the repository root is the single build configuration. It keeps C `#define`
-syntax: plain `#define NAME <integer>` lines (a signed value carries the tag `[i32]` as the first
-token of its trailing comment) and `#define NAME "text"` lines (one printable-ASCII literal, no
-escapes). `crates/ipmc-defs/build.rs` parses it with `defs_parser.rs` into
-`$OUT_DIR/ipmi_defs.rs`; every crate reads a value as `ipmc_defs::NAME`. Any other line form
-fails the build with `path:line: reason`, and `ipmc-defs/src/lib.rs` holds more than 100
-compile-time guards (written out, and from the FRU-string, SDR-name and rail guard macros) that
-tie values to their rules (for example `IPMB_STRETCH_TIMEOUT_US` at most 3000, the T8 limit; `IPMC_FRU_SIZE` a
-multiple of 8; every FRU string at most 63 bytes). `types.rs` fixes each define to the type its
-consumers expect, so a wrong `[i32]` tag fails the build.
+`crates/ipmc-defs/src/defs.rs` is the single build configuration. It is plain Rust with no parse
+or generation step: one `pub const NAME: T = value;` item per tunable, each with a `///` comment
+that carries the rule beside it, in the order of the sections below. The file holds no `use`, no
+function, no macro and no check; a person changes a build by editing a value (and, for a choice,
+the variant of a small enum). Every crate reads a value as `ipmc_defs::NAME`; `lib.rs` re-exports
+the module (`pub use defs::*`).
+
+Each define has the type its consumers need:
+
+| Kind | Type | Examples |
+|---|---|---|
+| switch or enable | `bool` | `IPMB_BUS_B_ENABLE`, `IPMC_FRU_PERSIST`, `IPMC_SUPPORT_SENSOR` |
+| size, depth, count, length used as an index | `usize` | `IPMB_MSG_MAX`, `IPMC_LOG_SIZE`, `IPMC_FRU_SIZE`, the `IPMC_FRU_*_MAX` rooms |
+| wire or register value of a fixed width | `u8`, `u16` | `IPMB_CM_ADDR8`, `IPMB_GA_FORCED`, `IPMC_DEVICE_ID`, `IPMC_PRODUCT_ID`, `IPMC_EMU_PORT` |
+| time, rate, frequency, other number | `u32` | `IPMB_I2C_HZ`, `IPMC_SENSOR_PERIOD_MS`, `IPMC_MANUFACTURER_ID` |
+| signed number | `i32` | the `IPMC_TEMP_*_C` thresholds and `IPMC_SIM_TEMP_C` |
+| text | `&str` | `IPMC_FW_NAME`, the FRU strings, the SDR ID strings |
+| choice between alternatives | enum | `MasterMode`, `TxPolicy`, `StrapSource`, `Source`, `TraceLevel` |
+
+A define that names an earlier one is an expression of it (`pub const B: usize = A;`). Because
+the types are the contract, a wrong type or a value outside its type fails to compile at the
+define or at its consumer, and the build needs no `[i32]` tag or `{0, 1}` guard. `lib.rs` holds
+more than 100 compile-time guards (`const _: () = assert!(..)`, written out and from the
+FRU-string, SDR-name and rail guard macros) that tie values to their rules (for example
+`IPMB_STRETCH_TIMEOUT_US` at most 3000, the T8 limit; `IPMC_FRU_SIZE` a multiple of 8; every FRU
+string at most 63 bytes); a failed guard stops the build and names the define. The Python bench
+tools read the values they share with the IPMC (`IPMC_EMU_PORT`, `IPMC_APP_UART_BAUD`,
+`IPMC_APP_LINE_MAX`, `IPMC_CONSOLE_BAUD`) through `tools/defs.py`, the one reader of the file
+outside the Rust build.
 
 Prefixes: `IPMB_` for bus values, `IPMC_` for controller and application values. The tables
-below group the defines; the header itself carries the rule beside each line.
+below group the defines; the file itself carries the rule beside each item.
 
 ### Bench and test switches
 
-The block at the top of `ipmi_defs.h` holds the switches to check before a system build (PLAN 3.7
+The block at the top of `defs.rs` holds the switches to check before a system build (PLAN 3.7
 decision 24).
 
 | Define | Default | Meaning |
 |---|---:|---|
-| `IPMC_EVENTS_AT_BOOT` | 0 | Tier-2/3 event generator only, no effect in a Tier-1 build. 0 (bench): at start-up the IPMC sends itself Set Event Receiver FFh, so no Platform Event is retried toward a Chassis Manager that never acknowledges, and the console prints `Events: off from start-up`. 1 (system build): event messages go to the Event Receiver 20h from power-up (Rule 7-5). `DEBUG EVENTS ON` or `OFF` changes it at run time. The firmware start-up reads it; the emulator and the conformance runs are unchanged |
-| `IPMC_LOG_AT_BOOT` | 1 | the capture log records from start-up; `DEBUG LOG ON` or `OFF` changes it at run time |
-| `IPMC_I2C_TRACE_AT_BOOT` | 0 | one console line per IPMB frame in and out from start-up; `DEBUG TRACE I2C ON` or `OFF` changes it at run time; a row that does not fit the console TX ring whole is dropped and counted (`tx_lines_dropped`), and the frame stays in the capture log |
+| `IPMC_EVENTS_AT_BOOT` | `false` | Tier-2/3 event generator only, no effect in a Tier-1 build. false (bench): at start-up the IPMC sends itself Set Event Receiver FFh, so no Platform Event is retried toward a Chassis Manager that never acknowledges, and the console prints `Events: off from start-up`. true (system build): event messages go to the Event Receiver 20h from power-up (Rule 7-5). `DEBUG EVENTS ON` or `OFF` changes it at run time. The firmware start-up reads it; the emulator and the conformance runs are unchanged |
+| `IPMC_LOG_AT_BOOT` | `true` | the capture log records from start-up; `DEBUG LOG ON` or `OFF` changes it at run time |
+| `IPMC_I2C_TRACE_AT_BOOT` | `false` | one console line per IPMB frame in and out from start-up; `DEBUG TRACE I2C ON` or `OFF` changes it at run time; a row that does not fit the console TX ring whole is dropped and counted (`tx_lines_dropped`), and the frame stays in the capture log |
 
 ### IPMB link and drivers
 
 | Define | Default | Meaning |
 |---|---:|---|
-| `IPMB_MASTER_MODE` | `IPMB_MASTER_BITBANG` (1) | master method of both buses; `IPMB_MASTER_HW` (0) selects the hardware I2C master |
-| `IPMB_BUS_A_ENABLE` | 1 | IPMB-A built in; must be 1 (Rule 4.1.1-1) |
-| `IPMB_BUS_B_ENABLE` | 0 | IPMB-B built in; 0 on the one-Aardvark bench (Get VSO Capabilities then reports one interface) |
+| `IPMB_MASTER_MODE` | `MasterMode::BitBang` | master method of both buses; `MasterMode::Hardware` selects the hardware I2C master |
+| `IPMB_BUS_A_ENABLE` | `true` | IPMB-A built in; must be true (Rule 4.1.1-1) |
+| `IPMB_BUS_B_ENABLE` | `false` | IPMB-B built in; 0 on the one-Aardvark bench (Get VSO Capabilities then reports one interface) |
 | `IPMB_I2C_HZ` | 100000 | IPMB clock, STANDARD-MODE |
 | `IPMB_I2C_FAST_HZ` | 400000 | IPMB FAST-MODE clock (Rule 4.1.1-4.4; Tier-3, entered with the Set IPMB State speed byte); fixed at 400000, the hardware master derives its CCR and TRISE from it (RM0368 18.6.8, 18.6.9) |
 | `IPMB_MSG_MAX` | 32 | whole frame, rsSA to the second checksum |
-| `IPMB_TX_POLICY` | `IPMB_TX_ALTERNATE` (0) | response bus: alternate (Rule 4.1.1-6) or `IPMB_TX_ARRIVAL` (1), the request's bus |
+| `IPMB_TX_POLICY` | `TxPolicy::Alternate` | response bus: alternate (Rule 4.1.1-6) or `TxPolicy::Arrival`, the request's bus |
 | `IPMB_CM_ADDR8` | 20h | Chassis Manager address; only guarded, no code reads it (responses go to each request's rqSA) |
 | `IPMB_DUP_CACHE` | 64 | duplicate-cache entries (8..=64) |
 | `IPMB_DUP_WINDOW_MS` | 3000 | retry window: covers 11 attempts of 250 ms, below the 3.846 s sequence reuse of the captured Chassis Manager |
@@ -483,7 +503,7 @@ decision 24).
 | `IPMB_ARB_RETRIES` | 3 | same-bus retries after arbitration loss (0..=10) |
 | `IPMB_FAULT_STREAK` | 8 | consecutive bus-fault errors before a bus is marked faulted (2..=64) |
 | `IPMB_FAULT_CLEAR_MS` | 1000 | both lines idle-high this long before a fault clears |
-| `IPMC_IPMI_TRACE` | 1 | one trace line per dispatched request, and the link and event lines (failed transmissions, resends, requests sent). 0 removes the link and dispatcher lines at compile time, so they are absent from the capture log as well as from the console; the status lines stay (FRU log saves, bus faults, bus speed changes, resets, and the FRU state change line) |
+| `IPMC_IPMI_TRACE` | `true` | one trace line per dispatched request, and the link and event lines (failed transmissions, resends, requests sent). false removes the link and dispatcher lines at compile time, so they are absent from the capture log as well as from the console; the status lines stay (FRU log saves, bus faults, bus speed changes, resets, and the FRU state change line) |
 | `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=16384, a power of two; the stack reservation check of `link.x` fails a build whose statics leave too little RAM); the usable size is one byte less, because the ring keeps a slot empty; each `DEBUG DUMP` row walks the log from its start, so a larger log makes the dump slower per row |
 | `IPMC_LOG_TEXT_MAX` | 160 | longest trace line the log keeps, bytes (32..=200); a longer line is cut and ends in `...` |
 
@@ -491,7 +511,7 @@ decision 24).
 
 | Define | Default | Meaning |
 |---|---:|---|
-| `IPMB_GA_SOURCE` | `IPMB_STRAP_FORCED` | GA from this file (bare Nucleo, no straps wired) or `IPMB_STRAP_FROM_PINS` |
+| `IPMB_GA_SOURCE` | `StrapSource::Forced` | GA from this file (bare Nucleo, no straps wired) or `StrapSource::FromPins` |
 | `IPMB_GA_FORCED` | 01h | slot 1, hardware address 41h, IPMB 82h; GAP generated for odd parity |
 | `IPMB_NVMRO_SOURCE`, `IPMB_NVMRO_FORCED` | forced, 0 | NVMRO deasserted (writes allowed) |
 | `IPMC_DEVICE_ID`, `IPMC_DEVICE_REVISION`, `IPMC_DEVICE_PROVIDES_SDRS` | 01h, 0, 1 | Get Device ID byte 2, byte 3 bits 3:0, byte 3 bit 7 |
@@ -502,8 +522,8 @@ decision 24).
 | `IPMC_FRU_BOARD_*`, `IPMC_FRU_PRODUCT_*`, `IPMC_FRU_FILE_ID` (the board file ID), `IPMC_FRU_PRODUCT_FILE_ID` (empty), `IPMC_FRU_ASSET_TAG` | strings | FRU board and product area fields |
 | `IPMC_FRU_MFG_DATE` | `2026-10-23 00:00` | manufacturing date, `YYYY-MM-DD HH:MM` (UTC), 1996-01-01 00:00 to 9999-12-31 23:59; the build checks it with the date parser of `date.rs`. It is the default of the VITA 34h record (section 6.2) |
 | `IPMC_FRU_SIZE` | 512 | FRU inventory area size: the built image with every field's reserved room and the 14-byte date record (section 9.2); the flash record is 528 bytes, 31 per sector |
-| `IPMC_FRU_CONSOLE_WRITE` | 1 | 1 = the console `FRU` menu sets every field (`SET`) and restores the built image (`RESTORE`); 0 = the menu is read only (`SHOW`, `DUMP`, `STORE`, `FIELDS`, `GET`) and `SET` and `RESTORE` do not exist (not in `HELP`, a typed `SET` is an unknown command) |
-| `IPMC_FRU_PERSIST` | 1 | Write FRU Data and the application port survive reset (the flash store, sector 1 alone, 16 KB); 0 keeps the FRU in RAM and a reset restores the built image |
+| `IPMC_FRU_CONSOLE_WRITE` | `true` | true = the console `FRU` menu sets every field (`SET`) and restores the built image (`RESTORE`); false = the menu is read only (`SHOW`, `DUMP`, `STORE`, `FIELDS`, `GET`) and `SET` and `RESTORE` do not exist (not in `HELP`, a typed `SET` is an unknown command) |
+| `IPMC_FRU_PERSIST` | `true` | Write FRU Data and the application port survive reset (the flash store, sector 1 alone, 16 KB); false keeps the FRU in RAM and a reset restores the built image |
 | `IPMC_FRU_BOARD_MFR_MAX`, `IPMC_FRU_BOARD_PRODUCT_MAX`, `IPMC_FRU_BOARD_SERIAL_MAX`, `IPMC_FRU_BOARD_PART_MAX`, `IPMC_FRU_BOARD_FILE_ID_MAX`, `IPMC_FRU_PRODUCT_MFR_MAX`, `IPMC_FRU_PRODUCT_NAME_MAX`, `IPMC_FRU_PRODUCT_PART_MAX`, `IPMC_FRU_PRODUCT_VERSION_MAX`, `IPMC_FRU_PRODUCT_SERIAL_MAX`, `IPMC_FRU_ASSET_TAG_MAX`, `IPMC_FRU_PRODUCT_FILE_ID_MAX` | 24, 32, 24, 24, 16, 24, 32, 24, 16, 24, 24, 16 | room the built areas reserve for each text field, bytes, whatever the default string's length (the serial numbers 17..=63, so that a MAC address text fits; the others 2..=63; each default must fit). An update up to this length rewrites its field in place and no area moves. The product version default must equal the crate's major.minor; a value written later is not checked against it |
 | `IPMC_FRU_PERSIST_DELAY_MS` | 1000 | quiet time after the last write before a save |
 | `IPMC_FRU_SCAN_CHUNK` | 64 | bytes per read when the log checks a range for erased flash (a multiple of 4, 16..=272; the buffer lives on the stack) |
@@ -520,26 +540,26 @@ decision 24).
 | `IPMC_CONSOLE_BYTES_PER_POLL` | 16 | console bytes per main-loop pass; at most one command line per pass |
 | `IPMC_UART_RX_BUF` | 256 | console receive ring, bytes; a power of two, one slot stays empty, and the usable bytes (size - 1) cover `IPMC_MENU_LINE_MAX` |
 | `IPMC_UART_TX_BUF` | 4096 | console transmit ring, bytes, a power of two; 4096 bytes are 356 ms at 115200 baud |
-| `IPMC_APP_UART_ENABLE` | 1 | the application port APP_UART (USART1) runs; 0 leaves USART1 off and parks its pins |
+| `IPMC_APP_UART_ENABLE` | `true` | the application port APP_UART (USART1) runs; false leaves USART1 off and parks its pins |
 | `IPMC_APP_UART_BAUD` | 115200 | application port baud rate, 8N1 |
-| `IPMC_APP_UART_FLOW` | 0 | 1 = RTS/CTS hardware handshake on PA12/PA11; 0 = TX and RX only, and PA11/PA12 stay unclaimed |
+| `IPMC_APP_UART_FLOW` | `false` | true = RTS/CTS hardware handshake on PA12/PA11; false = TX and RX only, and PA11/PA12 stay unclaimed |
 | `IPMC_APP_UART_RX_BUF`, `IPMC_APP_UART_TX_BUF` | 256, 1024 | application port rings, bytes, powers of two; the receive ring holds at least one line (`IPMC_APP_LINE_MAX` + 2), the transmit ring (512 at least) one longest answer (`ANSWER_MAX`) plus CR LF, checked at compile time in `app_port.rs` |
 | `IPMC_APP_LINE_MAX` | 128 | longest application port request line, bytes (16..=`IPMC_APP_UART_RX_BUF` - 3) |
 | `IPMC_APP_BYTES_PER_POLL` | 32 | most application port bytes one main-loop pass takes |
-| `IPMC_APP_FRU_WRITE` | 1 | the application port may `SET` the unit fields and run the IPMI Write FRU Data request; 0 refuses both with `ERR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
+| `IPMC_APP_FRU_WRITE` | `true` | the application port may `SET` the unit fields and run the IPMI Write FRU Data request; false refuses both with `ERR WRITE_DISABLED` (the table `WRITE_REFUSED` in `commands.rs` lists the refused NetFn and command pairs), while `GET` and the other `IPMI` requests (FRU Control, Set IPMB State, Set Event Receiver) still run, as from the Chassis Manager |
 | `IPMC_MENU_LINE_MAX`, `IPMC_MENU_TOKENS_MAX` | 128, 40 | console line and token limits |
 | `IPMC_FRU_DUMP_BYTES_PER_LINE` | 16 | bytes on one line of `FRU DUMP` (1..=16) |
 | `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `ipmc` | firmware name of the banner, `SYS VERSION` and the application `HELLO` answer; root prompt text |
 | `IPMC_HSE_HZ`, `IPMC_SYSCLK_HZ` | 8000000, 84000000 | clock input and system clock (PLL values checked at compile time) |
 | `IPMC_LED_*`, `IPMC_FAULT_BLINK_CHZ` | 1 Hz heartbeat, 10 Hz activity, 5 Hz fault | LD2 patterns (centihertz) |
-| `IPMC_ADC_INTERNAL_SOURCE` | `IPMC_SRC_HW` | VDDA and die temperature from ADC1 |
-| `IPMC_ADC_EXTERNAL_SOURCE` | `IPMC_SRC_SIM` | rails A0..A3 simulated (unwired on the bench) |
+| `IPMC_ADC_INTERNAL_SOURCE` | `Source::Hw` | VDDA and die temperature from ADC1 |
+| `IPMC_ADC_EXTERNAL_SOURCE` | `Source::Sim` | rails A0..A3 simulated (unwired on the bench) |
 | `IPMC_FAULT_SOURCE`, `IPMC_POWER_SOURCE` | `IPMC_SRC_HW` | fault inputs and PWR_EN on the pins |
-| `IPMC_POWER_AT_BOOT` | 1 | request payload power at start-up |
+| `IPMC_POWER_AT_BOOT` | `true` | request payload power at start-up |
 | `IPMC_PGOOD_TIMEOUT_MS` | 1000 | longest wait for PGOOD after PWR_EN |
 | `IPMC_SENSOR_PERIOD_MS` | 1000 | sensor sample period |
 | `IPMC_ADC_AVERAGE` | 8 | conversions averaged per ADC read |
-| `IPMC_SENSOR_TRACE` | `IPMC_TRACE_EVENTS` | sensor console lines at start-up |
+| `IPMC_SENSOR_TRACE` | `TraceLevel::Events` | sensor console lines at start-up |
 | `IPMC_RAIL0..4_*`, `IPMC_RAIL_NONCRIT_PCT`, `IPMC_RAIL_CRIT_PCT` | 5 rails, 5 %, 10 % | rail names, nominal mV, dividers, windows; rail 4 is `+3.3V_AUX` (3300 mV, divider 2:1, A3 on PB0) |
 | `IPMC_TEMP_*_C` | LNC 0, LC -10, UNC 70, UC 85, UNR 100 | temperature thresholds |
 | `IPMC_SIM_*` | 25 C, every input pin high | simulator start values: PGOOD asserted, FAULT_N, OVERTEMP_N and PAYLOAD_RESET_N deasserted |
@@ -553,28 +573,28 @@ FAST-MODE and payload defines are read in every build as well; the timing in `ip
 reset pulse and payload mode values only by the Tier-3 handlers and the Payload Mode sensor
 record.
 
-### Tier-2/3 header
+### Tier-2/3 defines
 
-A build with the extension reads a second header, `ipmi_defs_tier23.h`, from the extension
-folder, with the same syntax and parser as `ipmi_defs.h` (section 4, Build modes and the Tier-2/3
-extension). The public code reads two names from it:
+A build with the extension mounts a second Rust file, `defs_tier23.rs`, from the extension
+folder, with the same rules as `defs.rs` (section 4, Build modes and the Tier-2/3 extension); its
+checks sit in `defs_guards.rs` beside it. The public code reads two names from it:
 
 | Define | Meaning |
 |---|---|
-| `IPMC_TIER` | the Tier the IPMC reports, 1..=3 (Get VSO Capabilities, Get Device ID, the SDR records, `LinkConfig::requests_allowed`); 1 when the extension is not built. `ipmi_defs.h` itself never defines it |
+| `IPMC_TIER` | the Tier the IPMC reports, 1..=3 (Get VSO Capabilities, Get Device ID, the SDR records, `LinkConfig::requests_allowed`); 1 when the extension is not built. `defs.rs` itself never defines it |
 | `IPMC_EVAL_MINUTES` | evaluation length in minutes, read by the evaluation image only (section 8.4); the firmware build checks 1..=7158 |
 
-The header also carries the SEL size (`IPMC_SEL_ENTRIES`, the number of 16-byte SEL records the
-Tier-3 SEL holds in RAM, section 7.2), which only the commercial release build reads. The header's
+The file also carries the SEL size (`IPMC_SEL_ENTRIES`, the number of 16-byte SEL records the
+Tier-3 SEL holds in RAM, section 7.2), which only the commercial release build reads. The file's
 other defines belong to the extension. `IPMC_TIER` is 3 in the commercial release build. A name
-defined in both headers fails the build, and the public `ipmi_defs.h` names no Tier-2/3
+defined in both files fails the build, and the public `defs.rs` names no Tier-2/3
 feature.
 
-Pin assignments are not in `ipmi_defs.h`: they live in the owning board-support module
+Pin assignments are not in `defs.rs`: they live in the owning board-support module
 (`bsp/ipmb_pins.rs`, `bsp/ga.rs`, `bsp/board_pins.rs`, `bsp/uart.rs`) and in
 `Documentation/nucleo_f401re_pinout.md`. Python bench-tool settings live in
 `tools/chassis-manager/cm_settings.py`; only values the IPMC and a tool must agree on (such as
-`IPMC_EMU_PORT`) are read by the tools from `ipmi_defs.h`.
+`IPMC_EMU_PORT`) are read by the tools from `defs.rs` through `tools/defs.py`.
 
 <div style="page-break-after: always;"></div>
 
@@ -594,18 +614,16 @@ connect.
 
 ### 6.1 `ipmc-defs`, `ipmc-wire`
 
-`crates/ipmc-defs/` (`build.rs`, `defs_parser.rs`, `src/lib.rs`, `src/types.rs`, `src/i2c_timing.rs`)
+`crates/ipmc-defs/` (`build.rs`, `src/defs.rs`, `src/lib.rs`, `src/i2c_timing.rs`)
 
-`build.rs` reads `ipmi_defs.h` (or the file named by the `IPMI_DEFS_H` environment variable, to build
-against another header) and writes one constant per define. It is also the one detection point
-of the Tier-2/3 extension (section 4, Build modes and the Tier-2/3 extension): it reads
-`IPMC_TIER23` and `IPMC_EVAL`, checks the extension's marker files, merges the extension's header
-when present and publishes the decision. `tier23_detect.rs` holds the pure rules (`parse_mode`,
-`decide`, `merge`, `tier_of`, `parse_eval`, `check_eval`); `dep_cfg.rs` is the build-script step
+`src/defs.rs` is the configuration (section 5); `src/lib.rs` re-exports it, mounts the extension's
+`defs_tier23.rs` and `defs_guards.rs` under `cfg(tier23)`, and holds the compile-time guards.
+`build.rs` reads no define and writes no file. It is the one detection point of the Tier-2/3
+extension (section 4, Build modes and the Tier-2/3 extension): it reads `IPMC_TIER23` and
+`IPMC_EVAL`, checks the extension's marker files (`defs_tier23.rs` and
+`crates/ipmc-tier23/src/lib.rs`) and publishes the decision. `tier23_detect.rs` holds the pure
+rules (`parse_mode`, `decide`, `parse_eval`, `check_eval`); `dep_cfg.rs` is the build-script step
 `ipmc-ext` and the firmware crate share.
-The parser accepts integers in decimal or `0x` hex, references to earlier defines, `[i32]`-tagged
-signed values and string literals, and rejects everything else. `lib.rs` re-exports the
-constants and holds the cross-checks; `types.rs` fixes types and boolean ranges.
 
 `i2c_timing.rs` is the IPMB timing arithmetic, hardware-free and host-tested, shared by the
 bit-bang master, the hardware master and the bus-free waits. `cycles_for(ns, core_hz)` converts a
@@ -1205,7 +1223,7 @@ Externally visible behaviour of the commercial release build:
   retries with the same sequence number (11 transmissions), a failed transmission retried on the
   other bus after at least 60 ms, 5 ms between new requests, and a sequence number held out of use
   for 5 s. An event that gets no answer after the last transmission is dropped, except a FRU State
-  event, which is sent again at a period set in the extension's header until the receiver answers
+  event, which is sent again at a period set in the extension's `defs_tier23.rs` until the receiver answers
   00h or the state changes (Rule 4.1.5.2-4).
 - The FRU State event carries cause 3h (programmatic action) for a change made by a Chassis
   Manager command or by the policy-bit automation (Rule 4.1.5.2-5), 0h (normal) for a change that
@@ -1649,7 +1667,7 @@ The evaluation image is a time-limited build of the commercial release build (ow
   not 1, RM0368 section 6.2). It starts after the console and before the banner; a start failure
   stops the image, because it could not end the evaluation. SysTick is not used. The banner of the
   evaluation image carries the line `EVALUATION BUILD: the IPMB stops after N minutes`.
-- The period is `IPMC_EVAL_MINUTES` of run time (section 5, Tier-2/3 header). A power cycle starts a
+- The period is `IPMC_EVAL_MINUTES` of run time (section 5, Tier-2/3 defines). A power cycle starts a
   new period.
 - At expiry the main loop calls `stop_for_eval` once and prints one console line. It switches
   both I2C slaves off through the driver's suspend (a healthy bus waits up to the pause time for
@@ -2559,9 +2577,9 @@ comes back whole.
 
 ### 12.2 Changing a tunable
 
-Edit the define in `ipmi_defs.h` and rebuild; `ipmc-defs` reruns `build.rs` whenever the header
-changes. A new define also gets its type line in `ipmc-defs/src/types.rs` and, when it has a range
-rule, a guard in `ipmc-defs/src/lib.rs`. A value fixed by a specification is not a define: it is a
+Edit the value in `crates/ipmc-defs/src/defs.rs` and rebuild. A new define is a `///` comment and
+one `pub const NAME: T = value;` item there, with the type its consumers need, and, when it has a
+range rule, a guard in `ipmc-defs/src/lib.rs`. A value fixed by a specification is not a define: it is a
 named constant in the owning module with its rule beside it.
 
 ### 12.3 Adding an IPMI command
@@ -2592,7 +2610,7 @@ named constant in the owning module with its rule beside it.
 
 Write `drivers/<bus>/<part>.rs` implementing the matching `hal` trait against the embedded-hal 1.0
 bus trait, test it against the crate's mock bus, hold it in the router in `routing.rs`, and select
-it in `ipmi_defs.h` with `IPMC_SRC_I2C` or `IPMC_SRC_SPI`. The firmware build refuses those values
+it in `defs.rs` with `Source::I2c` or `Source::Spi`. The firmware build refuses those values
 until a bus that is not an IPMB bus is assigned (`sensing.rs` guard).
 
 ### 12.6 Gates before handing work back
@@ -2636,7 +2654,7 @@ Source: `diagrams/src/ipmc-software.js`, sheet 4.
 | `ipmc-emu` | vector reader, captured frames decode and re-encode byte-identically, replay runs including the Event Receiver role, Cold and Warm Reset rebuild, the flash copy across a power cycle, serve protocol over TCP, command line |
 | `ipmc-fru` | image build, decoder, `verify`, store, the unit field editor (every field, every refusal, a MAC address in a serial), the single-sector flash log including a power cut at every word, the erase of a full sector and the settings byte |
 | `ipmc-menu` | line editor, matching, help, table validation |
-| `ipmc-defs` | parser rules (every malformed line form is rejected with its line number), the Tier-2/3 detection rules (`tests/tier23.rs`) and the IPMB timing arithmetic (`i2c_timing.rs`) |
+| `ipmc-defs` | the Tier-2/3 detection rules (`tests/tier23.rs`) and the IPMB timing arithmetic (`i2c_timing.rs`); the guards of `lib.rs` run at compile time. `tools/test_defs.py` tests the Python reader of `defs.rs` |
 | `ipmc-ext` | the default `Active` answers nothing for an unowned command; the bridge and `ipmc-defs` agree on the extension |
 | `ipmc-wire` | checksum, builder, CRC-32, hex parser |
 
@@ -2841,7 +2859,7 @@ procedure and expected result of each.
   transmit ring cannot take whole. The port has no emulator model: it runs on the board only
   (COM5 on the bench). The six unit fields are the only FRU content it writes; `IPMI` runs
   requests locally and puts nothing on the IPMB. The bench runs without RTS/CTS.
-- **Straps forced on the bench.** GA and NVMRO come from `ipmi_defs.h`; the pin paths are built but
+- **Straps forced on the bench.** GA and NVMRO come from `defs.rs`; the pin paths are built but
   not exercised end to end, and the NVMRO electrical polarity is not yet confirmed against VITA 46.0.
 - **Manufacturer ID 000000h** (unspecified) until an IANA enterprise number is registered.
 - **IPMB-B** is built and tested in the emulator only; the one-Aardvark bench drives IPMB-A.

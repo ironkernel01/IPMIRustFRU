@@ -23,7 +23,7 @@ const HW_ADDRESS_BASE: u8 = 0x40;
 pub enum Source {
     /// Read from the pins.
     Pins,
-    /// Taken from ipmi_defs.h.
+    /// Taken from defs.rs.
     Forced,
 }
 
@@ -32,7 +32,7 @@ impl Source {
     pub const fn text(self) -> &'static str {
         match self {
             Source::Pins => "from pins",
-            Source::Forced => "forced by ipmi_defs.h",
+            Source::Forced => "forced by defs.rs",
         }
     }
 }
@@ -91,12 +91,12 @@ const fn nvmro_from_pins(raw: u8) -> bool {
 }
 
 /// nvmro_asserted -- NVMRO state for a raw pin word under IPMB_NVMRO_SOURCE: the forced value
-/// of ipmi_defs.h when the source is forced, else the NVMRO pin level. The one implementation
+/// of ipmc-defs when the source is forced, else the NVMRO pin level. The one implementation
 /// `resolve` and the run-time NVMRO sampling share.
 pub fn nvmro_asserted(raw: u8) -> bool {
     nvmro_for(
-        ipmc_defs::IPMB_NVMRO_SOURCE == ipmc_defs::IPMB_STRAP_FORCED,
-        ipmc_defs::IPMB_NVMRO_FORCED == 1,
+        matches!(ipmc_defs::IPMB_NVMRO_SOURCE, ipmc_defs::StrapSource::Forced),
+        ipmc_defs::IPMB_NVMRO_FORCED,
         raw,
     )
 }
@@ -172,15 +172,13 @@ const fn forced_logic(ga: u8) -> u8 {
 /// Returns the resolved AddrInfo; `raw` keeps the pins as read.
 pub fn resolve(raw_pins: u8) -> AddrInfo {
     let raw = raw_pins & ALL_PINS_MASK;
-    let (logic, ga_source) = if ipmc_defs::IPMB_GA_SOURCE == ipmc_defs::IPMB_STRAP_FORCED {
-        (
-            forced_logic(ipmc_defs::IPMB_GA_FORCED as u8),
-            Source::Forced,
-        )
+    let (logic, ga_source) = if matches!(ipmc_defs::IPMB_GA_SOURCE, ipmc_defs::StrapSource::Forced)
+    {
+        (forced_logic(ipmc_defs::IPMB_GA_FORCED), Source::Forced)
     } else {
         (pins_logic(raw), Source::Pins)
     };
-    let nvmro_source = if ipmc_defs::IPMB_NVMRO_SOURCE == ipmc_defs::IPMB_STRAP_FORCED {
+    let nvmro_source = if matches!(ipmc_defs::IPMB_NVMRO_SOURCE, ipmc_defs::StrapSource::Forced) {
         Source::Forced
     } else {
         Source::Pins
@@ -281,7 +279,7 @@ mod tests {
     fn resolve_uses_forced_defaults() {
         // Pins read as all high (GA 0, invalid) do not matter when forced.
         let a = resolve(0x7F);
-        assert_eq!(a.ga, ipmc_defs::IPMB_GA_FORCED as u8);
+        assert_eq!(a.ga, ipmc_defs::IPMB_GA_FORCED);
         assert_eq!(a.ipmb_address, 0x82);
         assert!(a.parity_ok && a.valid);
         assert!(!a.nvmro_asserted);
@@ -308,8 +306,8 @@ mod tests {
     fn nvmro_asserted_honors_the_source() {
         // Pin high (bit 6) and pin low; the result follows the configured source.
         let (high, low) = (nvmro_asserted(0x7F), nvmro_asserted(0x3F));
-        if ipmc_defs::IPMB_NVMRO_SOURCE == ipmc_defs::IPMB_STRAP_FORCED {
-            let forced = ipmc_defs::IPMB_NVMRO_FORCED == 1;
+        if matches!(ipmc_defs::IPMB_NVMRO_SOURCE, ipmc_defs::StrapSource::Forced) {
+            let forced = ipmc_defs::IPMB_NVMRO_FORCED;
             assert_eq!((high, low), (forced, forced), "forced ignores the pin");
         } else {
             assert_eq!((high, low), (true, false), "pins: high = asserted");
@@ -321,7 +319,7 @@ mod tests {
     #[test]
     fn source_text() {
         assert_eq!(Source::Pins.text(), "from pins");
-        assert_eq!(Source::Forced.text(), "forced by ipmi_defs.h");
+        assert_eq!(Source::Forced.text(), "forced by defs.rs");
     }
 
     #[test]

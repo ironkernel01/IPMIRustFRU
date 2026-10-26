@@ -27,16 +27,16 @@ pub const ANSWER_MAX: usize = 256;
 // The longest error answer that echoes a request word: "#" + 8 tag characters + a blank, then
 // "ERR UNKNOWN " (12 bytes) and the word (at most a whole request line).
 const _: () = assert!(
-    ANSWER_MAX >= 10 + 12 + ipmc_defs::IPMC_APP_LINE_MAX as usize,
+    ANSWER_MAX >= 10 + 12 + ipmc_defs::IPMC_APP_LINE_MAX,
     "ANSWER_MAX must hold the longest error answer that echoes a request word"
 );
 
 /// VALUE_MAX -- room for the text of one unit field: 63 bytes is the longest FRU text field.
 const VALUE_MAX: usize = 64;
 
-/// WRITE_ENABLED -- `SET` and the write requests of `WRITE_REFUSED` are allowed (ipmi_defs.h
+/// WRITE_ENABLED -- `SET` and the write requests of `WRITE_REFUSED` are allowed (defs.rs
 /// IPMC_APP_FRU_WRITE).
-const WRITE_ENABLED: bool = ipmc_defs::IPMC_APP_FRU_WRITE == 1;
+const WRITE_ENABLED: bool = ipmc_defs::IPMC_APP_FRU_WRITE;
 
 /// WRITE_REFUSED -- the (NetFn, command) pairs `IPMI` refuses while IPMC_APP_FRU_WRITE is 0:
 /// the requests that write the FRU data. Storage NetFn 0Ah, Write FRU Data 12h. A developer who

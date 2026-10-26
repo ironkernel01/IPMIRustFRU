@@ -95,9 +95,9 @@ const _: () = assert!(OFF_COMMIT == 0 && OFF_SEQ == WORD && OFF_LEN == 2 * WORD)
 const _: () = assert!(OFF_VERSION == OFF_LEN + 2 && OFF_SETTINGS == OFF_VERSION + 1);
 const _: () = assert!(OFF_IMAGE == OFF_SETTINGS + 1);
 
-/// BLANK_CHUNK -- bytes read at a time when a range is checked for erased flash (ipmi_defs.h
+/// BLANK_CHUNK -- bytes read at a time when a range is checked for erased flash (defs.rs
 /// IPMC_FRU_SCAN_CHUNK, guarded in ipmc-defs: a multiple of 4, 16..=272).
-const BLANK_CHUNK: usize = ipmc_defs::IPMC_FRU_SCAN_CHUNK as usize;
+const BLANK_CHUNK: usize = ipmc_defs::IPMC_FRU_SCAN_CHUNK;
 
 /// STORE_START -- first byte of the store sector: sector 1 of the STM32F401RE (RM0368 Table 5).
 pub const STORE_START: u32 = 0x0800_4000;

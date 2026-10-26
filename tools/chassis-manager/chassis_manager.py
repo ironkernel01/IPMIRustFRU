@@ -56,7 +56,8 @@ FRU_DEVICE_ID_IPMC = 0  # the IPMC's own FRU (VITA 46.11 section 10.1.3.11)
 CC_RESERVATION_CANCELLED = 0xC5
 FRU_OFFSET_BYTES = 2  # Read FRU Data offset, LS byte first
 
-IPMI_DEFS = Path(__file__).resolve().parents[2] / "ipmi_defs.h"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import defs as defs_reader  # noqa: E402  (tools/defs.py, the one reader of the configuration)
 
 
 class RunLog:
@@ -535,11 +536,8 @@ class Session:
 
 
 def default_emu_port() -> int:
-    """IPMC_EMU_PORT from ipmi_defs.h, the one definition (the emulator reads it too)."""
-    match = re.search(r"^#define\s+IPMC_EMU_PORT\s+(\d+)", IPMI_DEFS.read_text(), re.MULTILINE)
-    if not match:
-        raise RuntimeError(f"IPMC_EMU_PORT not found in {IPMI_DEFS}")
-    return int(match.group(1))
+    """IPMC_EMU_PORT from defs.rs, the one definition (the emulator reads it too)."""
+    return defs_reader.read()["IPMC_EMU_PORT"]
 
 
 def slot_addresses(text: str | None) -> list:

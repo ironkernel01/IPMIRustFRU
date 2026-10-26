@@ -29,7 +29,7 @@ Usage:
   ipmc-emu sdr
   ipmc-emu help
 
-Options for replay (defaults from ipmi_defs.h):
+Options for replay (defaults from defs.rs):
   --b-fitted 0|1      IPMB-B is built in
   --b-enabled 0|1     IPMB-B starts enabled (needs --b-fitted 1; default 0)
   --policy alternate|arrival
@@ -38,7 +38,7 @@ Options for replay (defaults from ipmi_defs.h):
   --trace             print every frame and trace line
   --quiet             print a one-line summary only
 
-Options for serve (defaults from ipmi_defs.h):
+Options for serve (defaults from defs.rs):
   --port N            TCP port on 127.0.0.1 (default IPMC_EMU_PORT; 0 picks a free port)
   --b-fitted 0|1      IPMB-B is built in
   --policy alternate|arrival

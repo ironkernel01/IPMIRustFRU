@@ -1,11 +1,11 @@
 //! board_sensors.rs - the one file that says what this board measures and how each Tier-1
 //! sensor reading is built. Read this file first.
 //!
-//! Drivers: each group is backed by the driver its ipmi_defs.h switch names (routing.rs): the
+//! Drivers: each group is backed by the driver its defs.rs switch names (routing.rs): the
 //! on-chip ADC and GPIO (drivers/stm32f401), the simulators (drivers/sim), or an external part
 //! (drivers/i2c, drivers/spi; no bus assigned yet). Adding a driver: see drivers/*/mod.rs.
 //!
-//! Values: every number and every name below comes from a define in ipmi_defs.h (read here as
+//! Values: every number and every name below comes from a define in defs.rs (read here as
 //! `ipmc_defs::NAME`); this file holds the tables and the logic that combines them.
 //!
 //! HOW EACH VALUE IS READ
@@ -28,7 +28,7 @@
 //! ipmc-nucleo-f401re `bsp/board_pins.rs` (external input n is the n-th entry of its ADC table). Which pin
 //! carries which signal is also listed in Documentation/nucleo_f401re_pinout.md.
 //!
-//! Each group has a source switch in ipmi_defs.h (IPMC_ADC_INTERNAL_SOURCE,
+//! Each group has a source switch in defs.rs (IPMC_ADC_INTERNAL_SOURCE,
 //! IPMC_ADC_EXTERNAL_SOURCE, IPMC_FAULT_SOURCE, IPMC_POWER_SOURCE): hardware or simulation. On the
 //! bench the A0..A3 pins are unwired, so the external rails are simulated and start at nominal.
 //!
@@ -65,7 +65,7 @@ pub const RAIL_COUNT: usize = 5;
 /// TENTHS -- tenths of a degree per degree (the unit of every temperature in this crate).
 pub(crate) const TENTHS: i32 = 10;
 
-/// dc_from_define -- an ipmi_defs.h temperature (signed degrees C) in tenths of a degree C.
+/// dc_from_define -- an defs.rs temperature (signed degrees C) in tenths of a degree C.
 /// The defines are guarded to -40..=125 C, so the product cannot overflow.
 const fn dc_from_define(degrees_c: i32) -> i32 {
     degrees_c * TENTHS

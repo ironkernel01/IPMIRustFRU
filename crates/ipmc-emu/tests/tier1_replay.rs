@@ -9,7 +9,7 @@
 // - where both answer 00h, the response data is exactly the bytes the specification tables give
 //   for this IPMC's state (`check_payload`): the expected bytes are written in this file from
 //   IPMI v2.0 Tables 20-2, 34-2, 34-3, 35-2, 35-4 and 35-14 and VITA 46.11 Tables 10.1.3.1-1,
-//   10.1.3.9-1, 10.1.3.11-1 and 10.2.1-1 to 10.2.7-1 with the ipmi_defs.h values, not by calling
+//   10.1.3.9-1, 10.1.3.11-1 and 10.2.1-1 to 10.2.7-1 with the defs.rs values, not by calling
 //   the handler code under test. The replay feeds no sensor sample, so FRU State is M0, the
 //   snapshot is EMPTY and both buses are in Local Control and enabled.
 //
@@ -36,7 +36,7 @@ const CC_NOT_PRESENT: u8 = 0xCB;
 const GET_DEVICE_SDR: u8 = 0x21;
 const RESERVE_DEVICE_SDR: u8 = 0x22;
 
-/// Our SDR record lengths, from the ID strings of ipmi_defs.h: a compact record is 32 bytes plus
+/// Our SDR record lengths, from the ID strings of defs.rs: a compact record is 32 bytes plus
 /// the string, the locator record 16 bytes plus its string (IPMI v2.0 Tables 43-2 and 43-8). At
 /// Tier-3 the Payload Mode sensor (sensor 7) has a record before the locator.
 const RECORD_LENGTHS: [usize; 9] = [
@@ -120,7 +120,7 @@ const STATUS_EVENTS_ENABLED: u8 = 0x80;
 const VSO: u8 = 0x03;
 
 /// expected_device_id -- Get Device ID response data (IPMI v2.0 Table 20-2, bytes 2..16), laid
-/// out here from the ipmi_defs.h values: device ID; revision with the "provides Device SDRs"
+/// out here from the ipmc-defs values: device ID; revision with the "provides Device SDRs"
 /// bit 7; firmware revision 0.1 (major 00h, minor 01h BCD, owner decision 1); IPMI version;
 /// additional device support (bit 0 sensor, 1 SDR repository, 2 SEL, 3 FRU inventory, 4 event
 /// receiver, 5 event generator, 6 bridge, 7 chassis); manufacturer ID x3 and product ID x2, LS
@@ -128,32 +128,33 @@ const VSO: u8 = 0x03;
 fn expected_device_id() -> [u8; 15] {
     use ipmc_defs as d;
     let byte = |value: u32, index: u32| value.to_le_bytes()[index as usize];
-    let revision = (d::IPMC_DEVICE_PROVIDES_SDRS << 7) | d::IPMC_DEVICE_REVISION;
-    let support = d::IPMC_SUPPORT_SENSOR
-        | (d::IPMC_SUPPORT_SDR_REPOSITORY << 1)
-        | (d::IPMC_SUPPORT_SEL << 2)
-        | (d::IPMC_SUPPORT_FRU_INVENTORY << 3)
-        | (d::IPMC_SUPPORT_EVENT_RECEIVER << 4)
-        | (d::IPMC_SUPPORT_EVENT_GENERATOR << 5)
-        | (d::IPMC_SUPPORT_BRIDGE << 6)
-        | (d::IPMC_SUPPORT_CHASSIS << 7)
+    let revision =
+        (u32::from(d::IPMC_DEVICE_PROVIDES_SDRS) << 7) | u32::from(d::IPMC_DEVICE_REVISION);
+    let support = u32::from(d::IPMC_SUPPORT_SENSOR)
+        | (u32::from(d::IPMC_SUPPORT_SDR_REPOSITORY) << 1)
+        | (u32::from(d::IPMC_SUPPORT_SEL) << 2)
+        | (u32::from(d::IPMC_SUPPORT_FRU_INVENTORY) << 3)
+        | (u32::from(d::IPMC_SUPPORT_EVENT_RECEIVER) << 4)
+        | (u32::from(d::IPMC_SUPPORT_EVENT_GENERATOR) << 5)
+        | (u32::from(d::IPMC_SUPPORT_BRIDGE) << 6)
+        | (u32::from(d::IPMC_SUPPORT_CHASSIS) << 7)
         // From Tier 2 the IPMC generates events (Rule 7-3, bit 5); at Tier 3 it also holds a SEL
         // (Rule 7-8, bit 2).
         | (u32::from(d::IPMC_TIER >= 2) << 5)
         | (u32::from(d::IPMC_TIER >= 3) << 2);
     let aux = d::IPMC_AUX_FIRMWARE.to_le_bytes();
     [
-        byte(d::IPMC_DEVICE_ID, 0),
+        byte(u32::from(d::IPMC_DEVICE_ID), 0),
         byte(revision, 0),
         0x00,
         0x01,
-        byte(d::IPMC_IPMI_VERSION, 0),
+        byte(u32::from(d::IPMC_IPMI_VERSION), 0),
         byte(support, 0),
         byte(d::IPMC_MANUFACTURER_ID, 0),
         byte(d::IPMC_MANUFACTURER_ID, 1),
         byte(d::IPMC_MANUFACTURER_ID, 2),
-        byte(d::IPMC_PRODUCT_ID, 0),
-        byte(d::IPMC_PRODUCT_ID, 1),
+        byte(u32::from(d::IPMC_PRODUCT_ID), 0),
+        byte(u32::from(d::IPMC_PRODUCT_ID), 1),
         aux[0],
         aux[1],
         aux[2],

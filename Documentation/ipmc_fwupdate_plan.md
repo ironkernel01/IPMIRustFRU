@@ -507,7 +507,7 @@ that started the bootloader. The bootloader never starts IWDG; section 10 covers
 
 ### 6.5 Boot countdown (`IPMC_BOOT_COUNTDOWN`)
 
-bootloader.md requirement 6. `IPMC_BOOT_COUNTDOWN` in `ipmi_defs.h` gives the countdown in
+bootloader.md requirement 6. `IPMC_BOOT_COUNTDOWN` in `crates/ipmc-defs/src/defs.rs` gives the countdown in
 seconds, guarded in `ipmc-defs` to 0..=30 (a value outside fails the build, naming the define).
 Bench default 3; a field image uses 0. With 0 the countdown code is not compiled into the image
 (a constant `if` the compiler folds), and a valid image starts at once.
@@ -592,7 +592,7 @@ does not work: jumper the pin, power-cycle, and reflash with the field utility (
 - Both ports run the shared interrupt-driven driver while the bootloader waits: the console
   (USART2, PA2/PA3, `IPMC_CONSOLE_BAUD`) and APP_UART (USART1, PB6 TX, PB7 RX, `IPMC_APP_UART_BAUD`,
   RTS/CTS on PA12/PA11 when `IPMC_APP_UART_FLOW` is 1), the same settings the runtime uses, read
-  from the same `ipmi_defs.h`. With `IPMC_APP_UART_ENABLE 0` only the console listens.
+  from the same `crates/ipmc-defs/src/defs.rs`. With `IPMC_APP_UART_ENABLE` false only the console listens.
 - Each port has its own `ipmc-menu` `LineEditor` while waiting. A line ends at CR, LF or CR LF;
   printable ASCII only; at most `IPMC_MENU_LINE_MAX` (128) characters, a longer line is dropped.
 - A line matches when its single token is `WAKEUP` in any letter case (surrounding spaces
@@ -781,17 +781,22 @@ the bench.
 VITA 46.11 and IPMI questions this raises (for the owner; no spec text quoted here): see open
 questions 4, 5 and 7 in section 15.
 
-## 11. New `ipmi_defs.h` defines
+## 11. New `crates/ipmc-defs/src/defs.rs` defines
 
-Tunables the bootloader adds (column layout and comment style of the file, range guards in
+Tunables the bootloader adds (one `pub const NAME: T = value;` item with a `///` comment each, range guards in
 `ipmc-defs`):
 
-```
-#define IPMC_FWU_PIN_SETTLE_US 100      /* wait after configuring the BOOTLOADER pin (PC10, pull-down) before the one read at reset, us (10..=10000); 100 us is over 100 RC time constants of the internal pull-down and the pin load */
-#define IPMC_FWU_LED_WAIT_CHZ 200       /* LD2 blink rate while the bootloader waits for WAKEUP or a command, centi-Hz (2 Hz, distinct from the runtime heartbeat) */
-#define IPMC_FWU_LOAD_IDLE_S 30         /* LOAD record mode ends with ERR TIMEOUT after this many seconds without a line (1..=600) */
-#define IPMC_BOOT_COUNTDOWN 3           /* seconds a valid runtime image waits for WAKEUP on COM3 or COM5 before it starts (0..=30); 0 = no countdown, the image starts at once (field image); every second delays the first IPMB answer after a reset by one second */
-#define IPMC_BOOT_PROMPT "boot>"        /* bootloader command-line prompt, printed followed by one space; printable ASCII, 1..=16 bytes */
+```rust
+/// wait after configuring the BOOTLOADER pin (PC10, pull-down) before the one read at reset, us (10..=10000); 100 us is over 100 RC time constants of the internal pull-down and the pin load
+pub const IPMC_FWU_PIN_SETTLE_US: u32 = 100;
+/// LD2 blink rate while the bootloader waits for WAKEUP or a command, centi-Hz (2 Hz, distinct from the runtime heartbeat)
+pub const IPMC_FWU_LED_WAIT_CHZ: u32 = 200;
+/// LOAD record mode ends with ERR TIMEOUT after this many seconds without a line (1..=600)
+pub const IPMC_FWU_LOAD_IDLE_S: u32 = 30;
+/// seconds a valid runtime image waits for WAKEUP on COM3 or COM5 before it starts (0..=30); 0 = no countdown, the image starts at once (field image); every second delays the first IPMB answer after a reset by one second
+pub const IPMC_BOOT_COUNTDOWN: u32 = 3;
+/// bootloader command-line prompt, printed followed by one space; printable ASCII, 1..=16 bytes
+pub const IPMC_BOOT_PROMPT: &str = "boot>";
 ```
 
 Reused unchanged: `IPMC_CONSOLE_BAUD`, `IPMC_APP_UART_ENABLE`, `IPMC_APP_UART_BAUD`,
@@ -807,7 +812,7 @@ not tunables: they live in `flash_map.x`.
 `tools/fwupdate/fwupdate.py`, Python with pyserial from `tools/python-ipmi/.venv`, settings in
 one module `tools/fwupdate/fwu_settings.py` (WAKEUP repeat interval and give-up time, per-record
 answer timeout, erase answer timeout above the `ERASE APP` bound, record size, record retries),
-each with a command-line override. The baud rates come from `ipmi_defs.h`
+each with a command-line override. The baud rates come from `crates/ipmc-defs/src/defs.rs`
 (`IPMC_CONSOLE_BAUD`, `IPMC_APP_UART_BAUD`), read as `gen.ps1` reads the console baud, because
 the IPMC and the tool must agree on them.
 
@@ -819,7 +824,7 @@ the IPMC and the tool must agree on them.
   action, and repeatable (after the choice it still answers `OK`). With a countdown image the
   user resets or power-cycles the board while the tool repeats `WAKEUP`, and the first one inside
   the window opens the session (no jumper, no runtime command); the tool reports when it sees the
-  countdown line and when the session prompt (`IPMC_BOOT_PROMPT`, read from `ipmi_defs.h`)
+  countdown line and when the session prompt (`IPMC_BOOT_PROMPT`, read from `crates/ipmc-defs/src/defs.rs`)
   arrives.
 - `info`, `verify`, `run`, `reset`: one command each, the answer printed; exit code 0 on `OK`.
 - `erase-fru`, `erase-app`: the command, then `CONFIRM`, then the long answer wait.
@@ -891,7 +896,7 @@ adapter on APP_UART as COM5 (adapter RX to PB6, adapter TX to PB7, GND; RTS/CTS 
 only for the flow-control cases); the Aardvark on IPMB-A for the IPMB checks; a jumper wire for
 PC10 (CN7-1) to 3.3 V (CN7-5). Each run records the bootloader and runtime versions and the
 runtime digest from `INFO`. The board ends with the default `ipmc-board.bin` and the default
-`ipmi_defs.h`.
+`crates/ipmc-defs/src/defs.rs`.
 
 | # | Test | Expected |
 |---|---|---|
@@ -907,7 +912,7 @@ runtime digest from `INFO`. The board ends with the default `ipmc-board.bin` and
 | B10 | A hex with one data byte changed and its record checksum corrected (`--no-precheck`) | `ERR IMAGE digest mismatch` at the end; reset: trace `MISMATCH`, stays; a correct update then recovers |
 | B11 | Power cut during `LOAD` at about half (pull the Nucleo's USB cable, which powers the board) | after power returns: trace `digest mismatch` (or `bad header`), stays, waits; `fwupdate.py update` completes; `RUN` starts the new runtime |
 | B12 | Power cut during `ERASE APP` | trace `missing` (or `bad header`), stays; recovery as B11 |
-| B13 | `ERASE FRU` + `CONFIRM`, then `RUN` | the runtime loads the built FRU image (store empty), unit fields back to the `ipmi_defs.h` defaults |
+| B13 | `ERASE FRU` + `CONFIRM`, then `RUN` | the runtime loads the built FRU image (store empty), unit fields back to the `crates/ipmc-defs/src/defs.rs` defaults |
 | B14 | Power cut during `ERASE FRU` with a valid runtime | the runtime starts after the countdown (no request); its store is erased or unchanged, never half-written |
 | B15 | BOOTLOADER pin: jumper PC10 to 3.3 V, power-on with a valid runtime | trace `BOOTLOADER pin: 1 (forced)`, `staying ... BOOTLOADER pin`; field-utility run (`--field`) on COM5 and on COM3; jumper off, power-cycle: the runtime starts; pin open: `0` |
 | B16 | Runtime `SYS STATUS` with the jumper on and off (from Phase 11b on) | the level shown matches |
@@ -987,6 +992,6 @@ other **confirm** items of dal-d.md).
 14. The countdown, decision and stay texts name the bench PC ports (`COM3 or COM5`), as
     bootloader.md requires. A field PC numbers its ports differently; should the field image
     print the UART names (`console or APP_UART`) instead, or is the bench wording kept?
-15. Field image build: `ipmi_defs.h` is the one tunables file and its default countdown is 3
-    (bench). How is the field image (`IPMC_BOOT_COUNTDOWN 0`) made: an edited `ipmi_defs.h` in
+15. Field image build: `crates/ipmc-defs/src/defs.rs` is the one tunables file and its default countdown is 3
+    (bench). How is the field image (`IPMC_BOOT_COUNTDOWN` 0) made: an edited `crates/ipmc-defs/src/defs.rs` in
     a release procedure, or a default of 0 with the bench setting 3 locally?

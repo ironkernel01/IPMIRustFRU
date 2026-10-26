@@ -9,7 +9,7 @@
 
 use crate::trace::Trace;
 
-/// RESET_WAIT_MS -- longest wait for the response and the FRU save (ipmi_defs.h
+/// RESET_WAIT_MS -- longest wait for the response and the FRU save (defs.rs
 /// IPMC_RESET_WAIT_MS).
 const RESET_WAIT_MS: u32 = ipmc_defs::IPMC_RESET_WAIT_MS;
 

@@ -17,17 +17,17 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 /// POLL_PERIOD -- main-loop period: one `Board::step` per period (also the socket read timeout
-/// that paces the loop), from ipmi_defs.h IPMC_EMU_SERVE_POLL_MS.
+/// that paces the loop), from defs.rs IPMC_EMU_SERVE_POLL_MS.
 const POLL_PERIOD: Duration = Duration::from_millis(ipmc_defs::IPMC_EMU_SERVE_POLL_MS as u64);
 /// READ_CHUNK_BYTES -- socket read size: one longest line (any size works; the splitter joins
 /// the pieces).
 const READ_CHUNK_BYTES: usize = LINE_MAX_CHARS;
-/// TX_DONE_DELAY_MS -- time from the start to the end of one transmission, from ipmi_defs.h
+/// TX_DONE_DELAY_MS -- time from the start to the end of one transmission, from defs.rs
 /// IPMC_EMU_TX_DONE_DELAY_MS (the replay uses the same value).
 const TX_DONE_DELAY_MS: u32 = ipmc_defs::IPMC_EMU_TX_DONE_DELAY_MS;
 /// ERROR_ECHO_CHARS -- most characters of a rejected line echoed in its `#error` reply, from
-/// ipmi_defs.h IPMC_EMU_ERROR_ECHO_MAX.
-const ERROR_ECHO_CHARS: usize = ipmc_defs::IPMC_EMU_ERROR_ECHO_MAX as usize;
+/// defs.rs IPMC_EMU_ERROR_ECHO_MAX.
+const ERROR_ECHO_CHARS: usize = ipmc_defs::IPMC_EMU_ERROR_ECHO_MAX;
 
 /// ServeConfig -- what `serve` runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,12 +41,12 @@ pub struct ServeConfig {
 }
 
 impl ServeConfig {
-    /// from_defs -- the ipmi_defs.h values (IPMC_EMU_PORT) with tracing off.
+    /// from_defs -- the defs.rs values (IPMC_EMU_PORT) with tracing off.
     pub const fn from_defs() -> ServeConfig {
         ServeConfig {
             emu: EmuConfig::from_defs(),
             // Guarded 1024..=65535 in ipmc-defs.
-            port: ipmc_defs::IPMC_EMU_PORT as u16,
+            port: ipmc_defs::IPMC_EMU_PORT,
             trace: false,
         }
     }

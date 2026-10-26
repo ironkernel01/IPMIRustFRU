@@ -15,7 +15,7 @@
 //! 2. Declare it with `pub mod <part>;` here and test it against `mock::MockI2c`.
 //! 3. In board_sensors.rs / routing.rs, hold the driver in the matching router (an
 //!    `Option<H>` slot) and answer the `Source::I2c` arm with it instead of `Unavailable`.
-//! 4. Select it in ipmi_defs.h with `IPMC_SRC_I2C` on the group's switch (IPMC_ADC_EXTERNAL_SOURCE,
+//! 4. Select it in defs.rs with `IPMC_SRC_I2C` on the group's switch (IPMC_ADC_EXTERNAL_SOURCE,
 //!    IPMC_FAULT_SOURCE or IPMC_POWER_SOURCE). The firmware build refuses the value until a
 //!    bus is assigned: hand the firmware an I2C peripheral that is not an IPMB bus and remove
 //!    the guard in ipmc-nucleo-f401re sensing.rs.

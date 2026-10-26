@@ -1,7 +1,7 @@
 //! identity.rs - the device identity the IPMC reports, assembled from `ipmc_defs` values.
 //!
 //! Get Device ID (cmd/app.rs) reads every value from `DEVICE_IDENTITY`. The numbers live in
-//! ipmi_defs.h (IPMC_DEVICE_ID, IPMC_PRODUCT_ID, ...); this file holds no tunable literal, only
+//! ipmc-defs (IPMC_DEVICE_ID, IPMC_PRODUCT_ID, ...); this file holds no tunable literal, only
 //! the wire layout (which bit or byte each value lands in) and the firmware revision derived
 //! from the crate version. The FRU inventory strings (IPMC_FRU_*) join this table when the FRU
 //! image is assembled, so both commands report the same identity from one place.
@@ -24,6 +24,11 @@ const REVISION_SDRS_BIT: u32 = 7;
 const BYTE_MASK: u32 = 0xFF;
 const BITS_PER_BYTE: u32 = 8;
 
+/// flag_bit -- bit `bit` of a byte, set when `flag` is true.
+const fn flag_bit(flag: bool, bit: u32) -> u8 {
+    (flag as u8) << bit
+}
+
 /// byte_of -- byte `index` (0 = least significant) of `value`. The cast keeps the low 8 bits
 /// that the mask has already isolated.
 const fn byte_of(value: u32, index: u32) -> u8 {
@@ -31,35 +36,45 @@ const fn byte_of(value: u32, index: u32) -> u8 {
 }
 
 /// additional_support -- the Additional Device Support byte (response byte 7) of an IPMC at
-/// `tier`: one bit per ipmi_defs.h IPMC_SUPPORT_*, plus the IPMB Event Generator bit from Tier 2
+/// `tier`: one bit per ipmc-defs IPMC_SUPPORT_*, plus the IPMB Event Generator bit from Tier 2
 /// (Rule 7-3) and the SEL Device bit at Tier 3 (Rule 7-8).
 pub const fn additional_support(tier: u32) -> u8 {
-    let mut bits = (ipmc_defs::IPMC_SUPPORT_SENSOR << SUPPORT_SENSOR_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_SDR_REPOSITORY << SUPPORT_SDR_REPOSITORY_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_SEL << SUPPORT_SEL_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_FRU_INVENTORY << SUPPORT_FRU_INVENTORY_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_EVENT_RECEIVER << SUPPORT_EVENT_RECEIVER_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_EVENT_GENERATOR << SUPPORT_EVENT_GENERATOR_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_BRIDGE << SUPPORT_BRIDGE_BIT)
-        | (ipmc_defs::IPMC_SUPPORT_CHASSIS << SUPPORT_CHASSIS_BIT);
+    let mut bits = flag_bit(ipmc_defs::IPMC_SUPPORT_SENSOR, SUPPORT_SENSOR_BIT)
+        | flag_bit(
+            ipmc_defs::IPMC_SUPPORT_SDR_REPOSITORY,
+            SUPPORT_SDR_REPOSITORY_BIT,
+        )
+        | flag_bit(ipmc_defs::IPMC_SUPPORT_SEL, SUPPORT_SEL_BIT)
+        | flag_bit(
+            ipmc_defs::IPMC_SUPPORT_FRU_INVENTORY,
+            SUPPORT_FRU_INVENTORY_BIT,
+        )
+        | flag_bit(
+            ipmc_defs::IPMC_SUPPORT_EVENT_RECEIVER,
+            SUPPORT_EVENT_RECEIVER_BIT,
+        )
+        | flag_bit(
+            ipmc_defs::IPMC_SUPPORT_EVENT_GENERATOR,
+            SUPPORT_EVENT_GENERATOR_BIT,
+        )
+        | flag_bit(ipmc_defs::IPMC_SUPPORT_BRIDGE, SUPPORT_BRIDGE_BIT)
+        | flag_bit(ipmc_defs::IPMC_SUPPORT_CHASSIS, SUPPORT_CHASSIS_BIT);
     if tier::event_generator(tier) {
         bits |= 1 << SUPPORT_EVENT_GENERATOR_BIT;
     }
     if tier::sel_device(tier) {
         bits |= 1 << SUPPORT_SEL_BIT;
     }
-    byte_of(bits, 0)
+    bits
 }
 
 /// Device Revision byte (response byte 3).
-const DEVICE_REVISION: u8 = byte_of(
-    (ipmc_defs::IPMC_DEVICE_PROVIDES_SDRS << REVISION_SDRS_BIT) | ipmc_defs::IPMC_DEVICE_REVISION,
-    0,
-);
+const DEVICE_REVISION: u8 = flag_bit(ipmc_defs::IPMC_DEVICE_PROVIDES_SDRS, REVISION_SDRS_BIT)
+    | ipmc_defs::IPMC_DEVICE_REVISION;
 
 /// Product ID, sent least significant byte first (IPMI v2.0 Table 20-2, bytes 11:12). The
-/// define is guarded in ipmc-defs to 16 bits and not FFFFh (reserved).
-const PRODUCT_ID: u16 = (ipmc_defs::IPMC_PRODUCT_ID & u16::MAX as u32) as u16;
+/// define is a u16, guarded in ipmc-defs against FFFFh (reserved).
+const PRODUCT_ID: u16 = ipmc_defs::IPMC_PRODUCT_ID;
 
 /// Firmware revision fields from the crate version, 0.1.x (owner decision 1).
 const FIRMWARE_MAJOR: u8 = version_field(env!("CARGO_PKG_VERSION"), 0);
@@ -75,7 +90,7 @@ const _: () = assert!(
         ipmc_defs::IPMC_FRU_PRODUCT_VERSION,
         env!("CARGO_PKG_VERSION")
     ),
-    "IPMC_FRU_PRODUCT_VERSION in ipmi_defs.h must equal the crate's major.minor version"
+    "IPMC_FRU_PRODUCT_VERSION in ipmc-defs must equal the crate's major.minor version"
 );
 /// Firmware minor revision as two BCD digits (IPMI v2.0 Table 20-2, byte 5).
 const FIRMWARE_MINOR_BCD: u8 = ((FIRMWARE_MINOR / 10) << 4) | (FIRMWARE_MINOR % 10);
@@ -170,11 +185,11 @@ pub struct DeviceIdentity {
 
 /// DEVICE_IDENTITY -- the identity of this IPMC (PLAN.md section 3.7, decision 1).
 pub const DEVICE_IDENTITY: DeviceIdentity = DeviceIdentity {
-    device_id: byte_of(ipmc_defs::IPMC_DEVICE_ID, 0),
+    device_id: ipmc_defs::IPMC_DEVICE_ID,
     device_revision: DEVICE_REVISION,
     firmware_major: FIRMWARE_MAJOR,
     firmware_minor_bcd: FIRMWARE_MINOR_BCD,
-    ipmi_version: byte_of(ipmc_defs::IPMC_IPMI_VERSION, 0),
+    ipmi_version: ipmc_defs::IPMC_IPMI_VERSION,
     additional_support: additional_support(ipmc_defs::IPMC_TIER),
     manufacturer_id: [
         byte_of(ipmc_defs::IPMC_MANUFACTURER_ID, 0),

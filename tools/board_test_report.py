@@ -32,7 +32,8 @@ VENV = ROOT / "tools" / "python-ipmi" / ".venv" / "Scripts"
 IPMITOOL = VENV / "ipmitool.exe"
 VENV_PYTHON = VENV / "python.exe"
 README = ROOT / "tools" / "python-ipmi" / "README.md"
-DEFS = ROOT / "ipmi_defs.h"
+sys.path.insert(0, str(ROOT / "tools"))
+import defs as defs_reader  # noqa: E402  (tools/defs.py, the one reader of the configuration)
 REPORT = ROOT / "Documentation" / "board_test_report.md"
 FIRMWARE_DIR = ROOT / "crates" / "ipmc-nucleo-f401re"
 FIRMWARE_BIN = FIRMWARE_DIR / "target" / "thumbv7em-none-eabihf" / "release" / "ipmc-nucleo-f401re.bin"
@@ -161,14 +162,9 @@ def need(text: str, *wanted: str):
     return (not missing), ("all present" if not missing else "missing: " + "; ".join(missing))
 
 
-def read_defs() -> dict[str, str]:
-    """NAME -> raw value text of every #define in ipmi_defs.h (strings without their quotes)."""
-    values = {}
-    for line in DEFS.read_text(encoding="utf-8").splitlines():
-        found = re.match(r'#define\s+(\w+)\s+("([^"]*)"|\S+)', line)
-        if found:
-            values[found.group(1)] = found.group(3) if found.group(3) is not None else found.group(2)
-    return values
+def read_defs() -> dict:
+    """NAME -> value of every item of crates/ipmc-defs/src/defs.rs (int, bool, str)."""
+    return defs_reader.read()
 
 
 def git_state():
@@ -204,8 +200,8 @@ def match_bytes(expected: str, observed: str) -> bool:
     return len(want) == len(got) and all(w in ("xx", "yy") or w == g for w, g in zip(want, got))
 
 
-def named_checks(defs: dict[str, str]) -> dict:
-    """Named command -> function(text) -> (ok, note); the strings come from ipmi_defs.h or the VITA tables."""
+def named_checks(defs: dict) -> dict:
+    """Named command -> function(text) -> (ok, note); the strings come from defs.rs or the VITA tables."""
     sensors = ("FRU State", "IPMB Link", "FRU Health", "FRU Voltage", "FRU Temperature", "Payload Results",
                "Payload Status")
 
@@ -238,7 +234,7 @@ def named_checks(defs: dict[str, str]) -> dict:
 
 # ---------------------------------------------------------------- sections
 
-def section_a(report: Report, defs: dict[str, str]) -> str:
+def section_a(report: Report, defs: dict) -> str:
     """Environment. Returns the console text of the reset (the banner)."""
     rows = report.section("A", "Environment")
     now = datetime.datetime.now().astimezone()
@@ -263,10 +259,10 @@ def section_a(report: Report, defs: dict[str, str]) -> str:
         found = re.search(pattern, banner)
         rows.append(Row(f"A{n:02d}", f"Console banner: {label}", "gen.ps1 console 'sys reset', read COM3",
                         pattern, found.group(0) if found else "not found", verdict(bool(found))))
-    master = "bit-bang" if defs["IPMB_MASTER_MODE"] == "IPMB_MASTER_BITBANG" else "hardware I2C"
-    rows.append(Row("A07", "Build configuration", "ipmi_defs.h IPMB_MASTER_MODE, IPMB_BUS_A_ENABLE, IPMB_BUS_B_ENABLE",
+    master = "bit-bang" if defs["IPMB_MASTER_MODE"] == "BitBang" else "hardware I2C"
+    rows.append(Row("A07", "Build configuration", "defs.rs IPMB_MASTER_MODE, IPMB_BUS_A_ENABLE, IPMB_BUS_B_ENABLE",
                     "master mode and bus enables",
-                    f"{master} master, bus A enable {defs['IPMB_BUS_A_ENABLE']}, bus B enable {defs['IPMB_BUS_B_ENABLE']}",
+                    f"{master} master, bus A enable {int(defs['IPMB_BUS_A_ENABLE'])}, bus B enable {int(defs['IPMB_BUS_B_ENABLE'])}",
                     "PASS"))
     return banner
 
@@ -342,7 +338,7 @@ def section_c(report: Report, duration_s: float):
          bool(re.search(r"Get VSO Capabilities .* -> ok Layer 1 IPMC, Tier-1, ipmb interfaces 1", log))),
         ("FRU read", "256 of 256 bytes", (re.search(r"read \d+ of \d+ FRU bytes", log) or ["no read"])[0],
          "read 256 of 256 FRU bytes" in log),
-        ("FRU board area decoded", "manufacturer and serial from ipmi_defs.h",
+        ("FRU board area decoded", "manufacturer and serial from defs.rs",
          f"{board.get('manufacturer')}, {board.get('serial')}",
          bool(board.get("manufacturer")) and bool(board.get("serial"))),
         ("SDR walk", "8 SDR records, 7 sensors", (re.search(r"\d+ SDR records read and decoded, \d+ sensors", log) or ["no walk"])[0],
@@ -365,7 +361,7 @@ def section_c(report: Report, duration_s: float):
     return log, summary
 
 
-def section_b(report: Report, defs: dict[str, str], cm_log: str):
+def section_b(report: Report, defs: dict, cm_log: str):
     """Command line rows: the README table, run through ipmitool.exe."""
     rows = report.section("B", "Command line (Phase 8)")
     commands, probes = read_command_table()
@@ -440,7 +436,7 @@ def read_area(offset: int, length: int) -> list[int] | None:
     return data
 
 
-def section_f(report: Report, defs: dict[str, str]):
+def section_f(report: Report, defs: dict):
     """Write FRU Data persistence across a reset, then restore the built image."""
     rows = report.section("F", "FRU persistence (Phase 6b)")
     delay_s = int(defs["IPMC_FRU_PERSIST_DELAY_MS"]) / 1000 + PERSIST_MARGIN_S

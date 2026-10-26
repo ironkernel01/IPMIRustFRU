@@ -160,9 +160,9 @@ const MASK_FRU_STATE_M5: u16 = State::M5.mask() as u16;
 const MASK_IPMB_LINK: u16 = 0x000F;
 const MASK_IPMB_LINK_FAST: u16 = 0x0030;
 /// - Payload Mode (Table 10.2.8-1 byte 4, 5): bit n = operational mode n, modes 0..=14: the modes
-///   this payload supports, `IPMC_PAYLOAD_MODES` (ipmi_defs.h; the same value Get Payload Mode
+///   this payload supports, `IPMC_PAYLOAD_MODES` (defs.rs; the same value Get Payload Mode
 ///   Capabilities answers).
-const MASK_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES as u16;
+const MASK_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES;
 const MASK_TEMPERATURE: u16 =
     (TEMP_FLAG_LNC | TEMP_FLAG_LC | TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 const MASK_TWO_STATES: u16 = 0x0003;
@@ -180,7 +180,7 @@ const MASK_TWO_STATES: u16 = 0x0003;
 const EVENTS_NONE: u16 = 0;
 const EVENTS_IPMB_LINK: u16 = 0x000F;
 const EVENTS_IPMB_LINK_FAST: u16 = 0x0030;
-const EVENTS_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES as u16;
+const EVENTS_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES;
 const EVENTS_TEMPERATURE: u16 = (TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 
 /// SENSORS -- sensors 0..=6 in number order; the record ID of a sensor equals its number.
@@ -440,7 +440,7 @@ const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT_MA
 // RECORD_MAX or an out-of-order sensor table fails the build here.
 const _: [Record; RECORD_COUNT_MAX] = build_records(0x82, ipmc_defs::IPMC_TIER);
 const _: [Record; RECORD_COUNT_MAX] = build_records(0x82, 3);
-// ipmi_defs.h IPMC_SDR_IPMC_NAME: the locator record fits one Get Device SDR response, the
+// defs.rs IPMC_SDR_IPMC_NAME: the locator record fits one Get Device SDR response, the
 // response data less the 2-byte next record ID (Table 35-3), so a "whole record" read works.
 const _: () = assert!(
     locator_record(0, 0x82, ipmc_defs::IPMC_TIER).len() + NO_NEXT_RECORD.to_le_bytes().len()
@@ -889,7 +889,7 @@ mod tests {
         // deassertion 0000h, reading mask IPMC_PAYLOAD_MODES; units 1 C0h, 00h, 00h; share count
         // 01h; 00h; hysteresis 00h x 2; reserved 00h x 3; OEM 00h; type/length CCh; "Payload
         // Mode".
-        let [modes_ls, modes_ms] = (ipmc_defs::IPMC_PAYLOAD_MODES as u16).to_le_bytes();
+        let [modes_ls, modes_ms] = ipmc_defs::IPMC_PAYLOAD_MODES.to_le_bytes();
         let mut want = vec![
             0x07, 0x00, 0x51, 0x02, 0x27, 0x82, 0x00, 0x07, 0xA0, 0x60, 0x03, 0x40, 0xF7, 0x6F,
             modes_ls, modes_ms, 0x00, 0x00, modes_ls, modes_ms, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00,

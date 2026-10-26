@@ -191,7 +191,7 @@ impl Context {
     /// new -- the start-up context for the resolved address `addr`: the FRU image and the SDR
     /// repository built (owner = this controller's IPMB address), the startup self test run on
     /// them, no sensor sample yet, FRU state M0 and the link view of a fresh link with the
-    /// ipmi_defs.h configuration.
+    /// defs.rs configuration.
     pub fn new(addr: AddrInfo) -> Context {
         let fru = FruStore::new();
         let sdr = SdrRepository::new(addr.ipmb_address);
@@ -546,11 +546,11 @@ pub fn build_response_with(
     })
 }
 
-/// trace_request -- one PIC32-style line for a dispatched request, when IPMC_IPMI_TRACE is 1.
+/// trace_request -- one PIC32-style line for a dispatched request, when IPMC_IPMI_TRACE is on.
 /// `FN(06h) CMD(01h) Get Device ID -> CC 00h, 15 bytes`
 /// `FN(06h) CMD(55h) -> C1h (no handler)`
 fn trace_request(trace: &mut dyn Trace, req: &Frame, built: &Built) {
-    if ipmc_defs::IPMC_IPMI_TRACE != 1 {
+    if !ipmc_defs::IPMC_IPMI_TRACE {
         return;
     }
     let (netfn, cmd, code) = (req.header.netfn, req.header.cmd, built.completion_code);

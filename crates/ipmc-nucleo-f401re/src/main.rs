@@ -1,13 +1,13 @@
 // main.rs - ipmc-nucleo-f401re entry point for the NUCLEO-F401RE.
 // Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it
 // services exists), console UART, application UART (when enabled), IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
-// ipmi_defs.h source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
+// defs.rs source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
 // before the I2C slaves exist), IPMB drivers (the own address is known; bus
 // recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
 // (console, application port, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
 // TIM2 after the UART and stops the IPMB when the period is over (eval.rs).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
-// IPMC_FAULT_BLINK_CHZ (ipmi_defs.h) and the device parks (bsp::fault::park). A pin claim
+// IPMC_FAULT_BLINK_CHZ (defs.rs) and the device parks (bsp::fault::park). A pin claim
 // conflict prints both owner names on the console and parks (bsp::fault::claim_failed). The panic handler is panic-halt.
 
 #![no_std]
@@ -81,7 +81,7 @@ fn main() -> ! {
     // The application port (APP_UART, USART1 on PCLK2) starts after the console, so a start-up
     // failure of it can be reported on the console. With IPMC_APP_UART_ENABLE 0 USART1 is never
     // clocked and its pins stay parked.
-    let app_uart_fault = if ipmc_defs::IPMC_APP_UART_ENABLE == 1 {
+    let app_uart_fault = if ipmc_defs::IPMC_APP_UART_ENABLE {
         bsp::uart::init(
             bsp::uart::Port::App,
             &dp.RCC,

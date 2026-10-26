@@ -12,8 +12,8 @@ use stm32f4::stm32f401::FLASH;
 
 use crate::bsp::flash::Flash;
 
-/// ENABLED -- the flash log is built in (ipmi_defs.h IPMC_FRU_PERSIST).
-pub const ENABLED: bool = ipmc_defs::IPMC_FRU_PERSIST == 1;
+/// ENABLED -- the flash log is built in (defs.rs IPMC_FRU_PERSIST).
+pub const ENABLED: bool = ipmc_defs::IPMC_FRU_PERSIST;
 
 /// FruLog -- the log state and the flash it runs on; `flash` is None when the log is off or
 /// could not start (a console line says which), and the FRU store is then RAM only.

@@ -20,11 +20,11 @@ use ipmc_core::trace::Trace;
 use std::collections::BTreeMap;
 
 /// TX_DONE_DELAY_MS -- time from a request to the end of its transmission in the replay, from
-/// ipmi_defs.h IPMC_EMU_TX_DONE_DELAY_MS.
+/// defs.rs IPMC_EMU_TX_DONE_DELAY_MS.
 const TX_DONE_DELAY_MS: u32 = ipmc_defs::IPMC_EMU_TX_DONE_DELAY_MS;
-/// REPORT_LINES_MAX -- malformed vector line numbers the report lists, from ipmi_defs.h
+/// REPORT_LINES_MAX -- malformed vector line numbers the report lists, from defs.rs
 /// IPMC_EMU_REPORT_LINES_MAX.
-const REPORT_LINES_MAX: usize = ipmc_defs::IPMC_EMU_REPORT_LINES_MAX as usize;
+const REPORT_LINES_MAX: usize = ipmc_defs::IPMC_EMU_REPORT_LINES_MAX;
 /// DRAIN_ATTEMPTS_MAX -- bound on transmissions drained after one request: the first attempt and
 /// TX_RETRIES resends of the one response a request produces, with margin for a replayed
 /// duplicate.

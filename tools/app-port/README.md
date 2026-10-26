@@ -24,7 +24,7 @@ $py = "tools\python-ipmi\.venv\Scripts\python.exe"
 & $py tools\app-port\app_cli.py --port COM5          # interactive prompt, quit or Ctrl+Z to leave
 ```
 
-Options: `--baud` (default `IPMC_APP_UART_BAUD` of `ipmi_defs.h`), `--timeout` (seconds to
+Options: `--baud` (default `IPMC_APP_UART_BAUD` of `crates/ipmc-defs/src/defs.rs`), `--timeout` (seconds to
 wait for an answer), `--no-tags` (send the bare protocol). Each request carries a tag
 (`#t0001 STATUS`); the IPMC echoes it and the client skips an answer with another tag.
 
@@ -34,7 +34,7 @@ request longer than `IPMC_APP_LINE_MAX`.
 ## Settings
 
 `app_settings.py` holds every value the tool chooses (default port, answer timeout, tag
-form, prompt). The baud rate and the line limit come from `ipmi_defs.h`, so the tool and the
+form, prompt). The baud rate and the line limit come from `crates/ipmc-defs/src/defs.rs`, so the tool and the
 IPMC agree.
 
 ## Tests

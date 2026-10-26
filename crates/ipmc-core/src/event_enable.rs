@@ -98,7 +98,7 @@ mod tests {
             (4, 0x0038, 0x0038),
             (5, 0, 0),
             (6, 0, 0),
-            (7, ipmc_defs::IPMC_PAYLOAD_MODES as u16, 0),
+            (7, ipmc_defs::IPMC_PAYLOAD_MODES, 0),
         ];
         for tier in [1u32, 2, 3] {
             let e = EventEnables::power_up_at(tier);

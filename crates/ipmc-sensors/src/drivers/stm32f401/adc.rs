@@ -69,7 +69,7 @@ const DR_MASK: u32 = 0xFFF;
 /// one core cycle, so 100 000 polls last at least 1.19 ms at 84 MHz (6.25 ms at 16 MHz): more
 /// than 50 times the conversion.
 const EOC_POLLS: u32 = 100_000;
-/// Conversions averaged per reading (ipmi_defs.h IPMC_ADC_AVERAGE): 8 x 23.4 us = 187 us per
+/// Conversions averaged per reading (defs.rs IPMC_ADC_AVERAGE): 8 x 23.4 us = 187 us per
 /// channel read at the default.
 const AVERAGE_COUNT: u32 = ipmc_defs::IPMC_ADC_AVERAGE;
 /// Core cycles to wait after ADON and TSVREFE: the temperature sensor starts in 10 us

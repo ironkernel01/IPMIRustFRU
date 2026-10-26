@@ -8,7 +8,7 @@
 //!
 //! - 00h Configuration. Power-on value 4127h: AVG = 000b (1 average), VBUSCT = VSHCT = 100b
 //!   (1.1 ms), MODE = 111b (shunt and bus, continuous). This driver writes AVG and the two
-//!   conversion-time fields from ipmi_defs.h (IPMC_INA226_AVG_CODE, IPMC_INA226_CT_CODE; the
+//!   conversion-time fields from defs.rs (IPMC_INA226_AVG_CODE, IPMC_INA226_CT_CODE; the
 //!   defaults give the power-on word) and MODE = 111b to start continuous conversion of both.
 //! - 06h Mask/Enable. Bit 3 CVRF (conversion ready) is set after the first conversion, its
 //!   averaging and multiplications are complete; a write to the Configuration register clears
@@ -164,10 +164,10 @@ mod tests {
 
     #[test]
     fn configuration_fields_come_from_the_header_choices() {
-        let word = u32::from(CONFIGURATION);
-        assert_eq!((word >> 9) & 7, ipmc_defs::IPMC_INA226_AVG_CODE);
-        assert_eq!((word >> 6) & 7, ipmc_defs::IPMC_INA226_CT_CODE);
-        assert_eq!((word >> 3) & 7, ipmc_defs::IPMC_INA226_CT_CODE);
+        let word = CONFIGURATION;
+        assert_eq!((word >> 9) & 7, u16::from(ipmc_defs::IPMC_INA226_AVG_CODE));
+        assert_eq!((word >> 6) & 7, u16::from(ipmc_defs::IPMC_INA226_CT_CODE));
+        assert_eq!((word >> 3) & 7, u16::from(ipmc_defs::IPMC_INA226_CT_CODE));
         assert_eq!(word & 7, 0b111, "continuous shunt and bus");
         assert_eq!(word >> 12, 0b0100, "reserved bits as at power-on");
     }

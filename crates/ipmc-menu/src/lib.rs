@@ -17,16 +17,16 @@ pub use line::{report_line_error, EditEvent, LineEditor, MenuError};
 pub use menu::{Group, Menu, Outcome};
 pub use syntax::{Kind, SynToken, TableError};
 
-/// MENU_LINE_MAX -- longest accepted input line in bytes (ipmi_defs.h IPMC_MENU_LINE_MAX). The firmware RX ring
+/// MENU_LINE_MAX -- longest accepted input line in bytes (defs.rs IPMC_MENU_LINE_MAX). The firmware RX ring
 /// (IPMC_UART_RX_BUF) is sized against this value: ipmc-defs guards that a line that fills it
 /// still fits. A longer line is rejected with `MenuError::LineTooLong`.
-pub const MENU_LINE_MAX: usize = ipmc_defs::IPMC_MENU_LINE_MAX as usize;
+pub const MENU_LINE_MAX: usize = ipmc_defs::IPMC_MENU_LINE_MAX;
 
 /// MENU_TOKENS_MAX -- most whitespace-separated tokens in one line, and in one syntax string
-/// (ipmi_defs.h IPMC_MENU_TOKENS_MAX). A line with more is
+/// (defs.rs IPMC_MENU_TOKENS_MAX). A line with more is
 /// rejected with `MenuError::TooManyTokens`; a syntax with more fails table validation
 /// (`TableError::SyntaxTooLong`), because no input could ever match it.
-pub const MENU_TOKENS_MAX: usize = ipmc_defs::IPMC_MENU_TOKENS_MAX as usize;
+pub const MENU_TOKENS_MAX: usize = ipmc_defs::IPMC_MENU_TOKENS_MAX;
 
 /// CmdResult -- result of a command handler. `Ok` means the command ran; `Err` names why it did not.
 pub type CmdResult = Result<(), CmdError>;

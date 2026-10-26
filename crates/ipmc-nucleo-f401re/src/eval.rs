@@ -1,6 +1,6 @@
 // eval.rs - the evaluation period of the evaluation build (IPMC_EVAL=1; `cfg(ipmc_eval)`).
 //
-// The period is IPMC_EVAL_MINUTES (ipmi_defs_tier23.h) of run time, measured by the TIM2
+// The period is IPMC_EVAL_MINUTES (defs_tier23.rs) of run time, measured by the TIM2
 // counter of bsp/eval_timer.rs; when it is over the main loop stops the IPMB once and no longer
 // services the link. Nothing here, or in the places that call it, exists in any other build.
 

@@ -14,9 +14,9 @@
 
 use crate::ipmb::{Frame, IPMB_MAX_LEN, IPMB_REQUEST_DATA_MAX};
 
-/// DUP_CACHE -- entries, from ipmi_defs.h.
-pub const DUP_CACHE: usize = ipmc_defs::IPMB_DUP_CACHE as usize;
-/// DUP_WINDOW_MS -- how long an answered request stays a duplicate, from ipmi_defs.h (shorter than the
+/// DUP_CACHE -- entries, from defs.rs.
+pub const DUP_CACHE: usize = ipmc_defs::IPMB_DUP_CACHE;
+/// DUP_WINDOW_MS -- how long an answered request stays a duplicate, from defs.rs (shorter than the
 /// VITA 5 s sequence expiry: the live Chassis Manager reuses rqSeq after about 3.85 s).
 pub const DUP_WINDOW_MS: u32 = ipmc_defs::IPMB_DUP_WINDOW_MS;
 

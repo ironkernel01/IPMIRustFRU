@@ -272,7 +272,7 @@ const FRU_READ_ROWS: usize = 5;
 /// FRU_TABLE -- the table of the FRU group, chosen at compile time from IPMC_FRU_CONSOLE_WRITE:
 /// every row when it is 1, only the read rows when it is 0 (SET and RESTORE do not exist: HELP
 /// does not list them and a typed SET is an unknown command).
-static FRU_TABLE: &[ConsoleCommand] = if ipmc_defs::IPMC_FRU_CONSOLE_WRITE == 1 {
+static FRU_TABLE: &[ConsoleCommand] = if ipmc_defs::IPMC_FRU_CONSOLE_WRITE {
     &FRU_COMMANDS
 } else {
     FRU_COMMANDS.split_at(FRU_READ_ROWS).0
@@ -444,12 +444,12 @@ impl Console {
         }
     }
 
-    /// start_events -- applies the events-at-boot setting (ipmi_defs.h IPMC_EVENTS_AT_BOOT).
+    /// start_events -- applies the events-at-boot setting (defs.rs IPMC_EVENTS_AT_BOOT).
     pub fn start_events(&mut self) {
         debug_cmds::events_off_at_boot(self.ctx.ipmb);
     }
 
-    /// start_sensors -- applies the power-at-boot setting (ipmi_defs.h IPMC_POWER_AT_BOOT).
+    /// start_sensors -- applies the power-at-boot setting (defs.rs IPMC_POWER_AT_BOOT).
     pub fn start_sensors(&mut self) {
         let power_on_check = self.ctx.ipmb.power_on_check();
         self.ctx.sensing.start(power_on_check);
@@ -620,7 +620,7 @@ fn print_app_port() {
         out!(
             "App port:     USART1 {} 8N1, RTS/CTS {}\n",
             ipmc_defs::IPMC_APP_UART_BAUD,
-            if ipmc_defs::IPMC_APP_UART_FLOW == 1 {
+            if ipmc_defs::IPMC_APP_UART_FLOW {
                 "on"
             } else {
                 "off"
@@ -695,7 +695,7 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_led();
     out!("Last reset:   {}\n", ctx.reset_cause.text());
     print_uart(Port::Console);
-    if ipmc_defs::IPMC_APP_UART_ENABLE == 1 {
+    if ipmc_defs::IPMC_APP_UART_ENABLE {
         print_uart(Port::App);
         out!("App answers:  dropped={}\n", app_port::answers_dropped());
     } else {
@@ -747,7 +747,7 @@ fn print_led() {
 fn cmd_led_status(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_led();
     out!(
-        "Blink limits: {} to {} Hz (ipmi_defs.h IPMC_LED_RATE_MIN_CHZ, IPMC_LED_RATE_MAX_CHZ)\n",
+        "Blink limits: {} to {} Hz (defs.rs IPMC_LED_RATE_MIN_CHZ, IPMC_LED_RATE_MAX_CHZ)\n",
         Hz(led::RATE_MIN_CHZ),
         Hz(led::RATE_MAX_CHZ)
     );

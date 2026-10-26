@@ -44,7 +44,7 @@ cargo run -q -p ipmc-emu -- serve --b-fitted 1
 cd tools\chassis-manager; & ..\..\$py -m unittest test_cm_link
 ```
 
-`serve` listens on the port `IPMC_EMU_PORT` in `ipmi_defs.h` (the Chassis Manager
+`serve` listens on the port `IPMC_EMU_PORT` in `crates/ipmc-defs/src/defs.rs` (the Chassis Manager
 reads the same define as its default). The line protocol is documented in the
 `ipmc-emu` crate documentation.
 

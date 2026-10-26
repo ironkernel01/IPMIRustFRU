@@ -173,8 +173,8 @@ pub struct TemperatureReading {
     pub flags: u8,
 }
 
-/// RAILS_MAX -- capacity of the rail array (ipmi_defs.h IPMC_RAILS_MAX).
-pub const RAILS_MAX: usize = ipmc_defs::IPMC_RAILS_MAX as usize;
+/// RAILS_MAX -- capacity of the rail array (defs.rs IPMC_RAILS_MAX).
+pub const RAILS_MAX: usize = ipmc_defs::IPMC_RAILS_MAX;
 
 /// SensorSnapshot -- everything one sample produced, as plain data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
