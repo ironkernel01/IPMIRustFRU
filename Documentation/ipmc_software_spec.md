@@ -127,8 +127,8 @@ sectors 3 to 7 is the IPMC described in the other sections; sector 2 holds the F
 The public build is the Tier-1 IPMC described here. A commercial release build adds a private
 Tier-2/3 extension through the hook interface of section 4 (Build modes and the Tier-2/3 extension).
 The public build answers every command the Tier-1 table does not own C1h; section 7.2 lists the commands
-VITA 46.11 requires at Tier 2 and Tier 3. The commands, behaviour and tests of the commercial build are
-in the private documents in `../IPMIRustFRU_Tier23/Documentation/`.
+VITA 46.11 requires at Tier 2 and Tier 3 and the commands the commercial build answers; its tests are in
+`Documentation/ipmc_test_coverage.md` (section "Tier-2/3 extension").
 
 The public build leaves out the Tier-2 and Tier-3 functions (events, payload power control
 by the Chassis Manager, FRU activation policy; they belong to the commercial release build),
@@ -613,8 +613,7 @@ record.
 
 A build with the extension also mounts the extension's own defines file (`defs_tier23.rs`) through the
 mechanism of section 4 (Build modes and the Tier-2/3 extension). Its defines, among them the Tier the
-build reports, the evaluation length and the event log size, are documented in
-`../IPMIRustFRU_Tier23/Documentation/` (private). The public `defs.rs` names no Tier-2/3 feature; a name
+build reports, the evaluation length and the event log size, are listed in section 7.2 (Switches). The public `defs.rs` names no Tier-2/3 feature; a name
 defined in both files fails the build.
 
 Pin assignments are not in `defs.rs`: they live in the owning board-support module
@@ -1315,11 +1314,125 @@ footnotes behind each `[n]` marker; a Tier-1 build answers each of these command
 | 2Ch/4Ch | Get Power Supply Status | O | O | O/M[5] |
 | 2Ch/4Dh | Set Power Supply Status | O | O | O/M[5] |
 
-The commands the commercial build implements at Tier 2 and Tier 3, their handlers, their behaviour and
-their tests are in `../IPMIRustFRU_Tier23/Documentation/tier23_commands.md` (private). This document
-describes the public mechanisms they use: the extension hook (section 4, Build modes and the Tier-2/3
+The commercial release build adds the Tier-2/3 extension (private source, `../IPMIRustFRU_Tier23`).
+Its commands, the events it sends and its switches follow; its test cases and results are in
+`Documentation/ipmc_test_coverage.md` (section "Tier-2/3 extension"). The commands use the public
+mechanisms of this repository: the extension hook (section 4, Build modes and the Tier-2/3
 extension), the requester (section 6.3), the reset hand-off (section 8.2) and the Tier rules (section
 9.6).
+
+#### Tier-2 commands
+
+
+| NetFn / Cmd | Command | Tier | What it does | Switches |
+|---|---|---|---|---|
+| 06h / 02h | Cold Reset | 2 | Request without data (C7h otherwise). Sets `Context::pending_reset` to Cold; the owner of the processor restarts it after the response has left. | `IPMC_TIER` |
+| 04h / 00h | Set Event Receiver | 2 | Two bytes: receiver address (8-bit form, FFh disables) and LUN in bits 1:0. C7h for another length, CCh for an odd address other than FFh or a reserved bit. Starts the generator over with the new receiver (`EventGen::set_receiver`); at Tier-3 with an address other than FFh, `Tier3::resend_active` sends the active Tier-3 events again. | `IPMC_TIER`, `IPMC_EVENT_QUEUE_DEPTH`, `IPMC_FRU_EVENT_RESEND_MS` |
+| 04h / 01h | Get Event Receiver | 2 | Request without data. Response: receiver address (FFh = disabled) and LUN. | `IPMC_TIER` |
+| 2Ch / 1Eh | FRU Control Capabilities | 2 | Request: FRU Device ID (C7h unless one byte, C9h above the Managed FRUs). Response: `fru_control_capabilities_mask(IPMC_TIER)`: 00h at Tier-2, `tier3::FRU_CONTROL_CAPABILITIES` (11h: Set FRU Activation, cold reset) at Tier-3. | `IPMC_TIER` |
+
+
+#### Tier-3 commands
+
+A Tier-3 build answers the Tier-2 rows as well.
+
+#### Reset, enables and the FRU commands
+
+| NetFn / Cmd | Command | Tier | What it does | Switches |
+|---|---|---|---|---|
+| 06h / 03h | Warm Reset | 3 | Request without data. Sets `Context::pending_reset` to Warm unless a Cold Reset is already pending. The payload state, the FRU state and the Tier-3 state are kept; `Extension::warm_reset` drops only the event in flight. | `IPMC_TIER` |
+| 06h / 2Fh | Get BMC Global Enables | 3 | Request without data. Response: `BMC_GLOBAL_ENABLES` (08h, System Event Logging on). | `IPMC_TIER` |
+| 2Ch / 04h | FRU Control | 3 | Request: FRU Device ID, option. Option 00h (cold reset) in M4 or M5 sets `Context::pending_payload_reset`, a pulse on the payload reset output; other states D5h; other options CCh; C7h unless two bytes. | `IPMC_TIER` |
+| 2Ch / 44h | Get Mandatory Sensor Numbers | 3 | Request: FRU Device ID. D3h in M0. Response: the eight bytes of `MANDATORY_SENSORS`: 00h, 02h, 03h, 04h, 05h, 06h, FFh, 07h. | `IPMC_TIER` |
+| 2Ch / 45h | Get FRU Hash | 3 | Request: FRU Device ID. Response: the CRC-32 (`ipmc_wire::crc32`) of the whole FRU 0 image, least significant byte first, computed for each request. | `IPMC_TIER` |
+| 2Ch / 46h | Get Payload Mode Capabilities | 3 | Request: FRU Device ID. Response: `IPMC_PAYLOAD_MODES` as two bytes, least significant first. | `IPMC_PAYLOAD_MODES` |
+| 2Ch / 47h | Set Payload Mode | 3 | Request: FRU Device ID, target mode (bits 7:4 reserved), 0 to 8 OEM bytes that are ignored. CCh for a reserved bit or a mode not in `IPMC_PAYLOAD_MODES`; D5h while a transition is in progress. Otherwise the current mode becomes the previous one, the transition completes at once and the Payload Mode event is queued. | `IPMC_PAYLOAD_MODES`, `IPMC_EVENT_QUEUE_DEPTH` |
+
+#### Activation and policy bits
+
+| NetFn / Cmd | Command | Tier | What it does | Switches |
+|---|---|---|---|---|
+| 2Ch / 0Ah | Set FRU State Policy Bits | 3 | Request: FRU Device ID, mask, values (bits 3:0 are DAL, CDI, DL, AL; bits 7:4 reserved, CCh). DAL and CDI are non-volatile (bits 0 and 1 of `Context::nv_settings`); AL and DL are volatile (`Locks`). Nothing changes on an error: D5h for a DAL or CDI change while NVMRO is asserted, D5h for clearing DL in M4 with CDI set. Follow-on actions: DL cleared in M4 requests a deactivation; DL or CDI set in M5 withdraws it; AL cleared in M1 powers the payload on; AL set in M1 with the payload powering on switches it off. The FRU State event that follows carries cause 3h. | `IPMC_FRU_PERSIST`, `IPMB_NVMRO_SOURCE`, `IPMB_NVMRO_FORCED` |
+| 2Ch / 0Bh | Get FRU State Policy Bits | 3 | Request: FRU Device ID. Response: `Locks::policy_byte` (DAL bit 3, CDI bit 2, DL bit 1, AL bit 0). AL reads as DAL until the first M0 to M1. | `IPMC_FRU_PERSIST` |
+| 2Ch / 0Ch | Set FRU Activation | 3 | Request: FRU Device ID, action (00h deactivate, 01h activate, CCh for others). The result depends on the FRU state; the table below gives it. The FRU State event that follows carries cause 1h. | `IPMC_FRU_PERSIST` |
+
+Set FRU Activation by state (the code of `set_fru_activation`):
+
+| State | Activate | Deactivate |
+|---|---|---|
+| M0 | D5h | D5h |
+| M1 | AL cleared, payload power on | 00h, nothing |
+| M4 | 00h, nothing | CDI set: D5h, nothing; else AL set, payload power off |
+| M5 | DL set, deactivation request withdrawn | CDI clear: AL set, payload power off; CDI set: DL set, request withdrawn, then D5h |
+| M6 | D5h | 00h, nothing |
+
+The power-on gate `Tier3::power_on_allowed` is the Tier-1 power-on hook: payload power comes on only
+while AL is clear. `Tier3::poll` drops a deactivation request in any state but M4 and M5.
+
+#### Sensor event enables
+
+| NetFn / Cmd | Command | Tier | What it does | Switches |
+|---|---|---|---|---|
+| 04h / 28h | Set Sensor Event Enable | 3 | Request: sensor number, byte 2, optional assertion and deassertion masks (two bytes each, missing bytes read 0); C7h unless 2 to 6 bytes; CBh for a sensor without an SDR record; CCh for action 11b. Byte 2 bit 7 switches the sensor's events on or off, bit 6 is accepted and ignored, bits 5:4 select none, enable or disable for the masks. A bit the sensor's SDR record does not offer is masked off without an error. | `IPMC_TIER` |
+| 04h / 29h | Get Sensor Event Enable | 3 | Request: sensor number (C7h unless one byte, CBh for no record). Response: byte 2 (bit 7 events enabled, bit 6 scanning, always 1), assertion mask, deassertion mask. | `IPMC_TIER` |
+
+
+#### System Event Log
+
+The log holds `IPMC_SEL_ENTRIES` records of 16 bytes in RAM (64 by default). It does not survive a
+Cold Reset or a power cycle; a Warm Reset keeps it. A record ID is the position plus one. Every event
+the generator makes is added once as a type 02h system event record, stamped with the SEL clock and
+the IPMC's own address; a full log takes no new record and sets the overflow flag. The clock counts
+seconds of run time plus the offset Set SEL Time chose.
+
+| NetFn / Cmd | Command | Tier | What it does | Switches |
+|---|---|---|---|---|
+| 0Ah / 40h | Get SEL Info | 3 | Request without data. Response: version 51h, entry count, free bytes (free records times 16), latest add and erase timestamps (FFFFFFFFh before the first), operation support (bit 1 Reserve SEL, bit 7 overflow). | `IPMC_SEL_ENTRIES` |
+| 0Ah / 42h | Reserve SEL | 3 | Request without data. Response: a new non-zero reservation ID; the previous one is cancelled. | `IPMC_SEL_ENTRIES` |
+| 0Ah / 43h | Get SEL Entry | 3 | Request: reservation ID, record ID (0000h first, FFFFh last), offset, byte count (FFh to the end). C5h for a wrong reservation or a non-zero offset without one, CBh for no such record, C9h for an offset of 16 or more. Response: the next record ID (FFFFh after the last) and the record bytes. | `IPMC_SEL_ENTRIES` |
+| 0Ah / 47h | Clear SEL | 3 | Request: reservation ID, "CLR", action (AAh erase, 00h status). C5h for a wrong reservation, CCh for a wrong signature or action. The erase completes at once; both actions answer progress 1h, and reading the completion ends the reservation. | `IPMC_SEL_ENTRIES` |
+| 0Ah / 48h | Get SEL Time | 3 | Request without data. Response: the SEL clock, four bytes, least significant first. | none |
+| 0Ah / 49h | Set SEL Time | 3 | Request: four bytes, least significant first. The clock reads that value now and counts on from it. | none |
+
+A reservation is cancelled by the next Reserve SEL and by a record added to the log.
+
+
+#### Events the extension sends
+
+The extension also sends Platform Event messages (04h/02h) to the Event Receiver through the Tier-1
+requester. `EventGen` makes them; `Tier3` 
+moves each made event into the SEL. A request completed with C1h stops generation and clears the queue;
+C0h keeps the event for a resend after `IPMC_FRU_EVENT_RESEND_MS`.
+
+| Event | Tier | Trigger |
+|---|---|---|
+| FRU State | 2 | A FRU state change; cause 6h for a payload power failure, else the cause a command named (1h Set FRU Activation, 3h policy-bit automation), else 0h. A newer event replaces an unacknowledged one, which is resent every `IPMC_FRU_EVENT_RESEND_MS`. |
+| System IPMB Link, offsets 0 to 3 | 2 | A change of the link sensor state. |
+| FRU Health, FRU Voltage | 2 | A change of the sensor state. |
+| FRU Temperature | 2 | The upper non-critical, critical and non-recoverable offsets (3 to 5). |
+| System IPMB Link, offsets 4 and 5 | 3 | IPMB-A or IPMB-B enters or leaves 400 kHz (FAST-MODE). |
+| Payload Mode | 3 | Set Payload Mode accepted; event data 2 holds the transition status and the previous mode. |
+
+Set Event Receiver queues the active states again (`RESEND_STATES`: 6 at Tier-2, 9 at Tier-3);
+`IPMC_EVENT_QUEUE_DEPTH` must be at least that (a compile-time guard). Each event
+is checked against `Context::event_enables` before it is made (`EventGen::enabled_for`).
+
+#### Switches
+
+The Tier-2/3 values live in the private configuration file `defs_tier23.rs` (guards in `defs_guards.rs`); the rows marked `defs.rs` are public defines (`crates/ipmc-defs/src/defs.rs`).
+
+| Switch | File | Default | Effect on the commands |
+|---|---|---|---|
+| `IPMC_TIER` | `defs_tier23.rs` | 3 | Selects the rows answered (2 builds the Tier-2 IPMC) and the Tier reported in Get VSO Capabilities. |
+| `IPMC_TIER3_IPMB_A_ONLY` | `defs_tier23.rs` | true | Lets a Tier-3 build run with IPMB-B disabled; the guard needs `IPMB_BUS_B_ENABLE` or this switch. |
+| `IPMC_SEL_ENTRIES` | `defs_tier23.rs` | 64 | SEL size, 1 to 1024 records. |
+| `IPMC_FRU_EVENT_RESEND_MS` | `defs_tier23.rs` | 3000 | Resend period of an unacknowledged FRU State event, 100 to 60000. |
+| `IPMC_EVENT_QUEUE_DEPTH` | `defs_tier23.rs` | 12 | Queued sensor events, 1 to 32; at least 6 at Tier-2 and 9 at Tier-3. |
+| `IPMC_EVAL_MINUTES` | `defs_tier23.rs` | 30 | Evaluation build only (`gen.ps1 build -Eval`): minutes of run time after which the IPMB stops, 1 to 7158. |
+| `IPMC_PAYLOAD_MODES` | `defs.rs` | 3 | Modes Get Payload Mode Capabilities answers and Set Payload Mode accepts (modes 0 and 1). |
+| `IPMC_FRU_PERSIST` | `defs.rs` | true | A Tier-3 build needs it true: DAL and CDI are stored with the FRU image. |
+| `IPMB_NVMRO_SOURCE`, `IPMB_NVMRO_FORCED` | `defs.rs` | forced, false | NVMRO asserted makes Set FRU State Policy Bits answer D5h for a DAL or CDI change. |
+| `IPMB_BUS_B_ENABLE` | `defs.rs` | false | Enables IPMB-B, which the FAST-MODE events of offset 5 need. |
 
 ### 7.3 Console
 
@@ -1846,8 +1959,8 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 The firmware has one reset domain: the MCU reset (power-on, pin, software from `SYS RESET`, from a
 pending Cold Reset or from a bootloader request, watchdog flags reported but no watchdog is enabled). A
 pending Warm Reset and a pending payload reset are not processor resets; they use the same reset gate. The
-commands that set these hand-offs belong to the commercial build and are in
-`../IPMIRustFRU_Tier23/Documentation/tier23_commands.md` (private). `bsp/reset_cause.rs` reads RCC_CSR once at
+commands that set these hand-offs belong to the commercial build (section 7.2: Cold Reset, Warm Reset,
+FRU Control). `bsp/reset_cause.rs` reads RCC_CSR once at
 start-up, reports the most specific cause in the banner and clears the flags. A HardFault or an
 unhandled interrupt records its state in a static, prints one line when the UART is up and parks
 in `wfi`; it does not reset, so the fault stays visible on the bench. The panic handler is
@@ -2030,8 +2143,7 @@ runtime clears and reports the reset cause itself.
 ### 8.4 Evaluation build switch
 
 The evaluation image is a time-limited build of the commercial release build (owner decision 20); the
-switch and its mechanism are public code, the behaviour of the commercial build is in
-`../IPMIRustFRU_Tier23/Documentation/` (private).
+switch and its mechanism are public code; section 7.2 lists the commands of the commercial build.
 
 - `gen.ps1 build -Eval` or `gen.ps1 flash -Eval` sets `IPMC_EVAL=1` for the runtime and writes
   `ipmc-board-eval.bin` (and `ipmc-nucleo-f401re-eval.hex`, `.elf`); without `-Eval` the script
@@ -3163,7 +3275,7 @@ procedure and expected result of each.
 | Check | Build | Result |
 |---|---|---|
 | Tier-1 conformance suite on the emulator | public Tier-1 | 102 PASS, 0 FAIL |
-| Tier-2 and Tier-3 behaviour, Chassis Manager checks, evaluation image | commercial release build | recorded in `../IPMIRustFRU_Tier23/Documentation/` (private) |
+| Tier-2 and Tier-3 behaviour, Chassis Manager checks, evaluation image | commercial release build | section 7.2 and `Documentation/ipmc_test_coverage.md` (section "Tier-2/3 extension") |
 
 ### 13.7 Phase 11 bench facts (10-25-2026)
 
@@ -3739,8 +3851,8 @@ sections 13.2 and 13.3):
 
 - **Tier 1 in the public build.** Optional and Tier-2/3 commands answer C1h; there is no event
   generation, no FRU activation control by the Chassis Manager and no subsidiary FRU. The
-  commercial release build adds Tier-2 and Tier-3; its limits are in
-  `../IPMIRustFRU_Tier23/Documentation/` (private).
+  commercial release build adds Tier-2 and Tier-3 (section 7.2); its open bench checks are in
+  `Documentation/ipmc_test_coverage.md`.
 - **FAST-MODE is proven on IPMB-A only.** The one-Aardvark bench has IPMB-A; FAST-MODE on both
   buses waits for the second Aardvark.
 - **FAST-MODE rates.** The bit-bang master reaches about 147 kHz in FAST-MODE and the hardware

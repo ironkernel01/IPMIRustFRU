@@ -14,11 +14,11 @@ and reads the board results that need the board and are not run here: the Phase 
 (Documentation/ipmc_boot_plan.md 13.3), Documentation/board_test_report.md (written by
 tools/board_test_report.py) and the open verification gaps (PLAN.md section 7).
 
-Writes Documentation/ipmc_test_coverage.md (public) and, when the extension folder is present,
-../IPMIRustFRU_Tier23/Documentation/tier23_test_coverage.md (private). A Rust case that exists only
-in the extension build (the Tier-1 run does not list it) goes into the private document alone; the
-public document gives their count. Both files are overwritten on every run. Exit status 1 when any
-case failed or any suite could not run.
+Writes Documentation/ipmc_test_coverage.md: the Tier-1 build first, then, when the extension
+folder is present, the Tier-2/3 extension (a Rust case that exists only in the extension build,
+because the Tier-1 run does not list it, the extension replay and the stored Tier-2/3 conformance
+reports; owner 10-26-2026: the documents show the Tier-2/3 capabilities and testing). The file is
+overwritten on every run. Exit status 1 when any case failed or any suite could not run.
 
 Python 3.11 or later, standard library only; cargo is found through ~/.cargo/bin.
 """
@@ -37,7 +37,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TIER23_ROOT = ROOT.parent / "IPMIRustFRU_Tier23"
 PUBLIC_DOC = ROOT / "Documentation" / "ipmc_test_coverage.md"
-PRIVATE_DOC = TIER23_ROOT / "Documentation" / "tier23_test_coverage.md"
 BOOT_PLAN = ROOT / "Documentation" / "ipmc_boot_plan.md"
 BOARD_REPORT = ROOT / "Documentation" / "board_test_report.md"
 PLAN = ROOT / ".claude" / "PLAN.md"
@@ -45,7 +44,7 @@ REPLAY_VECTOR = ROOT / "vectors" / "sbc_ab.vec"
 VENV_PYTHON = ROOT / "tools" / "python-ipmi" / ".venv" / "Scripts" / "python.exe"
 CARGO_BIN = Path.home() / ".cargo" / "bin"
 CARGO = str(CARGO_BIN / "cargo.exe")
-PRIVATE_REPORTS = (
+CONFORMANCE_REPORTS = (
     TIER23_ROOT / "tools" / "conformance_t2" / "conformance_t2_emu.md",
     TIER23_ROOT / "tools" / "conformance_t2" / "conformance_t2_board.md",
     TIER23_ROOT / "tools" / "conformance_t3" / "conformance_t3_emu.md",
@@ -389,11 +388,11 @@ def by_key(cases: list[Case], key) -> dict:
     return grouped
 
 
-def rust_sections(cases: list[Case], first: int) -> list[str]:
+def rust_sections(cases: list[Case], first: int, title: str = "Rust tests") -> list[str]:
     """One `##` section per package, one `###` table per target."""
     lines: list[str] = []
     for number, (package, in_package) in enumerate(by_key(cases, lambda c: c.package).items(), first):
-        lines += section(f"{number}. Rust tests: {package}")
+        lines += section(f"{number}. {title}: {package}")
         for target, in_target in by_key(in_package, lambda c: c.target).items():
             lines += [f"### {target} ({len(in_target)} cases)", ""]
             lines += md_table(("Test", "Area", "Result"),
@@ -467,42 +466,51 @@ def overview(started: str, kind: str, extra: list[str]) -> list[str]:
     return lines + extra
 
 
-def public_document(started, tier1, python, replays, bench, board, gaps, extension_count, ext_status) -> str:
+def public_document(started, tier1, python, replays, bench, board, gaps, ext) -> str:
+    """The whole document. `ext` is None without the extension, else (only, shared, replays,
+    reports): the extension-only cases, the public cases of the extension run, its replay and the
+    stored conformance reports."""
     rows = summary_rows(tier1, python, replays, bench, board)
-    lines = title_page("Tier-1 IPMC Test Coverage",
-                       "IPMIRustFRU: every test case of the Tier-1 build and its result")
-    lines += overview(started, "This document covers the public Tier-1 build.",
+    if ext:
+        only, shared, ext_replays, _ = ext
+        rows += [counts_row(f"Tier-2/3: {package}", in_package)
+                 for package, in_package in by_key(only, lambda c: c.package).items()]
+        rows.append(("Tier-2/3: emulator replay", len(ext_replays), sum(r.status == PASS for r in ext_replays),
+                     sum(r.status == FAIL for r in ext_replays), 0))
+    lines = title_page("IPMC Test Coverage",
+                       "IPMIRustFRU: every test case of the Tier-1 build and the Tier-2/3 extension, and its result")
+    kind = ("This document covers the Tier-1 build and the Tier-2/3 extension." if ext
+            else "This document covers the Tier-1 build; the Tier-2/3 extension was not built in this run.")
+    lines += overview(started, kind,
                       md_table(("Suite", "Cases", "Passed", "Failed", "Ignored"), rows + [totals_row(rows)]))
-    lines += [ext_status.format(count=extension_count), ""]
     lines += rust_sections(tier1, 2)
     first = 2 + len(by_key(tier1, lambda c: c.package))
     lines += python_section(first, python) + replay_section(first + 1, replays)
     lines += board_section(first + 2, bench, board) + gaps_section(first + 3, gaps)
+    if ext:
+        lines += extension_sections(first + 4, *ext)
     return "\n".join(lines) + "\n"
 
 
-def private_document(started, only, shared, tier1_total, replays, reports) -> str:
-    lines = title_page("Tier-2 and Tier-3 Test Coverage",
-                       "IPMIRustFRU_Tier23: every test case of the extension and its result")
-    rows = [counts_row(package, in_package) for package, in_package in by_key(only, lambda c: c.package).items()]
-    rows.append(counts_row("Extension build, public cases", shared))
-    lines += overview(started, "This document covers the cases that exist only in the build with the extension.",
-                      md_table(("Suite", "Cases", "Passed", "Failed", "Ignored"), rows + [totals_row(rows[:-1])]))
-    lines += [f"The last row counts the {len(shared)} public Tier-1 cases of the same run ({tier1_total} in "
-              "the Tier-1 run); `Documentation/ipmc_test_coverage.md` in the public repository lists them.", ""]
-    lines += rust_sections(only, 2)
-    first = 2 + len(by_key(only, lambda c: c.package))
+def extension_sections(first, only, shared, ext_replays, reports) -> list[str]:
+    """The Tier-2/3 part: the extension-only cases by crate and target, the public cases of the
+    same run, the extension replay and the stored conformance reports."""
+    lines = section(f"{first}. Tier-2/3 extension")
+    lines += [f"The build with the extension (`IPMC_TIER23=1`) runs {len(only) + len(shared)} cases: the "
+              f"{len(shared)} public cases above and {len(only)} that exist only with the extension, listed "
+              "here by crate and target.", ""]
     failed = [c for c in shared if c.result == FAIL]
-    lines += section(f"{first}. Public cases run in the extension build")
-    lines += [f"{len(shared)} cases, {len(failed)} failed.", ""]
+    lines += [f"Public cases in the extension run: {len(shared)}, {len(failed)} failed.", ""]
     if failed:
         lines += md_table(("Test", "Area", "Result"), [(f"`{c.name}`", area_of(c), c.result) for c in failed])
-    lines += replay_section(first + 1, replays)
-    lines += section(f"{first + 2}. Private conformance reports")
-    lines += ["The Tier-2 and Tier-3 conformance suites (`tools/conformance_t2`, `tools/conformance_t3`) need the "
-              "emulator server or the board; this tool reads the stored reports and does not run them.", ""]
-    lines += md_table(("Report", "Written", "PASS", "FAIL", "NOT-TESTABLE"), reports)
-    return "\n".join(lines) + "\n"
+    lines += rust_sections(only, first + 1, "Tier-2/3 Rust tests")
+    number = first + 1 + len(by_key(only, lambda c: c.package))
+    lines += replay_section(number, ext_replays)
+    lines += section(f"{number + 1}. Tier-2/3 conformance reports")
+    lines += ["The Tier-2 and Tier-3 conformance suites (`tools/conformance_t2`, `tools/conformance_t3` of "
+              "`../IPMIRustFRU_Tier23`) need the emulator server or the board; this tool reads the stored "
+              "reports and does not run them.", ""]
+    return lines + md_table(("Report", "Written", "PASS", "FAIL", "NOT-TESTABLE"), reports)
 
 
 # ------------------------------------------------------------------ the runs
@@ -541,7 +549,7 @@ def read_text(path: Path) -> str:
 
 def report_rows() -> list[tuple]:
     rows = []
-    for path in PRIVATE_REPORTS:
+    for path in CONFORMANCE_REPORTS:
         if path.exists():
             written = datetime.datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
             rows.append((path.name, written, *parse_conformance_report(read_text(path))))
@@ -550,7 +558,7 @@ def report_rows() -> list[tuple]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--skip-ext", action="store_true", help="no extension run and no private document")
+    parser.add_argument("--skip-ext", action="store_true", help="no extension run (Tier-1 only)")
     parser.add_argument("--no-write", action="store_true", help="run and print the summary only")
     args = parser.parse_args(argv)
     started = datetime.datetime.now().strftime("%m-%d-%Y %H:%M:%S")
@@ -571,19 +579,13 @@ def main(argv=None) -> int:
     bench = parse_boot_plan(read_text(BOOT_PLAN))
     board = parse_board_report(read_text(BOARD_REPORT))
     gaps = parse_gaps(read_text(PLAN))
-    status = ("The Tier-2 and Tier-3 extension adds {count} test cases; they are listed in the private "
-              "document `tier23_test_coverage.md` of `../IPMIRustFRU_Tier23/Documentation/`."
-              if with_ext else "The Tier-2/3 extension was not built in this run.")
-    public = public_document(started, tier1.cases, python, replays, bench, board, gaps, len(only), status)
+    ext = (only, shared, ext_replays, report_rows()) if with_ext else None
+    public = public_document(started, tier1.cases, python, replays, bench, board, gaps, ext)
     errors = [f"{s.title}: {s.error}" for s in suites + python if s.error]
     failed = sum(s.count(FAIL) for s in suites + python) + sum(r.status == FAIL for r in replays + ext_replays)
     failed += sum(r[2] == FAIL for r in bench)
     if not args.no_write:
         PUBLIC_DOC.write_text(public, encoding="utf-8")
-        if with_ext:
-            PRIVATE_DOC.parent.mkdir(exist_ok=True)
-            PRIVATE_DOC.write_text(private_document(started, only, shared, len(tier1.cases), ext_replays,
-                                                    report_rows()), encoding="utf-8")
     for suite in suites + python:
         print(f"{suite.title}: {len(suite.cases)} cases, {suite.count(PASS)} passed, "
               f"{suite.count(FAIL)} failed, {suite.count(IGNORED)} ignored")
