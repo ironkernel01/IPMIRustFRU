@@ -12,3 +12,6 @@ Documentation/product.md
 vectors/sbc_ab.vec
 diagrams/node_modules/
 diagrams/.venv/
+
+# Local editor workspace (lists sibling folders on this PC)
+*.code-workspace
