@@ -88,18 +88,71 @@ impl Editors {
                 drain(
                     port,
                     self.of(port),
-                    |event| matches!(event, EditEvent::Line(line) if is_wakeup(line)),
+                    &mut Loss::unwatched(),
+                    |event, _| matches!(event, EditEvent::Line(line) if is_wakeup(line)),
                 )
             })
             .map(|(_, id)| id)
     }
 }
 
-/// drain -- pushes the bytes waiting on `port` into `editor` and hands each event to `on`, which
-/// returns true to stop. Returns whether `on` stopped it.
-fn drain(port: Port, editor: &mut LineEditor, mut on: impl FnMut(EditEvent<'_>) -> bool) -> bool {
+/// Loss -- the loss watch of the session port: the count of lost or damaged bytes seen at the last
+/// check, and whether the line in progress is damaged (the same rule as the runtime application
+/// port, PLAN decision 37). `watch` is false for the wake-up drain, which only looks for `WAKEUP`.
+struct Loss {
+    seen: u32,
+    damaged: bool,
+    watch: bool,
+}
+
+impl Loss {
+    const fn unwatched() -> Self {
+        Loss {
+            seen: 0,
+            damaged: false,
+            watch: false,
+        }
+    }
+
+    /// watching -- a watch that starts from the current count of `port`.
+    fn watching(port: Port) -> Self {
+        Loss {
+            seen: lost_bytes(port),
+            damaged: false,
+            watch: true,
+        }
+    }
+}
+
+/// lost_bytes -- overrun + RX ring overflow + line errors of `port` (wrapping).
+fn lost_bytes(port: Port) -> u32 {
+    let c = uart::counters(port);
+    c.overrun
+        .wrapping_add(c.rx_overflow)
+        .wrapping_add(c.line_errors)
+}
+
+/// drain -- pushes the bytes waiting on `port` into `editor` and hands each event to `on` (with the
+/// loss state, so it can read and clear `damaged`), which returns true to stop. Returns whether
+/// `on` stopped it. When a watched port lost bytes since the last check, the RX ring is discarded,
+/// the byte in hand is dropped and the line in progress is marked damaged.
+fn drain(
+    port: Port,
+    editor: &mut LineEditor,
+    loss: &mut Loss,
+    mut on: impl FnMut(EditEvent<'_>, &mut Loss) -> bool,
+) -> bool {
     while let Some(byte) = uart::getc(port) {
-        if on(editor.push_byte(byte)) {
+        if loss.watch {
+            let now = lost_bytes(port);
+            if now != loss.seen {
+                uart::discard_rx(port);
+                loss.seen = now;
+                loss.damaged = true;
+                continue;
+            }
+        }
+        if on(editor.push_byte(byte), loss) {
             return true;
         }
     }
@@ -162,9 +215,10 @@ pub fn session(
     let mut session = Session::new();
     session.open(&mut out);
     let mut commands = true;
+    let mut loss = Loss::watching(port);
     loop {
         let mut action = Action::None;
-        drain(port, editors.of(port), |event| {
+        drain(port, editors.of(port), &mut loss, |event, loss| {
             let echo = session.echo();
             match event {
                 EditEvent::Echo(byte) if echo => {
@@ -175,13 +229,21 @@ pub fn session(
                     if echo {
                         out.put(CRLF);
                     }
-                    action = session.line(line, flash, record, &mut out);
+                    if core::mem::take(&mut loss.damaged) {
+                        session.line_damaged(flash, &mut out);
+                    } else {
+                        action = session.line(line, flash, record, &mut out);
+                    }
                 }
                 EditEvent::LineTooLong => {
                     if echo {
                         out.put(CRLF);
                     }
-                    session.line_too_long(&mut out);
+                    if core::mem::take(&mut loss.damaged) {
+                        session.line_damaged(flash, &mut out);
+                    } else {
+                        session.line_too_long(&mut out);
+                    }
                 }
                 _ => {}
             }

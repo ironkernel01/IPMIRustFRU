@@ -508,6 +508,8 @@ decision 24).
 | `IPMB_FAULT_CLEAR_MS` | 1000 | both lines idle-high this long before a fault clears |
 | `IPMC_IPMI_TRACE` | `true` | one trace line per dispatched request, and the link and event lines (failed transmissions, resends, requests sent). false removes the link and dispatcher lines at compile time, so they are absent from the capture log as well as from the console; the status lines stay (FRU log saves, bus faults, bus speed changes, resets, and the FRU state change line) |
 | `IPMC_LOG_SIZE` | 8192 | capture log ring, bytes (1024..=16384, a power of two; the stack reservation check of `link.x` fails a build whose statics leave too little RAM); the usable size is one byte less, because the ring keeps a slot empty; each `DEBUG DUMP` row walks the log from its start, so a larger log makes the dump slower per row |
+| `IPMC_STACK_RESERVE_BYTES` | 35840 | runtime stack reservation, bytes (multiple of 8, below the RAM size): RAM that must stay free above the statics; `link.x` fails the link when the statics leave less |
+| `IPMC_BOOT_STACK_RESERVE_BYTES` | 8192 | bootloader stack reservation, bytes (multiple of 8, below the RAM size); `boot.x` fails the link when the statics leave less |
 | `IPMC_LOG_TEXT_MAX` | 160 | longest trace line the log keeps, bytes (32..=200); a longer line is cut and ends in `...` |
 
 ### Straps, identity and FRU
@@ -1838,15 +1840,18 @@ word `ERR UNKNOWN <word>`.
 | `RUN` | image check; valid: `OK RUN`, flush, the start sequence; else `ERR IMAGE <reason>` |
 | `RESET` | `OK RESET`, flush, SYSRESETREQ |
 
-After `OK PENDING` the next non-empty line must be `CONFIRM`; any other line gives `ERR CANCELLED`
-and is not run. `ERASE APP` erases sector 2 first, so a power cut leaves no image. An erase or a
+After `OK PENDING` the next line must be `CONFIRM`; any other line, an empty one included, gives
+`ERR CANCELLED` and is not run. `ERASE APP` erases sector 2 first, so a power cut leaves no image. An erase or a
 program stalls the core; the host sends nothing until the answer. In record mode nothing is echoed
 and no prompt is printed between records: each line that starts with `:` is one Intel HEX record
 (`Loader::record`) and gets `OK` or an `ERR` line, and the loader stays in record mode after an
 error; an accepted record retriggers the LED activity blink. The 01 record runs the image check and
 answers `OK END <n> records <b> bytes, image valid` or `ERR IMAGE <reason>`, then the prompt returns.
 A line that does not start with `:` ends record mode with `ERR ABORTED` and is not run; an empty
-line is ignored; a line that is too long gives `ERR LINE_TOO_LONG`; no line for
+line is ignored; a line that is too long gives `ERR LINE_TOO_LONG`; a line in which the port lost
+or damaged a byte (UART overrun, RX ring overflow or line error, counted since the previous
+byte) is dropped with `ERR LINE_DAMAGED bytes lost or damaged on the port; the line was dropped`
+and cancels a pending erase (record mode stays, the host resends the record); no line for
 `IPMC_FWU_LOAD_IDLE_S` seconds gives `ERR TIMEOUT`. While the session runs the IPMC holds neither
 IPMB bus (no service, no answer from 82h) and does not drive PWR_EN or PAYLOAD_RST_OUT_N; LD2
 blinks at `IPMC_FWU_LED_WAIT_CHZ` in command mode and shows the activity pattern while records
@@ -2006,7 +2011,9 @@ it (owner decision 10-25-2026). A board that holds an image of the earlier layou
 vector table in sector 0 or at `0x0800_8000`) takes one drive copy of `ipmc-board.bin`.
 
 `link.x` asserts that the RAM from the end of the statics (`.data`, `.bss`; `.uninit` is in `NOINIT`) to the top of RAM
-is at least `_stack_reserve`, 35 KB; the error names `IPMC_LOG_SIZE` and the four UART buffer
+is at least `_stack_reserve`, 35 KB (`IPMC_STACK_RESERVE_BYTES` of `defs.rs`, which `build.rs`
+writes to `stack_runtime.x`; the bootloader's `IPMC_BOOT_STACK_RESERVE_BYTES`, 8 KB, goes to
+`stack_boot.x`; `memory.x` and `boot.x` include their fragment); the error names `IPMC_LOG_SIZE` and the four UART buffer
 defines. The 35 KB come from the release ELF of 10-26-2026 (`arm-none-eabi-objdump -d`: the frame
 of each function from its push list and `sub sp`, summed along the longest call chain, indirect
 calls followed by hand): start-up 27,408 bytes (`main` 9,864 + `IpmbLink::take` 16,616 +

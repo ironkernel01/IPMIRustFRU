@@ -170,7 +170,16 @@ function Invoke-Build {
         $env:IPMC_EVAL = '0'
         cargo build --profile boot --bin ipmc-boot
         if ($LASTEXITCODE -ne 0) { throw "cargo build (bootloader) failed (exit $LASTEXITCODE)" }
+        # The release folder may not exist yet (the bootloader builds into the boot profile folder
+        # and the runtime build comes after it). Copy-Item keeps the source time, so the copy gets
+        # the time of the copy (a cached bootloader build still passes Assert-FreshImage), and its
+        # hash must equal Cargo's output.
+        New-Item -ItemType Directory -Force -Path (Split-Path $bootElf -Parent) | Out-Null
         Copy-Item $cargoBootElf $bootElf -Force -ErrorAction Stop
+        (Get-Item $bootElf -ErrorAction Stop).LastWriteTime = Get-Date
+        if ((Get-FileHash $cargoBootElf).Hash -ne (Get-FileHash $bootElf).Hash) {
+            throw "${bootElf} differs from Cargo's output ${cargoBootElf}"
+        }
         Invoke-ObjcopyBinary $bootElf $bootBin
         Invoke-Fwimage @('size', $bootBin)
 
@@ -215,6 +224,10 @@ function Invoke-Build {
 # Both flash paths program the images the build above just made: the files are rewritten by every
 # build, so they must be newer than the build start, and the ELFs they were made from must not be
 # newer than the board image (a stale or half-built set is refused before anything is programmed).
+# For the bootloader ELF this checks the copy made by Invoke-Build: the copy is stamped with the time
+# of the copy (a cached Cargo build is not rebuilt), and Invoke-Build has already refused a copy
+# whose hash differs from Cargo's output, so a copy older than the build start is a copy that did
+# not happen in this run.
 function Assert-FreshImage {
     $files = @($bin, $programElf)
     if ($Bootloader) { $files += $bootElf }

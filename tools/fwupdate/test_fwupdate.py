@@ -11,6 +11,7 @@ import tempfile
 import time
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import fwu_settings
@@ -285,6 +286,24 @@ class HexAndPrecheckTests(unittest.TestCase):
         end_of_flash = hex_text(bytes(16), low=0x0808_0000)
         self.refused(end_of_flash, "outside the APP region")
 
+    def test_far_addresses_are_refused_before_any_large_allocation(self):
+        for upper in (b"\x00\x00", b"\xFF\xFF"):
+            text = "\n".join(
+                [
+                    fwupdate.record_line(4, 0, b"\x00\x00"),
+                    fwupdate.record_line(0, 0, b"\x01"),
+                    fwupdate.record_line(4, 0, upper),
+                    fwupdate.record_line(0, 0xFFF0, b"\x02"),
+                    fwupdate.record_line(1, 0, b""),
+                ]
+            )
+            records = fwupdate.parse_records(text)
+            with unittest.mock.patch.object(fwupdate, "bytearray", create=True) as alloc:
+                with self.assertRaises(fwupdate.Refused) as caught:
+                    fwupdate.build_image(fwupdate.build_memory(records))
+            alloc.assert_not_called()
+            self.assertIn("outside the APP region", str(caught.exception))
+
     def test_other_file_faults(self):
         self.refused("", "end-of-file")
         self.refused("hello\n", "not an Intel HEX")
@@ -360,6 +379,15 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(len(records), len(expected) + 1)
         self.assertEqual(records[2], records[3])
         self.assertIn("record 3: ERR CHECKSUM, sending it again", out)
+
+    def test_resend_after_line_damaged(self):
+        damaged = "ERR LINE_DAMAGED bytes lost or damaged on the port; the line was dropped"
+        fake = FakeBoot(record_answers={3: [damaged, "OK"]})
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 0, out)
+        records = [w for w in fake.written if w.startswith(":")]
+        self.assertEqual(records[2], records[3])
+        self.assertIn(f"record 3: {damaged}, sending it again", out)
 
     def test_abort_after_range_error_names_the_record(self):
         fake = FakeBoot(record_answers={5: ["ERR RANGE address 0800 outside"]})
@@ -498,6 +526,9 @@ class FakeSerial:
         self.timeout_sets = 0
         self._timeout = None
         self.in_waiting = 0
+        self.out_waiting = 0
+        self.write_result = None  # None: all bytes; an int: the count written
+        self.write_error = None
 
     @property
     def timeout(self):
@@ -514,6 +545,11 @@ class FakeSerial:
         chunk = self._chunks.pop(0)
         self.in_waiting = len(self._chunks[0]) if self._chunks else 0
         return chunk
+
+    def write(self, data):
+        if self.write_error:
+            raise self.write_error
+        return len(data) if self.write_result is None else self.write_result
 
     def reset_input_buffer(self):
         self._chunks.clear()
@@ -553,6 +589,78 @@ class SerialTransportTests(unittest.TestCase):
         transport = self.make([b"par", b"tial\r\n"])
         self.assertIsNone(transport.read_line(0.0))
         self.assertEqual(transport.read_line(0.05), "partial")
+
+
+class SerialTimeoutException(OSError):
+    """Stands for serial.SerialTimeoutException (found by class name)."""
+
+
+class WriteTests(unittest.TestCase):
+    def make(self):
+        return SerialTransportTests().make([])
+
+    def test_a_complete_write_returns(self):
+        transport = self.make()
+        transport.write(b"HELP\r\n")
+
+    def test_write_timeout_short_write_and_stuck_output_are_boot_timeouts(self):
+        for name, setup, fragment in [
+            ("timeout", lambda ser: setattr(ser, "write_error", SerialTimeoutException()), "timed out"),
+            ("short", lambda ser: setattr(ser, "write_result", 2), "short write"),
+            ("stuck", lambda ser: setattr(ser, "out_waiting", 5), "did not send"),
+        ]:
+            with self.subTest(name):
+                transport = self.make()
+                setup(transport._serial)
+                with unittest.mock.patch.object(fwu_settings, "WRITE_TIMEOUT_S", 0.05):
+                    with self.assertRaises(fwupdate.BootTimeout) as caught:
+                        transport.write(b"HELP\r\n")
+                self.assertIn(fragment, str(caught.exception))
+
+    def test_other_write_errors_propagate(self):
+        transport = self.make()
+        transport._serial.write_error = ValueError("bug")
+        with self.assertRaises(ValueError):
+            transport.write(b"x")
+
+
+class EndlessLines:
+    """A transport that returns a line on every read, never the awaited one, and a clock that
+    each read advances by `step` seconds (the read returns at once)."""
+
+    def __init__(self, step, line="trace line"):
+        self.now = 0.0
+        self.step = step
+        self.line = line
+        self.reads = 0
+
+    def clock(self):
+        return self.now
+
+    def write(self, data):
+        pass
+
+    def read_line(self, timeout):
+        self.reads += 1
+        assert self.reads < 10_000, "the call did not end"
+        self.now += self.step
+        return self.line
+
+
+class DeadlineTests(unittest.TestCase):
+    def test_read_status_ends_within_its_limit_while_lines_keep_coming(self):
+        fake = EndlessLines(0.1)
+        boot = fwupdate.Bootloader(fake, lambda text: None, fake.clock)
+        with self.assertRaises(fwupdate.BootTimeout):
+            boot._read_status(2.0)
+        self.assertLessEqual(fake.now, 2.0 + 0.1 + 1e-9)
+
+    def test_wakeup_ends_within_its_limit_while_lines_keep_coming(self):
+        fake = EndlessLines(0.05)
+        boot = fwupdate.Bootloader(fake, lambda text: None, fake.clock)
+        with self.assertRaises(fwupdate.BootTimeout):
+            boot.wakeup(3.0)
+        self.assertLessEqual(fake.now, 3.0 + 0.05 + 1e-9)
 
 
 class WakeupTests(unittest.TestCase):

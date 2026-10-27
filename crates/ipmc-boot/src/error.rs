@@ -17,6 +17,8 @@ pub enum BootError {
     Flash(FlashError),
     Nvmro,
     LineTooLong,
+    /// Bytes were lost or damaged on the port (overrun, ring overflow, line error).
+    LineDamaged,
     Aborted,
     Timeout,
     /// LOAD before an ERASE APP in this session.
@@ -54,6 +56,7 @@ impl BootError {
             BootError::Flash(_) => "FLASH",
             BootError::Nvmro => "NVMRO",
             BootError::LineTooLong => "LINE_TOO_LONG",
+            BootError::LineDamaged => "LINE_DAMAGED",
             BootError::Aborted => "ABORTED",
             BootError::Timeout => "TIMEOUT",
             BootError::Cancelled => "CANCELLED",
@@ -75,6 +78,7 @@ pub fn put_err_head(out: &mut dyn TextOut, error: BootError) {
         BootError::Flash(fault) => Some(fault.name()),
         BootError::Image(reason) => Some(reason.name()),
         BootError::NotErasedFirst => Some("erase APP first"),
+        BootError::LineDamaged => Some("bytes lost or damaged on the port; the line was dropped"),
         _ => None,
     };
     if let Some(detail) = detail {
@@ -104,7 +108,7 @@ mod tests {
 
     #[test]
     fn answer_lines() {
-        let rows: [(BootError, &str); 19] = [
+        let rows: [(BootError, &str); 20] = [
             (BootError::Format, "ERR FORMAT\r\n"),
             (BootError::Checksum, "ERR CHECKSUM\r\n"),
             (BootError::Type, "ERR TYPE\r\n"),
@@ -122,6 +126,10 @@ mod tests {
             ),
             (BootError::Nvmro, "ERR NVMRO\r\n"),
             (BootError::LineTooLong, "ERR LINE_TOO_LONG\r\n"),
+            (
+                BootError::LineDamaged,
+                "ERR LINE_DAMAGED bytes lost or damaged on the port; the line was dropped\r\n",
+            ),
             (BootError::Aborted, "ERR ABORTED\r\n"),
             (BootError::Timeout, "ERR TIMEOUT\r\n"),
             (BootError::Cancelled, "ERR CANCELLED\r\n"),

@@ -153,6 +153,18 @@ impl Session {
         }
     }
 
+    /// line_damaged -- the port lost or damaged bytes and the firmware dropped the line:
+    /// `ERR LINE_DAMAGED`. A pending erase is cancelled. Command mode prints the prompt; record
+    /// mode stays (the host resends the record, as after `ERR CHECKSUM`) and the idle time restarts.
+    pub fn line_damaged(&mut self, hw: &dyn BootHw, out: &mut dyn TextOut) {
+        self.last_line_ms = hw.now_ms();
+        self.pending = None;
+        put_err(out, BootError::LineDamaged);
+        if matches!(self.mode, Mode::Command) {
+            put_prompt(out);
+        }
+    }
+
     /// poll -- the `LOAD` idle timeout: no line for `IPMC_FWU_LOAD_IDLE_S` seconds ends record
     /// mode with `ERR TIMEOUT` and the prompt. Call every main-loop pass.
     pub fn poll(&mut self, hw: &dyn BootHw, out: &mut dyn TextOut) {
@@ -234,6 +246,9 @@ impl Session {
         out: &mut dyn TextOut,
     ) -> Action {
         let Some(first) = words(line).next() else {
+            if self.pending.take().is_some() {
+                put_err(out, BootError::Cancelled);
+            }
             put_prompt(out);
             return Action::None;
         };
@@ -551,11 +566,51 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_line_keeps_the_erase_pending() {
+    fn an_empty_line_cancels_a_pending_erase() {
         let mut bench = Bench::new(Ram::new());
         bench.text("ERASE FRU");
-        assert_eq!(bench.text(""), PROMPT);
-        assert!(bench.text("CONFIRM").starts_with("OK ERASED FRU"));
+        assert_eq!(bench.text(""), format!("ERR CANCELLED\r\n{PROMPT}"));
+        assert_eq!(
+            bench.text("CONFIRM"),
+            format!("ERR NOTHING_PENDING\r\n{PROMPT}")
+        );
+        assert!(bench.ram.erased.is_empty());
+    }
+
+    #[test]
+    fn a_damaged_line_cancels_a_pending_erase() {
+        let mut bench = Bench::new(Ram::new());
+        bench.text("ERASE APP");
+        let mut out = String::new();
+        bench.session.line_damaged(&bench.ram, &mut out);
+        assert_eq!(
+            out,
+            format!(
+                "ERR LINE_DAMAGED bytes lost or damaged on the port; the line was dropped\r\n{PROMPT}"
+            )
+        );
+        assert_eq!(
+            bench.text("CONFIRM"),
+            format!("ERR NOTHING_PENDING\r\n{PROMPT}")
+        );
+        assert!(bench.ram.erased.is_empty());
+    }
+
+    #[test]
+    fn a_damaged_line_in_record_mode_stays_and_the_next_record_is_ok() {
+        let mut bench = loading();
+        bench.ram.now.set(5_000);
+        let mut out = String::new();
+        bench.session.line_damaged(&bench.ram, &mut out);
+        assert_eq!(
+            out,
+            "ERR LINE_DAMAGED bytes lost or damaged on the port; the line was dropped\r\n"
+        );
+        assert!(!bench.session.echo());
+        let limit = ipmc_defs::IPMC_FWU_LOAD_IDLE_S * 1000;
+        bench.ram.now.set(5_000 + limit - 1);
+        assert_eq!(bench.poll(), "", "the idle time restarted");
+        assert_eq!(bench.text(&record_line(0xC000, 0, &[1, 2])), "OK\r\n");
     }
 
     #[test]

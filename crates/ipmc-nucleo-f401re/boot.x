@@ -45,7 +45,7 @@ INCLUDE flash_map.x
 
 /* Stack reservation: the stack of the bootloader (the SHA-256 state and the line editors are the
    largest frames) needs a few KB; the rest of the 95.75 KB of RAM is the stack. */
-_stack_reserve = 8K;
+INCLUDE stack_boot.x /* _stack_reserve = IPMC_BOOT_STACK_RESERVE_BYTES of defs.rs (build.rs) */
 
 /* # Entry point = reset vector */
 EXTERN(__RESET_VECTOR);

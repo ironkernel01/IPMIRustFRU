@@ -27,4 +27,4 @@ INCLUDE flash_map.x
    KB: 35 KB (35840 bytes, 28 percent). A change to the measured frames (a new large local in
    `main` or `take`, a larger FRU image or Link) is re-measured and this number changed with
    it. */
-_stack_reserve = 35K;
+INCLUDE stack_runtime.x /* _stack_reserve = IPMC_STACK_RESERVE_BYTES of defs.rs (build.rs) */

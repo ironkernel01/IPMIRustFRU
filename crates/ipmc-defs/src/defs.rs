@@ -145,6 +145,16 @@ pub const IPMC_IPMI_TRACE: bool = true;
 /// first; each DEBUG DUMP row walks the log from its start, so a larger log makes DEBUG DUMP slower
 /// per row
 pub const IPMC_LOG_SIZE: usize = 8192;
+/// runtime stack reservation, bytes (multiple of 8, below the 98048 bytes of RAM): the RAM that must stay
+/// free above .data and .bss for the stack of the runtime image; link.x fails the link when the
+/// statics leave less (the largest measured stack use is 27952 bytes, see memory.x of the firmware crate;
+/// a value too small risks a stack overflow into the statics, a value too large fails the link)
+pub const IPMC_STACK_RESERVE_BYTES: u32 = 35_840;
+/// bootloader stack reservation, bytes (multiple of 8, below the 98048 bytes of RAM): the RAM that
+/// must stay free above its .data and .bss for the stack (the SHA-256 state and the line editors
+/// are the largest frames); boot.x fails the link when the statics leave less, and a value too
+/// small risks a stack overflow in the bootloader
+pub const IPMC_BOOT_STACK_RESERVE_BYTES: u32 = 8_192;
 /// longest trace line kept in the log, bytes (32..=200); a longer line is cut and ends in ...
 pub const IPMC_LOG_TEXT_MAX: usize = 160;
 

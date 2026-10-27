@@ -51,6 +51,16 @@ const _: () = assert!(
     IPMB_GA_FORCED >= 1 && IPMB_GA_FORCED <= 0x1F,
     "IPMB_GA_FORCED must be 1..=0x1F (GA[4:0], 0 is invalid)"
 );
+// RAM of the STM32F401 for the linker (flash_map.x: 96 KB minus the 256 byte NOINIT block).
+const RAM_BYTES: u32 = 96 * 1024 - 256;
+const _: () = assert!(
+    IPMC_STACK_RESERVE_BYTES.is_multiple_of(8) && IPMC_STACK_RESERVE_BYTES < RAM_BYTES,
+    "IPMC_STACK_RESERVE_BYTES must be a multiple of 8 and below the RAM size"
+);
+const _: () = assert!(
+    IPMC_BOOT_STACK_RESERVE_BYTES.is_multiple_of(8) && IPMC_BOOT_STACK_RESERVE_BYTES < RAM_BYTES,
+    "IPMC_BOOT_STACK_RESERVE_BYTES must be a multiple of 8 and below the RAM size"
+);
 const _: () = assert!(IPMB_MSG_MAX == 32, "IPMB_MSG_MAX must be 32");
 const _: () = assert!(
     IPMB_BUS_A_ENABLE,

@@ -28,6 +28,10 @@ WAKEUP_GIVE_UP_S = 60.0
 # on the monotonic clock over reads of this length.
 POLL_S = 0.02
 
+# Seconds a write to the port, and the wait for its output to leave the driver, may take. Set once
+# when the port is opened (`write_timeout`) and never assigned again, like the read timeout.
+WRITE_TIMEOUT_S = 2.0
+
 # Most lines read after a runtime entry command (`DEBUG BOOTLOADER`, `BOOTLOADER`) while waiting
 # for the line that ends it; the read stops earlier at the first ending line.
 ENTER_LINES_MAX = 6
@@ -45,7 +49,7 @@ ERASE_TIMEOUT_S = 20.0
 # Data bytes in one record the tool sends.
 RECORD_BYTES = 32
 
-# Times a record is sent again after ERR FORMAT, ERR CHECKSUM or ERR LINE_TOO_LONG.
+# Times a record is sent again after ERR FORMAT, ERR CHECKSUM, ERR LINE_TOO_LONG or ERR LINE_DAMAGED.
 RECORD_RETRIES = 3
 
 # Times LOAD is started again after `ERR ABORTED` (a record line that lost its leading `:`) in

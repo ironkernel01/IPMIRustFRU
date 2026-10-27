@@ -38,7 +38,7 @@ SRAM_LOW = 0x2000_0100
 SRAM_HIGH = 0x2001_8000
 BLANK = 0xFF
 # Answers after which a record is sent again (damage on the line).
-RETRY_CODES = ("FORMAT", "CHECKSUM", "LINE_TOO_LONG")
+RETRY_CODES = ("FORMAT", "CHECKSUM", "LINE_TOO_LONG", "LINE_DAMAGED")
 # Runtime entry commands, by the port they are typed on.
 ENTER_COMMANDS = {"cli": "DEBUG BOOTLOADER", "app": "BOOTLOADER"}
 # The word that confirms the restart while payload power is on (the reset releases PWR_EN).
@@ -115,15 +115,26 @@ def parse_records(text):
     return records
 
 
+def refuse_outside_app(low, high):
+    """Refused when the data span low..high (high exclusive) leaves the APP region."""
+    if low < APP_START or high > APP_END:
+        raise Refused(
+            f"data {low:08X}..{high:08X} lies outside the APP region {APP_START:08X}..{APP_END:08X}"
+        )
+
+
 def build_memory(records):
-    """{address: byte} of the data records (type 04 sets the upper 16 bits). Refuses an address
-    given twice."""
+    """{address: byte} of the data records (type 04 sets the upper 16 bits). Every data address
+    is checked against the APP region before any byte is stored, so the result (and the image
+    built from it) spans at most the APP region. Refuses an address given twice."""
     memory = {}
     upper = 0
     for rec_type, address16, data in records:
         if rec_type == 4:
             upper = int.from_bytes(data, "big") << 16
         elif rec_type == 0:
+            if data:
+                refuse_outside_app(upper + address16, upper + address16 + len(data))
             for offset, value in enumerate(data):
                 address = upper + address16 + offset
                 if address in memory:
@@ -146,10 +157,7 @@ def build_image(memory):
 def precheck(low, image):
     """Repeats the bootloader's image rules (design section 4); raises Refused naming the rule."""
     high = low + len(image)
-    if low < APP_START or high > APP_END:
-        raise Refused(
-            f"data {low:08X}..{high:08X} lies outside the APP region {APP_START:08X}..{APP_END:08X}"
-        )
+    refuse_outside_app(low, high)
 
     def span(start, stop):
         """Bytes start..stop of the address space; FFh outside the data."""
@@ -234,13 +242,29 @@ class SerialTransport:
     def __init__(self, port, baud):
         import serial  # pylint: disable=import-outside-toplevel
 
-        self._serial = serial.Serial(port, baud, timeout=fwu_settings.POLL_S)
+        self._serial = serial.Serial(
+            port, baud, timeout=fwu_settings.POLL_S, write_timeout=fwu_settings.WRITE_TIMEOUT_S
+        )
         self._serial.reset_input_buffer()
         self._partial = b""
 
     def write(self, data):
-        self._serial.write(data)
-        self._serial.flush()
+        """Writes all of `data` and waits, within `WRITE_TIMEOUT_S`, until the driver has sent it;
+        BootTimeout for a short write, a write timeout or output still queued at the deadline."""
+        deadline = time.monotonic() + fwu_settings.WRITE_TIMEOUT_S
+        try:
+            written = self._serial.write(data)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # pyserial is imported on first use, so its exception is found by class name.
+            if any(cls.__name__ == "SerialTimeoutException" for cls in type(error).__mro__):
+                raise BootTimeout("write to the port timed out") from error
+            raise
+        if written is not None and written != len(data):
+            raise BootTimeout(f"short write to the port: {written} of {len(data)} bytes")
+        while self._serial.out_waiting:
+            if time.monotonic() >= deadline:
+                raise BootTimeout("the port did not send the output in time")
+            time.sleep(fwu_settings.POLL_S)
 
     def _fill(self):
         """One read of what is waiting (or of one byte, up to `POLL_S`), added to the buffer."""
@@ -314,18 +338,20 @@ class Bootloader:
 
     def _read_status(self, timeout, sent=None, collected=None):
         """Reads lines up to the status line and returns it. The echo of `sent` and prompt lines
-        are skipped; other lines are appended to `collected`. BootTimeout when nothing ends it."""
+        are skipped; other lines are appended to `collected`. BootTimeout when no status line came
+        within `timeout` seconds in all (one deadline, lines that do not end it do not extend it)."""
+        deadline = self._clock() + timeout
         while True:
-            line = self._transport.read_line(timeout)
-            if line is None:
+            line = self._transport.read_line(max(deadline - self._clock(), 0.0))
+            if line is not None:
+                line = line.strip()
+                if line and not line.startswith(self._prompt.strip()) and line != sent:
+                    if is_status(line):
+                        return line
+                    if collected is not None:
+                        collected.append(line)
+            if self._clock() >= deadline:
                 raise BootTimeout("no answer")
-            line = line.strip()
-            if not line or line.startswith(self._prompt.strip()) or line == sent:
-                continue
-            if is_status(line):
-                return line
-            if collected is not None:
-                collected.append(line)
 
     def wakeup(self, limit_s=fwu_settings.WAKEUP_GIVE_UP_S):
         """Sends WAKEUP every interval until an OK line; limit_s None waits without limit."""
@@ -335,8 +361,12 @@ class Bootloader:
             self._send("WAKEUP")
             interval_end = self._clock() + fwu_settings.WAKEUP_INTERVAL_S
             while True:
+                if limit_s is not None and self._clock() - start >= limit_s:
+                    raise BootTimeout(f"no OK to WAKEUP in {limit_s:g} s")
                 remaining = interval_end - self._clock()
-                line = self._transport.read_line(max(remaining, 0.01))
+                if remaining <= 0:
+                    break
+                line = self._transport.read_line(remaining)
                 if line is None:
                     break
                 line = line.strip()
@@ -348,8 +378,6 @@ class Bootloader:
                         self._out(f"bootloader prompt {self._prompt.strip()} received")
                     self._transport.settle(fwu_settings.SETTLE_S)
                     return
-            if limit_s is not None and self._clock() - start >= limit_s:
-                raise BootTimeout(f"no OK to WAKEUP in {limit_s:g} s")
 
     def command(self, text, timeout=fwu_settings.ANSWER_TIMEOUT_S):
         """Sends a command; returns (output lines, status line)."""
