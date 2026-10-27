@@ -162,7 +162,7 @@ fn a_bad_line_is_answered_with_an_error_and_the_session_continues() {
 
 #[test]
 fn a_new_client_gets_a_fresh_board_and_reset_restarts_it() {
-    let (_server, port) = start(&["--b-fitted", "1"]);
+    let (_server, port) = start(&["--b-fitted", "1", "--b-power-up", "strict"]);
     {
         let mut first = Client::connect(port);
         assert_eq!(first.expect_line(), "#ready 82");
@@ -180,4 +180,19 @@ fn a_new_client_gets_a_fresh_board_and_reset_restarts_it() {
     assert_eq!(second.line_within(SILENCE_MS), None);
     second.send("#reset");
     assert_eq!(second.expect_line(), "#ready 82");
+}
+
+#[test]
+fn the_b_power_up_option_selects_whether_a_request_on_b_is_answered_at_power_up() {
+    // (option, whether IPMB-B answers; the answer leaves on IPMB-B)
+    for (option, answered) in [("strict", false), ("nonstrict", true)] {
+        let (_server, port) = start(&["--b-fitted", "1", "--b-power-up", option]);
+        let mut cm = Client::connect(port);
+        assert_eq!(cm.expect_line(), "#ready 82");
+        cm.send(&format!("B {GET_DEVICE_ID_SEQ4}"));
+        match cm.line_within(SILENCE_MS) {
+            Some(line) => assert!(answered && line.starts_with("B 20 "), "{option}: {line}"),
+            None => assert!(!answered, "{option}"),
+        }
+    }
 }

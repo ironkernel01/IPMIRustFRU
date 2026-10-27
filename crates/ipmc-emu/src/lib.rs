@@ -20,7 +20,7 @@
 //!
 //! ```text
 //! cargo run -p ipmc-emu -- replay <file.vec> [options]
-//! cargo run -p ipmc-emu -- serve [--port N] [--b-fitted 0|1] [--policy alternate|arrival] [--trace]
+//! cargo run -p ipmc-emu -- serve [--port N] [--b-fitted 0|1] [--policy alternate|arrival] [--b-power-up strict|nonstrict] [--trace]
 //! cargo run -p ipmc-emu -- sdr
 //! cargo run -p ipmc-emu -- help
 //! ```
@@ -76,7 +76,8 @@
 //! |---|---|
 //! | `--b-fitted 0\|1` | IPMB-B is built in (default `IPMB_BUS_B_ENABLE`) |
 //! | `--b-enabled 0\|1` | IPMB-B starts enabled, as after the Chassis Manager's Set IPMB State (default 0, the power-up state; needs `--b-fitted 1`) |
-//! | `--policy alternate\|arrival` | response bus policy (default `IPMB_TX_POLICY`) |
+//! | `--policy alternate\|arrival` | response bus policy (default from `IPMB_COMPLIANCE`: `arrival` for NonStrict, `alternate` for Strict) |
+//! | `--b-power-up strict\|nonstrict` | IPMB-B before the first Set IPMB State that sets it: `strict` drops its frames (Rule 4.1.1-4), `nonstrict` answers requests that arrive on IPMB-B on IPMB-B (default from `IPMB_COMPLIANCE`: `nonstrict` for NonStrict, `strict` for Strict; `--b-enabled 1` ends the window at once) |
 //! | `--fail-every N` | every Nth transmission is reported failed, so the Link resends it on the other bus (default 0, none) |
 //! | `--trace` | print every received and transmitted frame and every trace line to stdout |
 //! | `--quiet` | print only a one-line summary |
@@ -97,8 +98,9 @@
 //! in `defs.rs`) and listens on 127.0.0.1. `--port N` sets the TCP port (default
 //! `IPMC_EMU_PORT` in `defs.rs`; 0 picks a free port). The first stdout line is `listening
 //! 127.0.0.1:<port>`. One client at a time is served; a new client starts a fresh board in its
-//! start-up state, as a power cycle (IPMB-B disabled until Set IPMB State, Rule 4.1.1-4).
-//! `--b-fitted` and `--policy` are as for replay.
+//! start-up state, as a power cycle (IPMB-B disabled until Set IPMB State, Rule 4.1.1-4; with
+//! `--b-power-up nonstrict` its requests are answered until then).
+//! `--b-fitted`, `--policy` and `--b-power-up` are as for replay.
 //!
 //! The protocol is ASCII, one message per line (LF or CR LF), at most `IPMC_EMU_VECTOR_LINE_MAX`
 //! characters. Frame bytes are hex, one or two digits each, separated by spaces, read by the one

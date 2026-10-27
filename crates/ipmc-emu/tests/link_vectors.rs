@@ -7,7 +7,7 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::Context;
 use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb;
-use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
+use ipmc_core::link::{BusMode, IpmbBPowerUp, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::NoTrace;
 
@@ -25,6 +25,7 @@ fn link(policy: TxPolicy) -> Link {
         LinkConfig {
             b_fitted: true,
             tx_policy: policy,
+            b_power_up: IpmbBPowerUp::Strict,
             requests_allowed: false,
         },
         &addr::resolve(0x7F),

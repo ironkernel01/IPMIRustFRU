@@ -129,6 +129,8 @@ pub struct BusSummary {
     pub rx_ok: u32,
     /// Frames dropped because the bus was disabled or not built in.
     pub unavailable: u32,
+    /// Frames accepted on IPMB-B before the first Set IPMB State that sets it.
+    pub power_up_window: u32,
     pub replays: u32,
     pub tx_ok: u32,
     pub tx_fail: u32,
@@ -403,11 +405,12 @@ impl fmt::Display for ReplayReport {
         for b in &self.link.buses {
             writeln!(
                 f,
-                "IPMB-{}: rx ok {}, unavailable {}, replays {}, tx ok {}, tx fail {}, resends {}, \
+                "IPMB-{}: rx ok {}, unavailable {}, power-up window {}, replays {}, tx ok {}, tx fail {}, resends {}, \
                  tx dropped {}",
                 b.bus.name(),
                 b.rx_ok,
                 b.unavailable,
+                b.power_up_window,
                 b.replays,
                 b.tx_ok,
                 b.tx_fail,
@@ -555,6 +558,7 @@ pub fn replay(
         let c = link.counters(summary.bus);
         summary.rx_ok = c.rx_ok;
         summary.unavailable = c.bus_unavailable;
+        summary.power_up_window = c.rx_power_up_window;
         summary.replays = c.replays;
         summary.tx_ok = c.tx_ok;
         summary.tx_fail = c.tx_fail;
@@ -569,6 +573,7 @@ fn empty_bus(bus: Bus) -> BusSummary {
         bus,
         rx_ok: 0,
         unavailable: 0,
+        power_up_window: 0,
         replays: 0,
         tx_ok: 0,
         tx_fail: 0,

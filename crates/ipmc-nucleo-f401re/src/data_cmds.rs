@@ -112,7 +112,7 @@ const _: () = assert!(
 /// SDR_HEAD, SDR_ROW -- the SENSORS SDR header line (85: owner, counts, reservation) and one
 /// record row (`  record 65535: sensor 255 type FFh event/reading FFh, 255 bytes, "` + the ID
 /// string of at most 16 bytes + `"`, CR LF = 100, rounded up to 128). The repository holds at
-/// most `RECORD_COUNT_MAX` (9) records.
+/// most `RECORD_COUNT_MAX` (15 with the analog sensors) records.
 const SDR_HEAD: usize = 96;
 const SDR_ROW: usize = 128;
 const _: () = assert!(

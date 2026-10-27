@@ -22,7 +22,7 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::Context;
 use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb::{self, NETFN_APP, NETFN_GROUP_EXT, NETFN_SE, NETFN_STORAGE};
-use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
+use ipmc_core::link::{BusMode, IpmbBPowerUp, Link, LinkConfig, TxPolicy};
 use ipmc_core::trace::NoTrace;
 use ipmc_fru::FruStore;
 use std::collections::BTreeMap;
@@ -298,6 +298,7 @@ fn every_captured_request_gets_the_documented_answer() {
         LinkConfig {
             b_fitted: true,
             tx_policy: TxPolicy::Arrival,
+            b_power_up: IpmbBPowerUp::Strict,
             requests_allowed: false,
         },
         &resolved,

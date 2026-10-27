@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 10-26-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 10-27-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -85,7 +85,7 @@ The Google Slides reference copies wait for the Drive folder (`diagrams/drive-co
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -145,7 +145,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -191,7 +191,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -205,8 +205,8 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-001 | Answer the Tier-1 mandatory commands of Tables 10.1.1-1 and 10.1.2-1; every other command answers C1h | Rules 4.2-2, 4.1.1-16 | `ipmc-core/src/commands.rs` |
 | FR-002 | Answer Broadcast Get Device ID (general-call 00h before the frame) at the own address only | IPMI 20.9 | `link.rs` `on_frame` |
 | FR-003 | FRU Device ID other than 0 answers C9h (Get FRU Address Info ignores the ID when a physical address key is given) | Rules 4.2-3, 4.1.1-17 | `cmd/mod.rs` `check_fru_device_id` |
-| FR-004 | Power-up bus state: IPMB-A enabled, IPMB-B isolated until Set IPMB State | Rule 4.1.1-4 | `link.rs` `BusPair::power_up` |
-| FR-005 | Accept requests on both buses; alternate transmissions between enabled buses | Rules 4.1.1-5, 4.1.1-6 | `link.rs` `choose_tx_bus` |
+| FR-004 | Power-up bus state: IPMB-A enabled, IPMB-B isolated until Set IPMB State; with `IPMB_COMPLIANCE` `NonStrict` (default) a request that arrives on IPMB-B before the first Set IPMB State that sets IPMB-B is answered on IPMB-B and the bus state does not change, with `Strict` IPMB-B drops its frames | Rules 4.1.1-4, 4.1.8-1, 4.1.8-2, 9.3-10 (deviation: owner decision 10-27-2026) | `link.rs` `BusPair::power_up`, `Link::b_window_open` |
+| FR-005 | Accept requests on both buses; alternate responses (`Strict`; `NonStrict` answers on the request's bus) | Rules 4.1.1-5, 4.1.1-6 | `link.rs` `choose_tx_bus` |
 | FR-006 | Resend a failed transmission on the other bus, at most `IPMB_TX_RETRIES` times | Rule 4.1.1-7 | `link.rs` `on_tx_result` |
 | FR-007 | Refuse a Set IPMB State that leaves no bus enabled (CCh) | Rule 4.1.8-3 | `link.rs` `plan_ipmb_state` |
 | FR-008 | Bus state changes only by Set IPMB State or a persistent local fault | Rule 9.3-10 | `link.rs`, `ipmb_link.rs` |
@@ -256,7 +256,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -335,7 +335,7 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
   the STM32 I2C master state machine; the hardware master stays available behind
   `IPMB_MASTER_MODE`.
 - The response bus is chosen at first transmission (`Link::next_tx`), not at queue time, so
-  alternation follows the frames really handed to a driver, resends included.
+  under `Strict` alternation follows the frames really handed to a driver, resends included.
 - The duplicate cache (`dupcache.rs`) is keyed by the exact request, so a retry runs no handler and a
   retried Write FRU Data or Set IPMB State takes effect once.
 - Set IPMB State uses a hand-off (`PendingIpmbState`). The handler cannot reach the Link; it
@@ -375,7 +375,7 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -450,7 +450,7 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -473,8 +473,8 @@ Each define has the type its consumers need:
 | wire or register value of a fixed width | `u8`, `u16` | `IPMB_CM_ADDR8`, `IPMB_GA_FORCED`, `IPMC_DEVICE_ID`, `IPMC_PRODUCT_ID`, `IPMC_EMU_PORT` |
 | time, rate, frequency, other number | `u32` | `IPMB_I2C_HZ`, `IPMC_SENSOR_PERIOD_MS`, `IPMC_MANUFACTURER_ID` |
 | signed number | `i32` | the `IPMC_TEMP_*_C` thresholds and `IPMC_SIM_TEMP_C` |
-| text | `&str` | `IPMC_FW_NAME`, the FRU strings, the SDR ID strings |
-| choice between alternatives | enum | `MasterMode`, `TxPolicy`, `StrapSource`, `Source`, `TraceLevel` |
+| text | `&str` | `IPMC_FW_NAME`, the FRU strings, the SDR ID strings; six FRU strings have `_T1`, `_T2`, `_T3` variants that `IPMC_TIER` selects |
+| choice between alternatives | enum | `MasterMode`, `IpmbCompliance`, `StrapSource`, `Source`, `TraceLevel` |
 
 A define that names an earlier one is an expression of it (`pub const B: usize = A;`). Because
 the types state each define's kind, a wrong type or a value outside its type fails to compile at the
@@ -511,7 +511,7 @@ decision 24).
 | `IPMB_I2C_HZ` | 100000 | IPMB clock, STANDARD-MODE |
 | `IPMB_I2C_FAST_HZ` | 400000 | IPMB FAST-MODE clock (Rule 4.1.1-4.4; Tier-3, entered with the Set IPMB State speed byte); fixed at 400000, the hardware master derives its CCR and TRISE from it (RM0368 18.6.8, 18.6.9) |
 | `IPMB_MSG_MAX` | 32 | whole frame, rsSA to the second checksum |
-| `IPMB_TX_POLICY` | `TxPolicy::Alternate` | response bus: alternate (Rule 4.1.1-6) or `TxPolicy::Arrival`, the request's bus |
+| `IPMB_COMPLIANCE` | `IpmbCompliance::NonStrict` | `Strict`: VITA 46.11 as written; IPMB-B ignores every frame until a Set IPMB State enables it (Rules 4.1.1-4, 4.1.8-1) and responses alternate between IPMB-A and IPMB-B when both are enabled (Rule 4.1.1-6). `NonStrict`: until the first Set IPMB State that sets IPMB-B a request that arrives on IPMB-B is answered on IPMB-B (the IPMB-B state and the IPMB Link sensor still read isolated), and every response goes back on the bus its request arrived on. In both, the IPMC's own requests and events alternate buses and a failed transmission is resent on the other bus (Rule 4.1.1-7). `LinkConfig::from_defs` derives `TxPolicy` (`Alternate` / `Arrival`) and `IpmbBPowerUp` (`Strict` / `NonStrict`) from it; the emulator options `--policy` and `--b-power-up` override them one by one. The conformance case `LINK-ALTERNATION` fails under `NonStrict` (section 10.2) |
 | `IPMB_CM_ADDR8` | 20h | Chassis Manager address; only guarded, no code reads it (responses go to each request's rqSA) |
 | `IPMB_DUP_CACHE` | 64 | duplicate-cache entries (8..=64) |
 | `IPMB_DUP_WINDOW_MS` | 3000 | retry window: covers 11 attempts of 250 ms, below the 3.846 s sequence reuse of the captured Chassis Manager |
@@ -562,7 +562,8 @@ decision 24).
 | `IPMC_FRU_PAUSE_WAIT_MS` | 40 | longest wait for an IPMB slave to go idle before an erase |
 | `IPMC_URGENT_LINK_WAIT_MS` | 250 | longest wait of the urgent save before a Cold Reset for the link to hold no accepted request and no untransmitted response (228..=1000): longer than the 227 ms response deadline, so an accepted request is answered first. `IPMC_RESET_WAIT_MS` must exceed it plus `IPMC_FRU_PAUSE_WAIT_MS` plus 500 ms, the DS10086 Table 45 sector erase maximum (16 KB sector) |
 | `IPMC_PAYLOAD_MODES` | 3 | payload operational modes this payload supports, bit n = mode n (modes 0..=14, bit 0 set, bit 15 clear): 3 is modes 0 and 1. The Payload Mode sensor SDR record (sensor 7, Tier-3) carries it as its reading and assertion masks |
-| `IPMC_SDR_*_NAME` | strings | SDR ID strings, 2..=16 bytes (locator at most 6); `IPMC_SDR_PAYLOAD_MODE_NAME` names sensor 7 (Tier-3 only) |
+| `IPMC_SDR_*_NAME` | strings | SDR ID strings, 2..=16 bytes (locator at most 6); `IPMC_SDR_PAYLOAD_MODE_NAME` names sensor 7 (Tier-3 only); `IPMC_SDR_DIE_TEMP_NAME` names the die temperature analog sensor, the rails use `IPMC_RAILn_NAME` |
+| `IPMC_SDR_ANALOG_SENSORS`, `IPMC_SDR_ANALOG_FIRST`, `IPMC_SDR_RAIL_SPAN_PCT`, `IPMC_RAIL_COUNT`, `IPMC_TEMP_NOMINAL_C` | `true`, 8, 170, 5, 25 | publish the rails and the die temperature as analog sensors with Full SDR records (numbers from 08h, after the mandatory sensors; section 9.5); the board rail table length (a guard in `board_sensors.rs` checks it); the nominal die temperature of the temperature sensor |
 
 ### Console, clock, LED, sensors and emulator
 
@@ -627,7 +628,7 @@ Pin assignments are not in `defs.rs`: they live in the owning board-support modu
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -828,6 +829,8 @@ refused with `BusNotFitted`; STANDARD-MODE is always accepted) and `Link::set_ip
 it. `plan_ipmb_state` and `plan_ipmb_speed` share one loop, `plan_per_bus`. The driver owner
 reads `bus_state(bus).speed` and applies it between transfers (section 10.7).
 
+The IPMB-B power-up window (`IPMB_COMPLIANCE`, `IpmbBPowerUp`, owner decision 10-27-2026): VITA 46.11 Rule 4.1.1-4 starts an IPMC that supports IPMB-B with IPMB-A enabled and IPMB-B disabled, Rule 4.1.8-1 lets it send only on IPMB-A after power-up or a cold reset, and Rule 4.1.8-2 lets a requester use only IPMB-A for a target until it knows that the target supports IPMB-B. `IpmbBPowerUp::Strict` (`IpmbCompliance::Strict`) is the rule as written: `on_frame` drops every frame on IPMB-B (`bus_unavailable`) until a Set IPMB State gives IPMB-B Local Control. `IpmbBPowerUp::NonStrict` (`IpmbCompliance::NonStrict`, the default) arms a window at power-up and after every Warm or Cold Reset when IPMB-B is fitted and the hardware address is usable (`Link::b_power_up_window`). While `Link::b_window_open` is true (the window is armed, IPMB-B is still isolated and has no local fault) a request that arrives on IPMB-B is accepted and carries a window mark (`Pending::window`, then `EgressFrame::window`, and the duplicate-cache entry stored for it) to its response. The request, or a response matched by the requester, is counted in `BusCounters::rx_power_up_window`; a frame that fails to parse is not. `next_tx` sends a marked response on IPMB-B whatever the `TxPolicy` says while IPMB-B is still in the window or has become enabled (`window_response_on_b`), so the Set IPMB State that ends the window, and any request accepted before it, is answered on the bus it arrived on; after an explicit Override or a local fault of IPMB-B a marked response goes by the policy, on IPMB-A. A retry of a marked request that arrives on IPMB-B is answered from the cache on IPMB-B in the same way. A failed transmission on IPMB-B is resent on IPMB-A. The bus state does not change: IPMB-B stays isolated, the IPMB Link sensor reports it so (Rule 9.3-10), and the IPMC sends nothing else on IPMB-B (no requests, no events, no responses to IPMB-A requests). The first Set IPMB State that sets IPMB-B (any value except FFh, no change) ends the window for good, so an explicit Override is honoured strictly; a Set IPMB State that only changes IPMB-A, and one that the plan refuses, leave the window open. A recorded local fault of IPMB-B closes it for good as well: clearing the fault does not reopen it, and only the next Warm or Cold Reset arms it again. The window departs from Rules 4.1.1-4 and 4.1.8-1 for those responses only. Under `NonStrict` the `TxPolicy` is `Arrival` as well: every response goes back on the bus of its request (a departure from Rule 4.1.1-6 for responses only); `next_request_tx`, which chooses the bus of the IPMC's own requests and events, keeps alternating, and the resend on the other bus after a failed transmission (Rule 4.1.1-7) is the same in both settings. The conformance case `LINK-ALTERNATION` (Rule 4.1.1-6) fails under `NonStrict` by design.
+
 `crates/ipmc-core/src/requester.rs` - the IPMB requester, the one request this IPMC sends at a
 time. A Tier-1 IPMC sends none (Rule 7-4); a Tier-2/3 IPMC is an Event Generator (Rule 7-3) and
 its extension calls `submit(&Request, now_ms)`, which builds the frame (rqSA own address, rqLUN 0,
@@ -937,10 +940,17 @@ Tier rules (section 9.6).
 `crates/ipmc-core/src/sdr.rs` - `SdrRepository`: eight records (nine at Tier-3) built once from
 the `IPMC_SDR_*_NAME` strings and the IPMB address, record IDs 0..=7 (0..=8 at Tier-3, section
 9.5), the reservation counter (`reserve`, `reservation_valid`), `resolve` (0000h first, FFFFh
-last), `next_id`, `describe` and `locator_record_id` (7; 8 at Tier-3). `sensor_count(tier)` is 7,
-or 8 with the Payload Mode sensor (sensor 7) at Tier-3, and `record_count(tier)` one more; the
-tables are sized for the most (`SENSOR_COUNT_MAX`, `RECORD_COUNT_MAX`) and the records after the
-locator stay unused below Tier-3. At Tier-3 the FRU State record adds M5 and the IPMB Link
+last), `next_id`, `describe` and `locator_record_id` (7; 8 at Tier-3). `mandatory_count(tier)` is 7,
+or 8 with the Payload Mode sensor (sensor 7) at Tier-3; the tables are sized for the most
+(`SENSOR_COUNT_MAX`, the mandatory sensors and the analog ones; `RECORD_COUNT_MAX`) and the records
+after the locator stay unused below Tier-3. `SdrRepository::with_analog` inserts the Full Sensor
+Records of the analog sensors between the compact records and the locator (the locator keeps the
+last record and takes the new sensor count as its ID); `Context::new` has none and
+`Context::with_analog` takes them. The hook is `analog::AnalogSensors` (`count`, `record`, `read`),
+the pattern of `ext::Extension`: `ipmc-core` decides nothing about a rail, and `ipmc-sensors`
+`analog.rs` implements it (section 6.4). `Context::read_sensor_at` answers the analog numbers
+(from `analog::ANALOG_FIRST`) through `read`, and `EventEnables::power_up_with_analog` gives
+them events off and masks 0000h. At Tier-3 the FRU State record adds M5 and the IPMB Link
 record adds the 400 kHz states (section 9.6). The file header lists every place the records differ
 from the captured live IPMC and why. Sensor initialization, sensor capabilities, the event masks
 and the locator's global initialization and device capabilities follow the Tier (section 9.6).
@@ -952,6 +962,7 @@ and the locator's global initialization and device capabilities follow the Tier 
 `encode_payload_test_status` (not in progress), and at Tier-3 `encode_payload_mode` (sensor 7,
 four bytes) over `PayloadMode` (current mode, previous mode, `TransitionStatus`; modes 0..=14).
 `encode_link` sets the 400 kHz bits 4 and 5 of the link state from `LinkBus::fast`.
+`encode_threshold_reading` writes the three data bytes of an analog sensor (value, status, comparison bits).
 `apply_event_enable` is the one place that writes status bit 7. `LocalStatus` is the 3-bit IPMB local status of Table 10.2.2-1.
 
 `crates/ipmc-core/src/fru_state.rs` - `FruMachine`, pure: `step(now_ms, inputs)` makes at most one
@@ -992,6 +1003,12 @@ core never depends on it.
 | `src/switches.rs` | `LogState` (the capture log, the IPMI console trace switch, the I2C trace switch), `TraceWhat`, and the `Display` types `LogLine` and `SwitchLines` for the status lines |
 
 ### 6.4 `ipmc-sensors`: sensors and board I/O
+
+`crates/ipmc-sensors/src/analog.rs` publishes each rail and the die temperature as an IPMI analog
+sensor: the Full Sensor Record (conversion, thresholds, units), the reading and the comparison bits,
+computed from the board rail table and the defs.rs rail and temperature defines beside the
+measurement definitions (section 9.5 lists the record). `BoardAnalog` implements the
+`ipmc_core::analog::AnalogSensors` hook.
 
 `crates/ipmc-sensors/src/board_sensors.rs` is the place to start: it lists every value the board
 measures and how each Tier-1 reading is built. FRU Voltage is good when every rail of the board
@@ -1214,7 +1231,7 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1374,7 +1391,7 @@ while AL is clear. `Tier3::poll` drops a deactivation request in any state but M
 | NetFn / Cmd | Command | Tier | What it does | Switches |
 |---|---|---|---|---|
 | 04h / 28h | Set Sensor Event Enable | 3 | Request: sensor number, byte 2, optional assertion and deassertion masks (two bytes each, missing bytes read 0); C7h unless 2 to 6 bytes; CBh for a sensor without an SDR record; CCh for action 11b. Byte 2 bit 7 switches the sensor's events on or off, bit 6 is accepted and ignored, bits 5:4 select none, enable or disable for the masks. A bit the sensor's SDR record does not offer is masked off without an error. | `IPMC_TIER` |
-| 04h / 29h | Get Sensor Event Enable | 3 | Request: sensor number (C7h unless one byte, CBh for no record). Response: byte 2 (bit 7 events enabled, bit 6 scanning, always 1), assertion mask, deassertion mask. | `IPMC_TIER` |
+| 04h / 29h | Get Sensor Event Enable | 3 | Request: sensor number (C7h unless one byte, CBh for no record; the analog sensors 08h.. count as records and read events off, masks 0000h; Set accepts them and changes nothing). Response: byte 2 (bit 7 events enabled, bit 6 scanning, always 1), assertion mask, deassertion mask. | `IPMC_TIER` |
 
 
 #### System Event Log
@@ -1935,7 +1952,7 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1972,7 +1989,7 @@ flash and, after a software reset, the request sequence words described below.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2008,7 +2025,7 @@ performs the reset.
    start-up, so a request after the restart cannot repeat a sequence number the Event Receiver saw
    inside T9.
 5. Everything else restarts as at power-up: link, context, sensors and the extension's state
-   (IPMB-B is isolated again until Set IPMB State), and the FRU image loads from the flash log.
+   (IPMB-B is isolated again until Set IPMB State; with `IPMB_COMPLIANCE` `NonStrict`, IPMB-B fitted and a usable address the IPMB-B power-up window is armed again), and the FRU image loads from the flash log.
 
 ```mermaid
 sequenceDiagram
@@ -2040,7 +2057,7 @@ emulator models the board.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2056,7 +2073,7 @@ FRU save runs at once while it is pending. The owner (`IpmbLink::warm_reset`, or
 `service_reset`) then:
 
 1. builds a new Link with `Link::restarted`: the same configuration and address, the power-up bus
-   state (IPMB-A Local Control, IPMB-B isolated until the next Set IPMB State, both buses back at
+   state (IPMB-A Local Control, IPMB-B isolated until the next Set IPMB State (with `NonStrict`, IPMB-B fitted and a usable address the IPMB-B power-up window is armed again), both buses back at
    100 kHz, Rule 4.1.1-4), empty queues and duplicate cache, and the request sequence state
    carried over so no sequence number is reused inside T9 (the requester is rebuilt with it);
 2. keeps a start-up fault of a bus, so a bus that failed at start-up stays disabled;
@@ -2174,7 +2191,7 @@ switch and its mechanism are public code; section 7.2 lists the commands of the 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2270,6 +2287,16 @@ live in `.bss` and not in the flash image.
 
 ### 9.2 FRU 0 image (512 bytes)
 
+The six text fields that name the Tier (board product name, serial and part number; product name,
+part number and serial) carry the Tier of the build: `defs.rs` holds a `_T1`, `_T2` and `_T3` literal of
+each ("VPX Tier-1 IPMC", "VPX Tier-2 IPMC", "VPX Tier-3 IPMC", serials "IK-T1-000001" and so on), and
+`ipmc-defs` `lib.rs` defines the name every consumer reads with the selector `by_tier`, the variant of
+`IPMC_TIER`: the public build is Tier 1, the build with the extension Tier 3 (Tier 2 when
+`defs_tier23.rs` sets it). The string and room guards check all eighteen literals, so a bad variant
+fails every build; the reserved room comes from the selected default. `tools/defs.py` returns the
+Tier-1 variant unless a Tier is passed. The lengths are equal across the Tiers, so the layout below
+holds for each.
+
 | Offset | Size | Content |
 |---:|---:|---|
 | 00h | 8 | Common Header: `01 00 00 01 12 28 00 C4` (version 1; Internal Use, Chassis Info 00h; Board at 1 x 8, Product at 12h x 8, MultiRecord at 28h x 8, checksum) |
@@ -2295,6 +2322,7 @@ less the length of its default string, summed over the area, so an update of a f
 | 4 FRU Temperature | F3h | 00h | 40h | LNC bit 0, LC 1, UNC 3, UC 4, UNR 5 |
 | 5 Payload Test Results | F4h | 00h | 60h (unavailable) | 00h |
 | 6 Payload Test Status | F5h | 00h | 40h | 01h not in progress |
+| 08h..0Dh analog sensors | 02h, 01h | converted count (section 9.5) | 40h; 60h while the source is unavailable | comparison bits of IPMI v2.0 Table 35-15: LNC bit 0, LC 1, UNC 3, UC 4, UNR 5 (the temperature only), bits 7:6 read 1 (so a nominal reading ends in C0h) |
 | 7 Payload Mode (Tier-3) | F7h | NVMRO bit 6, transition status bits 5:4 (00b in progress, 01b complete, 10b failed), previous mode bits 3:0; gDiscrete1 bit 7 reads 0 | 40h | current-mode mask, LS byte (bit n is mode n); a fifth byte holds the MS byte (modes 8..14 in bits 6:0), bit 7 reads 1 |
 
 Status byte (response byte 3) 40h is "scanning enabled"; bit 5 (20h) marks a reading unavailable;
@@ -2311,7 +2339,7 @@ event enable).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2360,9 +2388,41 @@ the sector before the boot.
 | 0007h (Tier-3 only) | 02h compact sensor | sensor 7, Payload Mode: sensor type F7h, event/reading type 6Fh, initialization 03h, capabilities 40h, reading and assertion masks `IPMC_PAYLOAD_MODES`, deassertion mask 0000h, ID string `IPMC_SDR_PAYLOAD_MODE_NAME` |
 | 0007h (0008h at Tier-3) | 12h MC device locator | owner = own IPMB address, global initialisation 01b and device capabilities 0Bh at Tier 1 (section 9.6 for Tier 2 and 3), entity A0h instance 60h, ID string "IPMC" |
 
+With `IPMC_SDR_ANALOG_SENSORS` (the firmware and the emulator pass `ipmc-sensors` `BOARD_ANALOG`) the
+analog sensors follow the compact records:
+
+| Record ID | Type | Content |
+|---:|---|---|
+| 0007h..000Bh (0008h..000Ch at Tier-3) | 01h Full sensor (IPMI v2.0 Table 43-1) | sensors 08h..0Ch, one per rail of the board table (VDDA, 12V payload, 5V, 3V3 payload, +3.3V_AUX), ID strings `IPMC_RAILn_NAME`, sensor type 02h (voltage), unit Volts, unsigned |
+| 000Ch (000Dh at Tier-3) | 01h Full sensor | sensor 0Dh, the die temperature, ID string `IPMC_SDR_DIE_TEMP_NAME`, sensor type 01h, unit degrees C, 2's complement |
+
+Every analog record has the entity and owner of the compact records, sensor initialization 01h
+(scanning on, no events), capabilities 4Fh (auto re-arm, no hysteresis, threshold access fixed and
+unreadable, event message control none), event/reading type 01h (threshold), assertion and
+deassertion events none, linear conversion with B 0, hysteresis 0, and the reading mask bits 12..14 of
+the first two mask words for the comparisons Get Sensor Reading returns (LNC, LC for the rails and
+the temperature; UNC, UC for the rails; UNC, UC and UNR for the temperature). A rail's conversion is
+`y = M x count x 10^-2` volts with M = ceil(nominal mV x `IPMC_SDR_RAIL_SPAN_PCT` / 100 / 2550) (170 %): 8 for 12 V (80 mV per count), 4
+for 5 V, 3 for the 3.3 V rails; the nominal sits near 60 % of the 8-bit range (12 V: 150, 96h). Its
+thresholds are the `IPMC_RAIL_NONCRIT_PCT` and `IPMC_RAIL_CRIT_PCT` windows rounded to a count
+(UNC 9Eh, UC A5h, LNC 8Fh, LC 87h for 12 V), the normal maximum and minimum the non-critical
+window, the upper non-recoverable threshold FFh and the lower one 00h (not defined: the sensor maximum and minimum, so no limit lies inside the range). The temperature has M 1, R
+exponent 0, nominal `IPMC_TEMP_NOMINAL_C`, thresholds `IPMC_TEMP_UNR_C`, `_UC_C`, `_UNC_C`, `_LC_C`,
+`_LNC_C` (lower non-recoverable 80h, the sensor minimum, -128 C), normal maximum and minimum the UNC and LNC. The reading comes
+from the sensor snapshot in millivolts and tenths of a degree, so the bench build shows the
+simulated rails at nominal and the die temperature as measured. The comparison bits
+(`comparison_flags`) compare the returned reading byte with the record's own threshold bytes,
+inclusively (at or above an upper one, at or below a lower one; unsigned for a rail, two's complement
+for the temperature), and byte 4 bits 7:6 read 1 (reserved, Table 35-15). FRU Voltage and FRU
+Temperature (sensors 3 and 4) keep their millivolt and tenth-of-a-degree evaluation, in which a rail
+exactly on a window edge is in range, so they and these bits can differ within half a count of an
+edge (12V payload at 12600 mV reads 9Eh, the UNC byte, while FRU Voltage reads in range).
+
 Get Device SDR Info reports 7 sensors (or 8 records with operation bit 0), and 8 sensors (9
-records) at Tier-3; Get Device Locator Record ID returns the locator's record ID, 0007h (0008h at
-Tier-3). The locator is always the last record.
+records) at Tier-3, plus 6 sensors and 6 records with the analog sensors (13 sensors and 14 records
+at Tier 1; 14 and 15 at Tier-3); Get Device Locator Record ID returns the locator's record ID, 0007h
+(0008h at Tier-3) without the analog sensors and 000Dh (000Eh at Tier-3) with them. The locator is
+always the last record.
 
 ### 9.6 Tier-dependent bytes
 
@@ -2421,7 +2481,7 @@ enables cannot disagree.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2456,7 +2516,10 @@ Source: `diagrams/src/ipmc-software.js`, sheet 2.
 
 `on_frame(bus, frame, now_ms)`:
 
-1. A bus that is disabled or not fitted drops the frame (`BusUnavailable`).
+1. A bus that is disabled or not fitted drops the frame (`BusUnavailable`), except IPMB-B while the
+   power-up window is open (`Link::b_window_open`, `IPMB_COMPLIANCE` `NonStrict`): the frame is
+   accepted, a request carries the window mark to its response, and the request or matched
+   response is counted in `rx_power_up_window`.
 2. A leading 00h (general call) is stripped and the request marked broadcast.
 3. `ipmb::parse`; a parse error is counted per kind; a response is offered to the requester and
    kept when it answers the outstanding request (`rx_answers`), else dropped (a Tier-1 IPMC sends
@@ -2476,7 +2539,12 @@ view in the context and calls `Extension::poll` once.
 `next_tx`: a response handed out for the first time gets its bus now. ALTERNATE prefers the bus
 other than the latest transmission (resends count); ARRIVAL prefers the request's bus; when the
 preferred bus is not enabled the other enabled bus is used. A response whose assigned bus has
-since been disabled moves to the other bus. None when neither bus is enabled. A queued response
+since been disabled moves to the other bus. None when neither bus is enabled. The exception is a
+response to a request accepted on IPMB-B inside the power-up window: it goes out on IPMB-B whatever
+the policy says while IPMB-B is still in the window or has become enabled, and by the policy after
+an explicit Override or a local fault of IPMB-B. Only the head of the queue is handed out, so with
+IPMB-A faulted an unsent response to an IPMB-A request at the head holds back the window responses
+behind it (the existing queue order). A queued response
 always goes first; with none queued, a request that is due goes out on the bus other than the one
 of its own previous transmission (the other enabled bus when that one is disabled), and the same
 frame is handed out until its outcome is reported.
@@ -2491,7 +2559,10 @@ counts every request transmission).
 
 Bus state per bus: `fitted`, `mode` (Isolated or Local Control, the Set IPMB State value) and
 `status` (local fault, `LocalStatus`). A bus is enabled when it is fitted, in Local Control and
-without a local fault.
+without a local fault. The IPMB-B power-up window (`Link::b_window_open`, `IPMB_COMPLIANCE`) is
+not part of the bus state: it lets `on_frame` accept requests on IPMB-B and `next_tx` answer them
+on IPMB-B while IPMB-B is still isolated, and it ends with the first Set IPMB State that sets
+IPMB-B or the first recorded fault of IPMB-B.
 
 ### 10.3 Sensor data, FRU state and FRU persistence
 
@@ -2515,7 +2586,7 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2582,7 +2653,7 @@ the payload off at boot.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2656,7 +2727,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2704,7 +2775,7 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2754,7 +2825,7 @@ saves it after the quiet time.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2806,7 +2877,7 @@ sends at that moment is lost and recovered by the requester's retry.
 | Error | Detection | Reporting | Recovery |
 |---|---|---|---|
 | Bad frame (length, checksum, address bit) | `ipmb::parse` in `on_frame` | `RxErrors` per kind, trace line | dropped; the requester retries |
-| Frame on a disabled bus, not for us, response | `on_frame` | `bus_unavailable`, `not_for_us`, `rx_response` | dropped |
+| Frame on a disabled bus, not for us, response | `on_frame` | `bus_unavailable`, `not_for_us`, `rx_response` | dropped; a request on IPMB-B inside the power-up window is accepted and counted in `rx_power_up_window` once queued |
 | Ingress or egress full | `Fifo::push` | `ingress_full`, `egress_dropped`, `dispatch_errors` | dropped; requester retries |
 | Transmit failure (NACK, busy, stretch, stuck line) | `MasterError` from the master | `tx_fail`, per-kind master counters, trace line | resend on the other bus up to `IPMB_TX_RETRIES` |
 | Arbitration loss | released SDA reads low, or ARLO | `arb_retries` | same-bus retry up to `IPMB_ARB_RETRIES` within the write budget |
@@ -2832,7 +2903,7 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2962,7 +3033,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2973,7 +3044,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 
 | API | Inputs | Output | Notes |
 |---|---|---|---|
-| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy, requests_allowed }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses; `with_first_request_seq` sets the first rqSeq, `next_request_seq` reads it; `restarted(&addr, now_ms)` builds the Link of a Cold or Warm Reset |
+| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy, b_power_up, requests_allowed }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses; `with_first_request_seq` sets the first rqSeq, `next_request_seq` reads it; `restarted(&addr, now_ms)` builds the Link of a Cold or Warm Reset |
 | `on_frame(bus, frame, now_ms)` | bus, whole frame (own address or 00h first), STOP time | `Result<(), FrameDrop>` | main loop only; copies at most `IPMB_MSG_MAX` bytes; never traces |
 | `poll(ctx, ext, now_ms, trace)` | dispatch `Context`, `&mut dyn Extension`, time, trace sink | requests taken | runs handlers (the extension for a command the table lacks); stops when the egress queue is full; steps the requester and calls `ext.poll` |
 | `next_tx()` | | `Option<(Bus, &[u8])>` | response first, else a due request; frame stays handed out until `on_tx_result` |
@@ -3061,7 +3132,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3142,7 +3213,7 @@ named constant in the owning module with its rule beside it.
 3. Run `python -I tools/sync_ipmi_commands.py` so `Documentation/ipmi_commands.md` matches
    (`cargo test` fails until it does).
 4. Add a table-driven test in `ipmc-core/tests/tier1_handlers.rs`; check the replay totals still
-   read match=44 same_cc=42 cc_diff=134 not_implemented=89 (Tier-1 build; the commercial build has its own
+   read match=44 same_cc=61 cc_diff=115 not_implemented=89 (Tier-1 build; the commercial build has its own
    numbers in the private documents), or state why they change.
 
 ### 12.4 Adding an application port command
@@ -3189,7 +3260,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3202,7 +3273,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 
 Source: `diagrams/src/ipmc-software.js`, sheet 4.
 
-### 13.1 Host tests (741 tests in the build with the extension, 689 with `IPMC_TIER23=0`, 10-26-2026)
+### 13.1 Host tests (776 tests in the build with the extension, 723 with `IPMC_TIER23=0`, 10-27-2026)
 
 `Documentation/ipmc_test_coverage.md` lists every test case with its result; this section names what each
 crate covers.
@@ -3212,7 +3283,7 @@ crate covers.
 | `ipmc-core` | codec, address decode, link layer (bus speed, restarted link, the failure lines of a transmission), requester timing, reset gate, Tier rules, FRU state machine including M5, Payload Mode sensor, speed byte per Tier, event enables, extension hook and the power-on check, duplicate cache, queues, byte ring, names, dispatcher, handlers (`tests/tier1_handlers.rs`), Tier-1 link rules, SDR walk, command document in step (`tests/commands_doc.rs`) |
 | `ipmc-app` | line assembler (CR LF, long line, bad byte), every request of the protocol against the test host (`REQUEST_TABLE`), tags, every error code, `WRITE_DISABLED`, the `HELP` listing |
 | `ipmc-log` | capture log (records, wrap, drop order, CSV and trace rows, dump cursor and job, header line, cut lines, trace tee, switch lines) |
-| `ipmc-sensors` | evaluation, power state machine, routing, monitor and the power-request path, payload reset pulse timing, pin claims, LED level, example drivers against mock buses |
+| `ipmc-sensors` | the analog sensors (byte-exact Full records, conversions, thresholds, readings through a real `Context`), evaluation, power state machine, routing, monitor and the power-request path, payload reset pulse timing, pin claims, LED level, example drivers against mock buses |
 | `ipmc-emu` | vector reader, captured frames decode and re-encode byte-identically, replay runs including the Event Receiver role, Cold and Warm Reset rebuild, the flash copy across a power cycle, serve protocol over TCP, command line |
 | `ipmc-fru` | image build, decoder, `verify`, store, the unit field editor (every field, every refusal, a MAC address in a serial), the single-sector flash log including a power cut at every word, the erase of a full sector and the settings byte |
 | `ipmc-menu` | line editor, matching, help, table validation |
@@ -3234,7 +3305,7 @@ pairs.
 
 `ipmc-emu replay` feeds the 309 captured requests of a live Chassis Manager and SBC IPMC (IPMB-A
 and IPMB-B on one time base). With IPMB-B fitted and enabled and the alternate policy the result is
-match 44, same CC 42, CC differ 134, not implemented 89, every request answered exactly once.
+match 44, same CC 61, CC differ 115, not implemented 89, every request answered exactly once.
 The differences are designed: the capture's IPMC is an earlier-revision controller that answers
 commands the 2022 specification makes not applicable to Tier 1 (C1h here), and the Device ID, FRU
 and SDR contents are this IPMC's own.
@@ -3307,7 +3378,7 @@ The numbered tests are in `Documentation/ipmc_boot_plan.md`, section 13.3.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3384,7 +3455,7 @@ The numbered tests are in `Documentation/ipmc_boot_plan.md`, section 13.3.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3639,7 +3710,7 @@ PWR_EN, PAYLOAD_RST_OUT_N, the ADC, I2C1, I2C3 or the FRU store.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3842,7 +3913,7 @@ sections 13.2 and 13.3):
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-26-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">

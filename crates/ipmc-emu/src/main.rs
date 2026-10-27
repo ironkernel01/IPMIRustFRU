@@ -2,7 +2,7 @@
 //! The behaviour is in the library (see its crate documentation).
 #![forbid(unsafe_code)]
 
-use ipmc_core::link::TxPolicy;
+use ipmc_core::link::{IpmbBPowerUp, TxPolicy};
 use ipmc_core::trace::{NoTrace, Trace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
 use ipmc_emu::replay::{replay, ReplayOptions};
@@ -33,7 +33,11 @@ Options for replay (defaults from defs.rs):
   --b-fitted 0|1      IPMB-B is built in
   --b-enabled 0|1     IPMB-B starts enabled (needs --b-fitted 1; default 0)
   --policy alternate|arrival
-                      response bus policy
+                      response bus policy (default from IPMB_COMPLIANCE)
+  --b-power-up strict|nonstrict
+                      IPMB-B before the first Set IPMB State that sets it: strict drops
+                      its frames, nonstrict answers requests on IPMB-B (default from
+                      IPMB_COMPLIANCE)
   --fail-every N      report every Nth transmission failed (default 0, none)
   --trace             print every frame and trace line
   --quiet             print a one-line summary only
@@ -42,7 +46,10 @@ Options for serve (defaults from defs.rs):
   --port N            TCP port on 127.0.0.1 (default IPMC_EMU_PORT; 0 picks a free port)
   --b-fitted 0|1      IPMB-B is built in
   --policy alternate|arrival
-                      response bus policy
+                      response bus policy (default from IPMB_COMPLIANCE)
+  --b-power-up strict|nonstrict
+                      IPMB-B before the first Set IPMB State that sets it (default from
+                      IPMB_COMPLIANCE)
   --trace             send trace lines to the client, each prefixed by a hash
 
 serve runs the IPMC in real time behind a line protocol (see the ipmc-emu crate
@@ -93,15 +100,22 @@ fn usage_error(message: &str) -> ExitCode {
 }
 
 /// REPLAY_OPTIONS / SERVE_OPTIONS -- the options each command accepts.
-const REPLAY_OPTIONS: [&str; 6] = [
+const REPLAY_OPTIONS: [&str; 7] = [
     "--b-fitted",
     "--b-enabled",
     "--policy",
+    "--b-power-up",
     "--fail-every",
     "--trace",
     "--quiet",
 ];
-const SERVE_OPTIONS: [&str; 4] = ["--b-fitted", "--policy", "--port", "--trace"];
+const SERVE_OPTIONS: [&str; 5] = [
+    "--b-fitted",
+    "--policy",
+    "--b-power-up",
+    "--port",
+    "--trace",
+];
 
 /// Parsed -- every option of `replay` and `serve`; a command reads the fields it accepts.
 struct Parsed {
@@ -150,6 +164,13 @@ fn parse_options(args: &[String], allowed: &[&str], takes_file: bool) -> Result<
                     "alternate" => TxPolicy::Alternate,
                     "arrival" => TxPolicy::Arrival,
                     other => return Err(format!("{arg}: '{other}' is not alternate or arrival")),
+                };
+            }
+            "--b-power-up" => {
+                parsed.config.b_power_up = match value(arg)?.as_str() {
+                    "strict" => IpmbBPowerUp::Strict,
+                    "nonstrict" => IpmbBPowerUp::NonStrict,
+                    other => return Err(format!("{arg}: '{other}' is not strict or nonstrict")),
                 };
             }
             "--fail-every" => parsed.fail_every = number(value(arg)?, arg)?,

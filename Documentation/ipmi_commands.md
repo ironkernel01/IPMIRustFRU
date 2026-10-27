@@ -58,6 +58,14 @@ Get Sensor Reading (04h/2Dh):
 | 6 | F5h | Payload Test Status | &sect;10.2.7, Table 10.2.7-1, p.249 |
 | 7 | F7h | Payload Mode | &sect;10.2.8 (Tier 3 only, not implemented) |
 
+The IPMC also publishes its measured rails and the die temperature as analog sensors with Full
+Sensor Records (IPMI v2.0 Table 43-1), numbers after the mandatory sensors (`IPMC_SDR_ANALOG_SENSORS`):
+
+| Sensor # | Sensor type | Name | Unit |
+|---|---|---|---|
+| 08h..0Ch | 02h | the rail names (`IPMC_RAILn_NAME`) | Volts |
+| 0Dh | 01h | IPMC Die Temp | degrees C |
+
 ## 2. IPMI commands (VITA 46.11 Table 10.1.1-1)
 
 "IPMI ref" is the reference as printed in the VITA table: `1.5:17.1` is

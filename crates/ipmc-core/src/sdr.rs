@@ -1,11 +1,14 @@
 //! sdr.rs - the Device SDR repository of this IPMC and its reservation state.
 //!
 //! Eight records (nine at Tier-3), built once from the IPMC_SDR_*_NAME defines and the IPMB
-//! address: one type 02h compact sensor record for each mandatory sensor 0..6 (VITA 46.11 Table
-//! 10.2-1; plus sensor 7, Payload Mode, at Tier-3, `tier::payload_mode_sensor`) and one type 12h
-//! management controller device locator record (VITA 46.11 Rule 6.2-7). Record IDs run 0..=7 in
-//! that order (0..=8 at Tier-3), so the locator record is the last one and its ID is the sensor
-//! count.
+//! address, plus the Full Sensor Records of the analog sensors a build hands in
+//! (`analog::AnalogSensors`; the firmware and the emulator pass the board's rails and die
+//! temperature, ipmc-sensors `analog.rs`): one type 02h compact sensor record for each mandatory sensor 0..6 (VITA 46.11 Table
+//! 10.2-1; plus sensor 7, Payload Mode, at Tier-3, `tier::payload_mode_sensor`), then the type 01h
+//! analog records, then one type 12h management controller device locator record (VITA 46.11 Rule
+//! 6.2-7). Record IDs run 0..=7 in that order (0..=8 at Tier-3) without analog sensors, so the
+//! locator record is the last one and its ID is the sensor count; with n analog sensors the IDs
+//! run on to the locator at the new sensor count.
 //!
 //! Layouts are from IPMI v2.0 rev 1.1 (E7 markup): Table 43-2 (type 02h), Table 43-8 (type 12h),
 //! section 43.15 (type/length byte); byte numbers below are 0-based from the first byte of the
@@ -33,6 +36,7 @@
 //!   Device SDR bit: bit 5 IPMB Event Generator from Tier-2, bit 2 SEL Device at Tier-3) and
 //!   entity instance 60h where the capture has 00h, 3Dh and 00h.
 
+use crate::analog::{AnalogSensors, ANALOG_COUNT_MAX, ANALOG_FIRST};
 use crate::fru_state::State;
 use crate::identity::{additional_support, DEVICE_IDENTITY};
 use crate::sensor::{
@@ -48,52 +52,59 @@ use crate::sensor::{
 use crate::tier;
 use ipmc_wire::Builder;
 
-/// SENSOR_COUNT_MAX -- the most sensors on FRU 0: sensor numbers 0..=7 (Table 10.2-1; sensor 7,
-/// Payload Mode, is Tier-3 only, `sensor_count`).
-pub const SENSOR_COUNT_MAX: usize = 8;
-/// RECORD_COUNT_MAX -- one compact record per sensor and the locator record, at the most.
+/// MANDATORY_COUNT_MAX -- the most mandatory sensors on FRU 0: sensor numbers 0..=7 (Table
+/// 10.2-1; sensor 7, Payload Mode, is Tier-3 only, `mandatory_count`).
+pub const MANDATORY_COUNT_MAX: usize = 8;
+/// SENSOR_COUNT_MAX -- the most sensors on FRU 0: the mandatory ones and the build's analog
+/// sensors (`ANALOG_COUNT_MAX`); the analog numbers start at `ANALOG_FIRST`, which equals
+/// `MANDATORY_COUNT_MAX`, so a sensor number indexes a table of this size.
+pub const SENSOR_COUNT_MAX: usize = MANDATORY_COUNT_MAX + ANALOG_COUNT_MAX;
+/// RECORD_COUNT_MAX -- one record per sensor and the locator record, at the most.
 pub const RECORD_COUNT_MAX: usize = SENSOR_COUNT_MAX + 1;
+const _: () = assert!(
+    ANALOG_FIRST as usize == MANDATORY_COUNT_MAX,
+    "the analog sensor numbers follow the mandatory ones"
+);
 
-/// sensor_count -- the sensors a Tier-`tier` IPMC has: 7 mandatory ones, 8 with the Payload Mode
-/// sensor at Tier-3.
-pub const fn sensor_count(tier: u32) -> usize {
+/// mandatory_count -- the VITA 46.11 mandatory sensors a Tier-`tier` IPMC has: 7, or 8 with the
+/// Payload Mode sensor at Tier-3 (the analog sensors come after them).
+pub const fn mandatory_count(tier: u32) -> usize {
     if tier::payload_mode_sensor(tier) {
-        SENSOR_COUNT_MAX
+        MANDATORY_COUNT_MAX
     } else {
-        SENSOR_COUNT_MAX - 1
+        MANDATORY_COUNT_MAX - 1
     }
-}
-
-/// record_count -- the SDR records at `tier`: one per sensor and the locator.
-pub const fn record_count(tier: u32) -> usize {
-    sensor_count(tier) + 1
 }
 /// NO_NEXT_RECORD -- the "no next record" value of Get Device SDR (IPMI v2.0 section 33.12).
 pub const NO_NEXT_RECORD: u16 = 0xFFFF;
 
 /// SDR_VERSION -- 51h: sensor model version 1.5, BCD with the LS digit in bits 7:4 (Table 43-2).
-const SDR_VERSION: u8 = 0x51;
+pub const SDR_VERSION: u8 = 0x51;
 /// RECORD_TYPE_COMPACT -- compact sensor record (Table 43-2).
 const RECORD_TYPE_COMPACT: u8 = 0x02;
+/// RECORD_TYPE_FULL -- full sensor record (Table 43-1).
+pub const RECORD_TYPE_FULL: u8 = 0x01;
 /// RECORD_TYPE_MC_LOCATOR -- management controller device locator record (Table 43-8).
 const RECORD_TYPE_MC_LOCATOR: u8 = 0x12;
 /// HEADER_LEN -- record ID (2 bytes), version, type, length (Table 43-2 "RECORD HEADER").
 pub const HEADER_LEN: usize = 5;
-/// ID_LEN_MAX -- the ID string is 16 bytes at most (Tables 43-2 and 43-8).
-const ID_LEN_MAX: usize = 16;
+/// ID_LEN_MAX -- the ID string is 16 bytes at most (Tables 43-1, 43-2 and 43-8).
+pub const ID_LEN_MAX: usize = 16;
 /// COMPACT_FIXED_LEN -- bytes of a compact record before the ID string (Table 43-2: bytes 1..=32).
 const COMPACT_FIXED_LEN: usize = 32;
-/// RECORD_MAX -- the longest record: a compact record with a 16-byte ID string.
-pub const RECORD_MAX: usize = COMPACT_FIXED_LEN + ID_LEN_MAX;
+/// FULL_FIXED_LEN -- bytes of a full record before the ID string (Table 43-1: bytes 1..=48).
+pub const FULL_FIXED_LEN: usize = 48;
+/// RECORD_MAX -- the longest record: a full record with a 16-byte ID string.
+pub const RECORD_MAX: usize = FULL_FIXED_LEN + ID_LEN_MAX;
 
 /// ENTITY_ID_VPX_MODULE -- Entity ID A0h, Front Loading VPX Plug-In Module (VITA Rule 6.4.3-5).
-const ENTITY_ID_VPX_MODULE: u8 = 0xA0;
+pub const ENTITY_ID_VPX_MODULE: u8 = 0xA0;
 /// ENTITY_INSTANCE_DEVICE_RELATIVE -- Entity Instance 60h, the first device-relative instance
 /// (VITA Rule 6.4.3-5; section 6.4.2: IPMCs refer to themselves with device-relative instances).
-const ENTITY_INSTANCE_DEVICE_RELATIVE: u8 = 0x60;
+pub const ENTITY_INSTANCE_DEVICE_RELATIVE: u8 = 0x60;
 /// SENSOR_INIT_SCANNING_ON -- Sensor Initialization byte, bit 0: sensor scanning enabled at
 /// power-up (Table 43-2); the other bits are 0 because no init agent configures the sensors.
-const SENSOR_INIT_SCANNING_ON: u8 = 1 << 0;
+pub const SENSOR_INIT_SCANNING_ON: u8 = 1 << 0;
 /// SENSOR_INIT_EVENTS_ON -- Sensor Initialization byte, bit 1: event generation enabled at
 /// power-up (Table 43-2); set when the IPMC generates events (Tier-2/3).
 const SENSOR_INIT_EVENTS_ON: u8 = 1 << 1;
@@ -183,8 +194,8 @@ const EVENTS_IPMB_LINK_FAST: u16 = 0x0030;
 const EVENTS_PAYLOAD_MODE: u16 = ipmc_defs::IPMC_PAYLOAD_MODES;
 const EVENTS_TEMPERATURE: u16 = (TEMP_FLAG_UNC | TEMP_FLAG_UC | TEMP_FLAG_UNR) as u16;
 
-/// SENSORS -- sensors 0..=6 in number order; the record ID of a sensor equals its number.
-const SENSORS: [SensorDef; SENSOR_COUNT_MAX] = [
+/// SENSORS -- sensors 0..=7 in number order; the record ID of a sensor equals its number.
+const SENSORS: [SensorDef; MANDATORY_COUNT_MAX] = [
     SensorDef {
         number: SENSOR_FRU_STATE,
         sensor_type: SENSOR_TYPE_FRU_STATE,
@@ -279,12 +290,12 @@ const EMPTY_RECORD: Record = Builder::with_len(0);
 
 /// push_id_string -- the type/length byte and the ID string (8-bit ASCII, section 43.15):
 /// 2..=16 bytes, checked when a record is built in a const item.
-const fn push_id_string(record: &mut Record, text: &str) {
+pub const fn push_id_string(record: &mut Record, text: &str) {
     record.push_type_length_ascii(text, 2, ID_LEN_MAX);
 }
 
 /// start_record -- the record header: ID (LS byte first), version, type and a length placeholder.
-const fn start_record(id: u16, record_type: u8) -> Record {
+pub const fn start_record(id: u16, record_type: u8) -> Record {
     let mut record = EMPTY_RECORD;
     record.push_all(&id.to_le_bytes());
     record.push(SDR_VERSION);
@@ -294,7 +305,7 @@ const fn start_record(id: u16, record_type: u8) -> Record {
 }
 
 /// finish_record -- the record length byte: the bytes that follow the header (Table 43-2 byte 5).
-const fn finish_record(mut record: Record) -> Record {
+pub const fn finish_record(mut record: Record) -> Record {
     record.bytes[HEADER_LEN - 1] = (record.len() - HEADER_LEN) as u8;
     record
 }
@@ -353,16 +364,25 @@ const fn event_masks_of(tier: u32, def: &SensorDef) -> (u16, u16) {
     }
 }
 
-/// event_masks -- (assertion, deassertion) event masks of sensor `number` (0..sensor_count(tier))
-/// at `tier`, the values the SDR record carries and the power-up event enables start from
-/// (`event_enable`), and the most the Tier-3 Set Sensor Event Enable handler (extension) lets
-/// a Chassis Manager enable; None for a number the Tier does not have.
+/// event_masks -- (assertion, deassertion) event masks of sensor `number` (a mandatory sensor of
+/// `tier`, or an analog number) at `tier`, the values the SDR record carries and the power-up
+/// event enables start from (`event_enable`), and the most the Tier-3 Set Sensor Event Enable
+/// handler (extension) lets a Chassis Manager enable; the analog sensors send no events, so
+/// theirs are 0000h; None for a number the Tier does not have.
 pub const fn event_masks(tier: u32, number: usize) -> Option<(u16, u16)> {
-    if number < sensor_count(tier) {
+    if number < mandatory_count(tier) {
         Some(event_masks_of(tier, &SENSORS[number]))
+    } else if is_analog_number(number) {
+        Some((0, 0))
     } else {
         None
     }
+}
+
+/// is_analog_number -- `number` lies in the range the analog sensors take (`ANALOG_FIRST` for
+/// `ANALOG_COUNT_MAX` numbers), whether or not a given build publishes all of them.
+pub const fn is_analog_number(number: usize) -> bool {
+    number >= ANALOG_FIRST as usize && number < ANALOG_FIRST as usize + ANALOG_COUNT_MAX
 }
 
 /// compact_record -- the type 02h record of `def` owned by the controller at `owner_address`
@@ -418,11 +438,12 @@ const fn locator_record(id: u16, owner_address: u8, tier: u32) -> Record {
     finish_record(r)
 }
 
-/// build_records -- the records at `tier`: the sensors as record IDs 0..sensor_count, the locator
-/// after them; the unused slots stay empty.
+/// build_records -- the records at `tier`: the mandatory sensors as record IDs 0..mandatory_count,
+/// the locator after them; the unused slots stay empty. `with_analog` inserts the analog records
+/// between the two.
 const fn build_records(owner_address: u8, tier: u32) -> [Record; RECORD_COUNT_MAX] {
     let mut records = [EMPTY_RECORD; RECORD_COUNT_MAX];
-    let count = sensor_count(tier);
+    let count = mandatory_count(tier);
     let mut i = 0;
     while i < count {
         assert!(
@@ -471,12 +492,16 @@ pub struct SensorInfo {
     pub event_type: u8,
 }
 
+/// IDX_FULL_ID_TL -- the ID string type/length byte of a full record (Table 43-1 byte 48).
+const IDX_FULL_ID_TL: usize = FULL_FIXED_LEN - 1;
+
 /// RecordInfo -- a record decoded for the console listing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordInfo<'a> {
     /// Record ID.
     pub id: u16,
-    /// SDR record type (02h compact sensor, 12h management controller device locator).
+    /// SDR record type (01h full sensor, 02h compact sensor, 12h management controller device
+    /// locator).
     pub record_type: u8,
     /// Whole record length in bytes.
     pub length: usize,
@@ -490,9 +515,11 @@ pub struct RecordInfo<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct SdrRepository {
     records: [Record; RECORD_COUNT_MAX],
-    /// The sensors of the Tier this repository describes (`sensor_count`); the records after the
-    /// locator are unused.
+    /// The sensors this repository describes: the Tier's mandatory sensors (`mandatory_count`)
+    /// and the analog ones; the records after the locator are unused.
     sensors: usize,
+    /// The mandatory sensors among them; the analog records follow, then the locator.
+    mandatory: usize,
     /// The latest reservation ID handed out; 0 before the first Reserve Device SDR Repository.
     reservation: u16,
 }
@@ -508,14 +535,44 @@ impl SdrRepository {
     pub const fn for_tier(owner_address: u8, tier: u32) -> SdrRepository {
         SdrRepository {
             records: build_records(owner_address, tier),
-            sensors: sensor_count(tier),
+            sensors: mandatory_count(tier),
+            mandatory: mandatory_count(tier),
             reservation: 0,
         }
+    }
+
+    /// with_analog -- the repository of Tier-`tier` with the Full Sensor Records of `analog`
+    /// between the compact records and the locator (record IDs on from `mandatory_count`, the
+    /// locator last). Sensors beyond `ANALOG_COUNT_MAX`, or a record `analog` does not deliver, end
+    /// the list there.
+    pub fn with_analog(owner_address: u8, tier: u32, analog: &dyn AnalogSensors) -> SdrRepository {
+        let mut repository = SdrRepository::for_tier(owner_address, tier);
+        let mandatory = repository.mandatory;
+        let locator = repository.records[mandatory];
+        let mut added = 0;
+        while added < analog.count().min(ANALOG_COUNT_MAX) {
+            let id = (mandatory + added) as u16;
+            let Some(record) = analog.record(added, owner_address, id) else {
+                break;
+            };
+            repository.records[mandatory + added] = record;
+            added += 1;
+        }
+        let at = mandatory + added;
+        repository.records[at] = locator;
+        repository.records[at].bytes[0..2].copy_from_slice(&(at as u16).to_le_bytes());
+        repository.sensors = at;
+        repository
     }
 
     /// record_count -- the number of records (Get Device SDR Info "SDR count").
     pub const fn record_count(&self) -> usize {
         self.sensors + 1
+    }
+
+    /// mandatory_sensors -- how many sensors are VITA mandatory ones; the analog sensors follow.
+    pub const fn mandatory_sensors(&self) -> usize {
+        self.mandatory
     }
 
     /// sensor_count -- the number of sensors (Get Device SDR Info "sensor count").
@@ -565,16 +622,22 @@ impl SdrRepository {
     pub fn describe(&self, id: u16) -> Option<RecordInfo<'_>> {
         let bytes = self.record(id)?;
         let record_type = *bytes.get(IDX_RECORD_TYPE)?;
-        let (sensor, tl_index) = if record_type == RECORD_TYPE_COMPACT {
-            let sensor = SensorInfo {
-                number: *bytes.get(IDX_SENSOR_NUMBER)?,
-                sensor_type: *bytes.get(IDX_SENSOR_TYPE)?,
-                event_type: *bytes.get(IDX_EVENT_TYPE)?,
+        let (sensor, tl_index) =
+            if record_type == RECORD_TYPE_COMPACT || record_type == RECORD_TYPE_FULL {
+                let sensor = SensorInfo {
+                    number: *bytes.get(IDX_SENSOR_NUMBER)?,
+                    sensor_type: *bytes.get(IDX_SENSOR_TYPE)?,
+                    event_type: *bytes.get(IDX_EVENT_TYPE)?,
+                };
+                let tl_index = if record_type == RECORD_TYPE_FULL {
+                    IDX_FULL_ID_TL
+                } else {
+                    IDX_COMPACT_ID_TL
+                };
+                (Some(sensor), tl_index)
+            } else {
+                (None, IDX_LOCATOR_ID_TL)
             };
-            (Some(sensor), IDX_COMPACT_ID_TL)
-        } else {
-            (None, IDX_LOCATOR_ID_TL)
-        };
         let name_len = usize::from(*bytes.get(tl_index)? & LENGTH_MASK);
         Some(RecordInfo {
             id,
@@ -814,7 +877,7 @@ mod tests {
             assert!(r.describe(records).is_none());
             assert_eq!(r.describe(records - 1).unwrap().record_type, 0x12);
         }
-        assert_eq!(r.record_count(), record_count(ipmc_defs::IPMC_TIER));
+        assert_eq!(r.record_count(), mandatory_count(ipmc_defs::IPMC_TIER) + 1);
     }
 
     #[test]
@@ -906,5 +969,81 @@ mod tests {
         assert_eq!(&two.record(0).unwrap()[18..20], &[0x53, 0x00]);
         assert_eq!(&two.record(1).unwrap()[14..20], &[0x0F, 0, 0, 0, 0x0F, 0]);
         assert_eq!(two.record(7).unwrap()[3], 0x12, "record 7 is the locator");
+    }
+}
+
+#[cfg(test)]
+mod analog_tests {
+    use super::*;
+    use crate::sensor::{EncodeError, SensorSnapshot};
+
+    /// Two analog sensors whose records are one marker byte each after a valid header.
+    struct Two;
+
+    impl AnalogSensors for Two {
+        fn count(&self) -> usize {
+            2
+        }
+
+        fn record(&self, index: usize, owner_address: u8, id: u16) -> Option<Record> {
+            if index >= 2 {
+                return None;
+            }
+            let mut r = start_record(id, RECORD_TYPE_FULL);
+            r.push(owner_address);
+            r.push(0);
+            r.push(ANALOG_FIRST + index as u8);
+            push_id_string(&mut r, "Analog");
+            Some(finish_record(r))
+        }
+
+        fn read(
+            &self,
+            _index: usize,
+            _snapshot: &SensorSnapshot,
+            _out: &mut [u8],
+        ) -> Result<usize, EncodeError> {
+            Err(EncodeError::UnsupportedSensor)
+        }
+    }
+
+    #[test]
+    fn analog_records_sit_between_the_compact_records_and_the_locator() {
+        // (tier, mandatory sensors): the locator moves behind the analog records, its ID follows.
+        for (tier, mandatory) in [(1u32, 7usize), (2, 7), (3, 8)] {
+            let r = SdrRepository::with_analog(0x82, tier, &Two);
+            assert_eq!(r.sensor_count(), mandatory + 2, "tier {tier}");
+            assert_eq!(r.record_count(), mandatory + 3, "tier {tier}");
+            assert_eq!(r.mandatory_sensors(), mandatory);
+            let last = (mandatory + 2) as u16;
+            assert_eq!(r.locator_record_id(), last);
+            assert_eq!(r.resolve(0xFFFF), Some(last));
+            // The walk by next ID visits every ID once and ends at FFFFh.
+            let mut seen = vec![0u16];
+            while r.next_id(*seen.last().unwrap()) != NO_NEXT_RECORD {
+                seen.push(r.next_id(*seen.last().unwrap()));
+            }
+            assert_eq!(seen, (0..=last).collect::<Vec<u16>>(), "tier {tier}");
+            // Compact records unchanged, analog records Full (type 01h) with their IDs, then the
+            // locator (type 12h) with the new ID.
+            for id in 0..mandatory as u16 {
+                assert_eq!(r.record(id).unwrap()[3], RECORD_TYPE_COMPACT);
+            }
+            for n in 0..2u16 {
+                let id = mandatory as u16 + n;
+                let b = r.record(id).unwrap();
+                assert_eq!(u16::from_le_bytes([b[0], b[1]]), id);
+                assert_eq!((b[3], b[5], b[7]), (RECORD_TYPE_FULL, 0x82, 8 + n as u8));
+            }
+            let locator = r.record(last).unwrap();
+            assert_eq!(
+                (locator[3], u16::from_le_bytes([locator[0], locator[1]])),
+                (0x12, last)
+            );
+            // Without the hook the repository is the mandatory one.
+            let plain = SdrRepository::for_tier(0x82, tier);
+            assert_eq!(plain.record_count(), mandatory + 1);
+            assert_eq!(plain.mandatory_sensors(), plain.sensor_count());
+        }
     }
 }

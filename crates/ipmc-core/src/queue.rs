@@ -167,6 +167,10 @@ pub struct EgressFrame {
     /// The link layer has chosen the transmit bus (`bus`); false until `Link::next_tx` hands the
     /// frame out for the first time.
     pub assigned: bool,
+    /// The request was accepted on IPMB-B inside the IPMB-B power-up window
+    /// (`Link::b_window_open`); `Link::next_tx` keeps such a response on IPMB-B while IPMB-B
+    /// stays in the window or becomes enabled.
+    pub window: bool,
 }
 
 impl EgressFrame {
@@ -178,6 +182,7 @@ impl EgressFrame {
         arrival: Bus::A,
         arrival_ms: 0,
         assigned: false,
+        window: false,
     };
 
     /// as_bytes -- the frame as it goes on the wire.
@@ -214,6 +219,18 @@ impl EgressQueue {
     /// `arrival_ms`; the transmit bus is not chosen yet (`assigned` false, `bus` = `arrival`).
     /// Err(Full) counts a drop and keeps every queued frame; Err(FrameTooLong) changes nothing.
     pub fn push(&mut self, frame: &[u8], arrival: Bus, arrival_ms: u32) -> Result<(), QueueError> {
+        self.push_flagged(frame, arrival, arrival_ms, false)
+    }
+
+    /// push_flagged -- `push` for a response whose request was accepted inside the IPMB-B power-up
+    /// window when `window` is true (`EgressFrame::window`).
+    pub fn push_flagged(
+        &mut self,
+        frame: &[u8],
+        arrival: Bus,
+        arrival_ms: u32,
+        window: bool,
+    ) -> Result<(), QueueError> {
         let mut item = EgressFrame::EMPTY;
         let dst = item
             .bytes
@@ -224,6 +241,7 @@ impl EgressQueue {
         item.bus = arrival;
         item.arrival = arrival;
         item.arrival_ms = arrival_ms;
+        item.window = window;
         self.frames.push(item)
     }
 

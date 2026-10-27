@@ -21,6 +21,7 @@ use ipmc_core::sensor::{
     SENSOR_SYSTEM_IPMB_LINK,
 };
 use ipmc_menu::{optional, Args, CmdError, CmdResult};
+use ipmc_sensors::analog::SPECS;
 use ipmc_sensors::board_sensors::{sim_analog, INPUTS, RAILS};
 use ipmc_sensors::drivers::sim::{SimAnalog, SimInputs, SimPower};
 use ipmc_sensors::drivers::stm32f401::adc::{Adc, InitError};
@@ -387,6 +388,16 @@ pub fn cmd_sensors_show(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     ];
     for (label, number, summary) in rows {
         print_reading(dispatch, buses, label, number, summary);
+    }
+    if dispatch.analog.count() > 0 {
+        out!(
+            "Analog sensors (Full SDR records; value x M x 10^R):
+"
+        );
+        for (index, spec) in SPECS.iter().enumerate().take(dispatch.analog.count()) {
+            let number = ipmc_core::analog::ANALOG_FIRST + index as u8;
+            print_reading(dispatch, buses, spec.name, number, "from the sample above");
+        }
     }
     Ok(())
 }

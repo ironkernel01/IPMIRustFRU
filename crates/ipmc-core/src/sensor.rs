@@ -310,6 +310,28 @@ pub fn encode_temperature(snapshot: &SensorSnapshot, out: &mut [u8]) -> Result<u
     write_reading(out, t.available, READING_DISCRETE, t.flags)
 }
 
+/// THRESHOLD_RESERVED_BITS -- byte 4 of a threshold-based reading, bits 7:6: reserved, returned as
+/// 1 (IPMI v2.0 Table 35-15).
+const THRESHOLD_RESERVED_BITS: u8 = 0b1100_0000;
+
+/// encode_threshold_reading -- the reading of a threshold-based analog sensor (IPMI v2.0 Table
+/// 35-15 for the data bytes): byte 2 the converted reading `value`, the status byte, byte 4 the
+/// threshold comparison `flags` (bit 0 at or below lower non-critical, 1 lower critical, 2 lower
+/// non-recoverable, 3 at or above upper non-critical, 4 upper critical, 5 upper non-recoverable;
+/// the `TEMP_FLAG_*` layout) with the reserved bits 7:6 set. `None` marks the reading unavailable
+/// (byte 2 and the comparison bits 0). Writes `READING_LEN` bytes.
+pub fn encode_threshold_reading(
+    value: Option<u8>,
+    flags: u8,
+    out: &mut [u8],
+) -> Result<usize, EncodeError> {
+    let len = write_reading(out, value.is_some(), value.unwrap_or(0), flags)?;
+    if let Some(states) = out.get_mut(READING_LEN - 1) {
+        *states |= THRESHOLD_RESERVED_BITS;
+    }
+    Ok(len)
+}
+
 /// LocalStatus -- IPMB local status code of one bus (Table 10.2.2-1 byte 2, 3 bits per bus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalStatus {
@@ -830,5 +852,28 @@ mod tests {
         );
         assert_eq!(SENSOR_PAYLOAD_MODE, 7);
         assert_eq!(SENSOR_TYPE_PAYLOAD_MODE, 0xF7);
+    }
+
+    #[test]
+    fn a_threshold_reading_carries_the_reserved_bits_set() {
+        // (value, flags, expected bytes): bits 7:6 of byte 4 are returned as 1, also unavailable.
+        let rows: [(Option<u8>, u8, [u8; 3]); 3] = [
+            (Some(150), 0, [150, 0x40, 0xC0]),
+            (Some(20), TEMP_FLAG_UNC | TEMP_FLAG_UC, [20, 0x40, 0xD8]),
+            (None, TEMP_FLAG_UNC, [0, 0x60, 0xC0]),
+        ];
+        for (value, flags, want) in rows {
+            let mut out = [0xEE; READING_LEN];
+            assert_eq!(
+                encode_threshold_reading(value, flags, &mut out),
+                Ok(READING_LEN)
+            );
+            assert_eq!(out, want);
+        }
+        let mut short = [0u8; 2];
+        assert_eq!(
+            encode_threshold_reading(Some(1), 0, &mut short),
+            Err(EncodeError::BufferTooShort)
+        );
     }
 }

@@ -12,12 +12,13 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::{Context, ResetRequest};
 use ipmc_core::ext::{self, Extension};
 use ipmc_core::fru_state::PowerOnRefused;
-use ipmc_core::link::{BusMode, FrameDrop, Link, LinkConfig, LinkError, TxPolicy};
+use ipmc_core::link::{BusMode, FrameDrop, IpmbBPowerUp, Link, LinkConfig, LinkError, TxPolicy};
 use ipmc_core::queue::Bus;
 use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::trace::Trace;
 use ipmc_fru::records::SIZE as FRU_SIZE;
 use ipmc_fru::FruStore;
+use ipmc_sensors::analog::BOARD_ANALOG;
 use ipmc_sensors::board_sensors::sim_analog;
 use ipmc_sensors::drivers::sim::{SimInputs, SimPower};
 use ipmc_sensors::hal::{AnalogSource, DigitalInputs, Divider, Input, PowerSwitch, SourceError};
@@ -42,6 +43,9 @@ pub struct EmuConfig {
     pub b_enabled_at_start: bool,
     /// Response bus policy.
     pub tx_policy: TxPolicy,
+    /// IPMB-B behaviour before the first Set IPMB State that sets it. `b_enabled_at_start` ends
+    /// the window at once (it goes through `Link::set_ipmb_state`).
+    pub b_power_up: IpmbBPowerUp,
     /// Payload power is requested at start-up (IPMC_POWER_AT_BOOT).
     pub power_on_at_start: bool,
 }
@@ -56,6 +60,7 @@ impl EmuConfig {
             b_fitted: link.b_fitted,
             b_enabled_at_start: false,
             tx_policy: link.tx_policy,
+            b_power_up: link.b_power_up,
             power_on_at_start: ipmc_defs::IPMC_POWER_AT_BOOT,
         }
     }
@@ -246,12 +251,13 @@ impl Emulator {
             LinkConfig {
                 b_fitted: config.b_fitted,
                 tx_policy: config.tx_policy,
+                b_power_up: config.b_power_up,
                 requests_allowed: LinkConfig::from_defs().requests_allowed,
             },
             &resolved,
         );
         Self::enable_b_if_configured(&config, &mut link)?;
-        let mut ctx = Context::new(resolved);
+        let mut ctx = Context::with_analog(resolved, &BOARD_ANALOG);
         ctx.set_fru(flash.stored_fru());
         let ext = build_active();
         let board = Board::boot(&config, 0, ext::check_power_on(&ctx, ext.as_ref()))?;
@@ -473,7 +479,7 @@ impl Emulator {
                 trace.line(format_args!("IPMC warm reset"));
             }
             Some(ResetRequest::Cold) => {
-                let mut ctx = Context::new(addr::resolve(self.config.strap));
+                let mut ctx = Context::with_analog(addr::resolve(self.config.strap), &BOARD_ANALOG);
                 ctx.set_fru(self.flash.stored_fru());
                 let ext = (self.make_ext)();
                 let power_on_check = ext::check_power_on(&ctx, ext.as_ref());

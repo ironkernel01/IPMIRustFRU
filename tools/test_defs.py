@@ -31,6 +31,15 @@ class RealFileTests(unittest.TestCase):
         self.assertEqual(values["IPMB_MASTER_MODE"], "BitBang")
         self.assertEqual(values["IPMC_TEMP_LC_C"], -10)
 
+    def test_the_tier_strings_follow_the_tier(self):
+        for tier in (1, 2, 3):
+            values = defs.read(tier=tier)
+            self.assertEqual(values["IPMC_FRU_BOARD_PRODUCT"], f"VPX Tier-{tier} IPMC")
+            self.assertEqual(values["IPMC_FRU_PRODUCT_SERIAL"], f"IK-T{tier}-000001")
+        self.assertEqual(defs.read()["IPMC_FRU_BOARD_PART"], "IK-IPMC-T1-NUC")
+        with self.assertRaises(defs.DefsError):
+            defs.read(tier=4)
+
     def test_every_item_has_a_value_of_a_known_kind(self):
         for name, value in defs.read().items():
             self.assertIsInstance(value, (int, bool, str), name)

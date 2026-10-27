@@ -57,7 +57,7 @@ REPLAY_TIMEOUT_S = 900
 REPLAY_ARGS = ["replay", "vectors/sbc_ab.vec", "--b-fitted", "1", "--b-enabled", "1",
                "--policy", "alternate", "--quiet"]
 # CLAUDE.md gate 9: the replay summary of each build (match, same_cc, cc_diff, not_implemented)
-REPLAY_EXPECTED = {"tier1": (44, 42, 134, 89), "tier23": (66, 46, 197, 0)}
+REPLAY_EXPECTED = {"tier1": (44, 61, 115, 89), "tier23": (78, 64, 167, 0)}
 
 # (title, directory under ROOT, "venv" or "system", test file pattern)
 PYTHON_SUITES = (

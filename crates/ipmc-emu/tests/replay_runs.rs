@@ -5,7 +5,7 @@ mod common;
 use common::load;
 use ipmc_core::fru_state::State;
 use ipmc_core::ipmb;
-use ipmc_core::link::TxPolicy;
+use ipmc_core::link::{IpmbBPowerUp, TxPolicy};
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::{NoTrace, Trace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
@@ -93,14 +93,16 @@ fn tier1_numbers(r: &ReplayReport) {
     // are all 00h meet our 00h padding; the built areas hold room for every field, so the areas
     // and the MultiRecord area sit elsewhere and most chunks differ) and Set IPMB State 1.
     assert_eq!(r.totals.matched, 44);
-    // SameCc 42: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 12,
-    // Inventory Area Info), SDR content (Get Device SDR 16, SDR Info), the sensor readings (8,
+    // SameCc 61: both answer 00h, but identity (Get Device ID), FRU image (Read FRU Data 12,
+    // Inventory Area Info), SDR content (Get Device SDR 35, SDR Info), the sensor readings (8,
     // the emulated sensors differ), the VSO capabilities and the locator record ID differ from
     // the captured board.
-    assert_eq!(r.totals.same_cc, 42);
-    // CcDiff 134: Get Device SDR requests for chunks (10, C9h) or records (124, CBh) this IPMC's
-    // 8-record repository does not have; the captured board answered 00h.
-    assert_eq!(r.totals.cc_diff, 134);
+    assert_eq!(r.totals.same_cc, 61);
+    // CcDiff 115: Get Device SDR requests for chunks (15, C9h) or records (100, CBh) this IPMC's
+    // 14-record repository (7 compact records, 6 analog Full records and the locator) does not
+    // have; the captured board answered 00h. Before the analog sensors (8 records) it was 42 and
+    // 134 (10 and 124).
+    assert_eq!(r.totals.cc_diff, 115);
     // NotImplemented 89: Tier-1 scope returns C1h (PLAN.md section 4): Set Event Receiver and
     // Set Sensor Event Enable (4 + 78), Set SEL Time (1), Set FRU Activation (3), FRU Control
     // Capabilities (1), Get Mandatory Sensor Numbers (2).
@@ -224,16 +226,36 @@ fn without_ipmb_b_the_b_requests_are_not_fitted_not_unanswered() {
     assert!(text.trim_end().ends_with("PASS"));
 }
 
+/// IPMB-B fitted and not enabled at start. The capture's only Set IPMB State (enabling IPMB-B)
+/// arrives on IPMB-B: Strict drops it with the 155 requests on IPMB-B, so all stay unanswered;
+/// NonStrict answers the first 110 in the power-up window, and the Set IPMB State ends the window
+/// and enables IPMB-B for the other 45.
 #[test]
-fn a_disabled_but_fitted_bus_leaves_its_requests_unanswered() {
+fn a_disabled_but_fitted_bus_depends_on_the_power_up_behaviour() {
     if common::capture_missing() {
         return;
     }
-    let (r, _) = run(config(true, false, TxPolicy::Alternate), 0);
-    assert!(!r.passed());
-    assert_eq!(r.totals.bus_not_fitted, 0);
-    assert_eq!(r.totals.unanswered, 155);
-    assert!(r.to_string().contains("FAIL: unanswered 155"));
+    // (behaviour, unanswered, dropped as unavailable, accepted in the window)
+    let cases = [
+        (IpmbBPowerUp::Strict, 155, 155, 0),
+        (IpmbBPowerUp::NonStrict, 0, 0, 110),
+    ];
+    for (power_up, unanswered, unavailable, window) in cases {
+        let cfg = EmuConfig {
+            b_power_up: power_up,
+            ..config(true, false, TxPolicy::Alternate)
+        };
+        let (r, _) = run(cfg, 0);
+        assert_eq!(r.passed(), unanswered == 0, "{power_up:?}");
+        assert_eq!(r.totals.bus_not_fitted, 0);
+        assert_eq!(r.totals.unanswered, unanswered, "{power_up:?}");
+        let b = &r.link.buses[1];
+        assert_eq!(b.unavailable, unavailable, "{power_up:?}");
+        assert_eq!(b.power_up_window, window, "{power_up:?}");
+        if unanswered > 0 {
+            assert!(r.to_string().contains("FAIL: unanswered 155"));
+        }
+    }
 }
 
 #[test]

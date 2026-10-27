@@ -138,6 +138,10 @@ pub const RAILS: [RailDef; RAIL_COUNT] = [
 ];
 
 const _: () = assert!(
+    RAIL_COUNT == ipmc_defs::IPMC_RAIL_COUNT,
+    "the board rail table and IPMC_RAIL_COUNT disagree"
+);
+const _: () = assert!(
     RAIL_COUNT <= ipmc_core::sensor::RAILS_MAX,
     "the board rail table does not fit the snapshot (IPMC_RAILS_MAX)"
 );

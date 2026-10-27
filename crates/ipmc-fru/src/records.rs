@@ -706,7 +706,7 @@ mod tests {
 
     /// Board area at 08h up to and including the C1h byte: version 01h, length 11h (136 bytes),
     /// language 00h, the standard date 000000h (unspecified), "IronKernel" (CAh), "VPX Tier-1
-    /// IPMC" (CFh), "IK-T1-000001" (CCh), "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h. After
+    /// IPMC" (CFh; the Tier digit follows IPMC_TIER, `at_tier`), "IK-T1-000001" (CCh), "IK-IPMC-T1-NUC" (CEh), "ipmc-fru-v1" (CBh), C1h. After
     /// it come 61 bytes of 00h (58 reserved, 3 alignment) and the checksum.
     const BOARD_BODY: [u8; 74] = [
         0x01, 0x11, 0x00, 0x00, 0x00, 0x00, 0xCA, 0x49, 0x72, 0x6F, 0x6E, 0x4B, 0x65, 0x72, 0x6E,
@@ -745,6 +745,22 @@ mod tests {
     /// Internal Use area or a MultiRecord area of their own.
     const SPARE_AT: usize = 0x150;
 
+    /// at_tier -- a Tier-1 area body with the Tier digit of the three string forms ("Tier-1",
+    /// "-T1") set to the build's IPMC_TIER; the strings differ between the builds in that digit
+    /// only, so the bytes stay written out here and the test stays independent of the defines.
+    fn at_tier(body: &[u8]) -> Vec<u8> {
+        let digit = b'0' + ipmc_defs::IPMC_TIER as u8;
+        let mut out = body.to_vec();
+        for at in 0..out.len().saturating_sub(5) {
+            if out[at..].starts_with(b"Tier-1") {
+                out[at + 5] = digit;
+            } else if out[at..].starts_with(b"-T1") {
+                out[at + 2] = digit;
+            }
+        }
+        out
+    }
+
     /// sum8 -- the bytes added modulo 256.
     fn sum8(bytes: &[u8]) -> u8 {
         bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b))
@@ -755,11 +771,11 @@ mod tests {
         let store = FruStore::new();
         assert_eq!(store.read(0, 8).unwrap(), &HEADER);
         for (at, len, body) in [
-            (BOARD_AT, BOARD_LEN, &BOARD_BODY[..]),
-            (PRODUCT_AT, PRODUCT_LEN, &PRODUCT_BODY[..]),
+            (BOARD_AT, BOARD_LEN, at_tier(&BOARD_BODY)),
+            (PRODUCT_AT, PRODUCT_LEN, at_tier(&PRODUCT_BODY)),
         ] {
             let area = store.read(at, len).unwrap();
-            assert_eq!(&area[..body.len()], body);
+            assert_eq!(&area[..body.len()], &body[..]);
             // Reserved room and alignment padding are 00h up to the checksum byte.
             assert!(area[body.len()..len - 1].iter().all(|b| *b == 0));
             assert_eq!(sum8(area), 0);
@@ -910,9 +926,9 @@ mod tests {
             names,
             [
                 &b"IronKernel"[..],
-                b"VPX Tier-1 IPMC",
-                b"IK-T1-000001",
-                b"IK-IPMC-T1-NUC",
+                ipmc_defs::IPMC_FRU_BOARD_PRODUCT.as_bytes(),
+                ipmc_defs::IPMC_FRU_BOARD_SERIAL.as_bytes(),
+                ipmc_defs::IPMC_FRU_BOARD_PART.as_bytes(),
                 b"ipmc-fru-v1"
             ]
         );
@@ -922,7 +938,7 @@ mod tests {
         assert_eq!(product.mfg_minutes(), None);
         let fields: Vec<&[u8]> = product.fields().map(|f| f.data).collect();
         assert_eq!(fields.len(), 7);
-        assert_eq!(fields[1], b"Tier-1 IPMC Reference");
+        assert_eq!(fields[1], ipmc_defs::IPMC_FRU_PRODUCT_NAME.as_bytes());
         assert_eq!(fields[3], b"0.1");
         assert!(fields[5].is_empty() && fields[6].is_empty());
     }

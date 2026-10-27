@@ -104,6 +104,8 @@ struct Entry {
     len: usize,
     frame: [u8; IPMB_MAX_LEN],
     used: bool,
+    /// The request was accepted inside the IPMB-B power-up window (`Link::b_window_open`).
+    window: bool,
 }
 
 impl Entry {
@@ -113,6 +115,7 @@ impl Entry {
         len: 0,
         frame: [0; IPMB_MAX_LEN],
         used: false,
+        window: false,
     };
 
     /// live -- true when the entry holds a response still inside the expiry.
@@ -149,6 +152,12 @@ impl DupCache {
     /// live entry, which counts as an eviction. A response longer than IPMB_MAX_LEN is not
     /// stored (a later repeat runs the handler again).
     pub fn insert(&mut self, key: Key, response: &[u8], now_ms: u32) {
+        self.insert_flagged(key, response, now_ms, false);
+    }
+
+    /// insert_flagged -- `insert` that also records whether the request was accepted inside the
+    /// IPMB-B power-up window (`window_flag`).
+    pub fn insert_flagged(&mut self, key: Key, response: &[u8], now_ms: u32, window: bool) {
         if response.len() > IPMB_MAX_LEN {
             return;
         }
@@ -167,6 +176,15 @@ impl DupCache {
         entry.key = key;
         entry.stored_ms = now_ms;
         entry.used = true;
+        entry.window = window;
+    }
+
+    /// window_flag -- the live entry for `key` was stored for a request accepted inside the
+    /// IPMB-B power-up window.
+    pub fn window_flag(&self, key: &Key, now_ms: u32) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.live(now_ms) && e.key == *key && e.window)
     }
 
     /// slot_for -- index of the entry `insert` overwrites.

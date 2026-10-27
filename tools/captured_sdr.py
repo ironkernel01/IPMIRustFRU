@@ -1398,7 +1398,7 @@ def build_document(redact):
     w("")
     w("This IPMC's records come from `cargo run -q -p ipmc-emu -- sdr` and are decoded by the "
       "same decoder as the captured ones. Its record n (n = 0-6) is compared with captured "
-      "record n, its locator (record 0007h) with captured record 0027h (39). Only fields whose "
+      "record n, its locator (its last record, after the analog sensors' Full records, which have no captured counterpart) with captured record 0027h (39). Only fields whose "
       "bytes differ are listed. The verdict names the side that fails a spec check on that "
       "field (the observation numbers refer to section 5 for the captured side and to the list "
       "below the table for this IPMC); when neither side fails a check, the field is a design "
@@ -1406,7 +1406,7 @@ def build_document(redact):
     w("")
     ours_found = collect([(i, r) for i, (_, r) in enumerate(ours)], lambda i, r: "%04X" % i)
     own_no = {}
-    pairs = [(i, i) for i in range(7)] + [(7, 39)]
+    pairs = [(i, i) for i in range(7)] + [(len(ours) - 1, 39)]
     w("| This IPMC | Captured | Field | Captured raw | This IPMC raw | Verdict |")
     w("|---|---|---|---|---|---|")
     own_checks_used = {}
@@ -1476,7 +1476,7 @@ def build_document(redact):
           "%s." % "; ".join("%s (%s)" % (CHECKS[k][0].rstrip("."), CHECKS[k][1])
                             for k in sorted(other)))
         w("")
-    w("This IPMC has %d records (sensors 0-6 and the locator); the capture has %d records "
+    w("This IPMC has %d records (sensors 0-6, the analog sensors and the locator); the capture has %d records "
       "(sensors 0-%d and the locator)." % (len(ours), nrec, sensors - 1))
     w("")
     return "\n".join(out), cap, redactions[0], nrec, by_type, found, repo, ours_found

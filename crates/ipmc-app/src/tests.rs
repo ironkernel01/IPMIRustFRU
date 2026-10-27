@@ -140,13 +140,22 @@ fn reply(host: &mut FakeHost, line: &str) -> String {
     out.as_str().replace("\r\n", "\n")
 }
 
+/// at_tier -- a text written for the Tier-1 FRU strings ("Tier-1", "-T1") with the Tier digit of
+/// the build's IPMC_TIER (the defaults of ipmc-defs differ between the builds in that digit only).
+fn at_tier(text: &str) -> String {
+    let tier = ipmc_defs::IPMC_TIER;
+    text.replace("Tier-1", &format!("Tier-{tier}"))
+        .replace("-T1", &format!("-T{tier}"))
+}
+
 /// expected -- the answer text of a table row: `{fw}` and `{tier}` stand for the build values,
 /// `{help}` for the HELP table and `{fields}` for the FRU FIELDS lines.
 fn expected(text: &str) -> String {
-    text.replace("{fw}", ipmc_defs::IPMC_FW_NAME)
+    at_tier(text)
+        .replace("{fw}", ipmc_defs::IPMC_FW_NAME)
         .replace("{tier}", &ipmc_defs::IPMC_TIER.to_string())
         .replace("{help}", HELP_TABLE)
-        .replace("{fields}", FIELD_LINES)
+        .replace("{fields}", &at_tier(FIELD_LINES))
         .replace("{devid}", &hex_text(&DEVICE_IDENTITY.response_data()))
 }
 
@@ -991,7 +1000,7 @@ fn set_while_nvmro_is_asserted_is_refused_and_changes_nothing() {
     host.nvmro = false;
     assert_eq!(
         reply(&mut host, "FRU GET BOARD_SERIAL"),
-        "BOARD_SERIAL: IK-T1-000001\nOK\n"
+        at_tier("BOARD_SERIAL: IK-T1-000001\nOK\n")
     );
 }
 
@@ -1027,7 +1036,7 @@ fn a_set_value_is_stored_and_marks_the_store_dirty() {
     // The other serial is untouched.
     assert_eq!(
         reply(&mut host, "FRU GET PRODUCT_SERIAL"),
-        "PRODUCT_SERIAL: IK-T1-000001\nOK\n"
+        at_tier("PRODUCT_SERIAL: IK-T1-000001\nOK\n")
     );
     assert_eq!(ipmc_fru::verify(host.store.bytes()), Ok(()));
 }
@@ -1487,11 +1496,12 @@ fn a_session_prints_as_the_documents_show_it() {
     println!("{text}");
     let (fw, tier) = (ipmc_defs::IPMC_FW_NAME, ipmc_defs::IPMC_TIER);
     let devid = hex_text(&DEVICE_IDENTITY.response_data());
+    let fields = at_tier(FIELD_LINES);
     let want = format!(
         "IPMC application port, {fw} v0.1.0, Tier {tier}, protocol 2. Type HELP or ?.\n\
          APP> HELP\n{HELP_TABLE}OK\n\
          APP> STATUS\n{}\
-         APP> FRU FIELDS\n{FIELD_LINES}OK\n\
+         APP> FRU FIELDS\n{fields}OK\n\
          APP> FRU SET BOARD_SERIAL 1234567890123456789012345\n\
          ERROR TOO_LONG: BOARD_SERIAL is at most 24 characters\n\
          APP> IPMI 06 01\nCC: 00h\nDATA: {devid}\nCOMMAND: App Get Device ID\nOK\n\

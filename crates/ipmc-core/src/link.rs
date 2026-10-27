@@ -10,7 +10,8 @@
 //! ```
 //!
 //! VITA 46.11 rules implemented here: 4.1.1-4 power-up A on / B off; 4.1.1-5 requests accepted
-//! on both buses; 4.1.1-6 transmissions alternate between the enabled buses (the bus is chosen
+//! on both buses; 4.1.1-6 transmissions alternate between the enabled buses (`IPMB_COMPLIANCE` Strict; NonStrict
+//! answers each response on the bus of its request; the IPMC's own requests alternate in both; the bus is chosen
 //! when a response is first handed to a driver, so a resend counts as the latest transmission);
 //! 4.1.1-7 a failed transmit is resent on the other bus; 4.1.5.4.1-5 an invalid hardware
 //! address leaves both buses isolated; 4.1.8-3 a Set IPMB State that isolates both buses is
@@ -137,10 +138,39 @@ impl core::fmt::Display for RequestWhat {
     }
 }
 
-/// TxPolicy -- how the bus of a response is chosen (IPMB_TX_POLICY in ipmc-defs): Alternate
-/// sends successive transmissions on the enabled buses in turn (VITA 46.11 Rule 4.1.1-6),
-/// Arrival sends the response on the bus the request arrived on.
-pub use ipmc_defs::TxPolicy;
+/// TxPolicy -- how the bus of a response is chosen. `LinkConfig::from_defs` derives it from
+/// `IPMB_COMPLIANCE` (Strict: Alternate, NonStrict: Arrival).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TxPolicy {
+    /// Successive transmissions go on the enabled buses in turn (VITA 46.11 Rule 4.1.1-6).
+    Alternate,
+    /// The response goes on the bus the request arrived on.
+    Arrival,
+}
+
+/// IpmbBPowerUp -- IPMB-B behaviour from power-up until the first Set IPMB State that sets
+/// IPMB-B (IPMB-B fitted only; owner decision 10-27-2026): VITA 46.11 Rule 4.1.1-4 (p.27) starts a
+/// Tier-1 or Tier-2 IPMC that supports IPMB-B with IPMB-A enabled and IPMB-B disabled, and the
+/// Chassis Manager enables IPMB-B with Set IPMB State; Rule 4.1.8-1 (p.68) has the IPMC send only
+/// on IPMB-A after power-up or a cold reset; Rule 4.1.8-2 (p.68) has a requester use only IPMB-A
+/// until it knows the target supports IPMB-B; Rule 9.3-10 (p.170) lets the IPMC alter its local
+/// IPMB state only on Set IPMB State or a persistent local fault. `LinkConfig::from_defs` derives
+/// it from `IPMB_COMPLIANCE` (Strict: Strict, NonStrict: NonStrict).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IpmbBPowerUp {
+    /// VITA 46.11 as written: frames received on IPMB-B are dropped until a Set IPMB State gives
+    /// IPMB-B Local Control.
+    Strict,
+    /// Until the first Set IPMB State that sets IPMB-B (any value other than FFh, no change), a
+    /// request that arrives on IPMB-B is accepted and its response is sent on IPMB-B, also when that
+    /// request is the Set IPMB State that ends the window. The bus state does not change: IPMB-B
+    /// stays isolated, the IPMB Link sensor reports it so, and the IPMC sends nothing else on IPMB-B
+    /// (no requests or events, no responses to IPMB-A requests). This departs from Rules 4.1.1-4
+    /// and 4.1.8-1 for those responses only. An explicit Override from Set IPMB State ends the
+    /// window and is honoured strictly; a Warm or Cold Reset reopens it (power-up state). A
+    /// recorded fault of IPMB-B closes it until the next reset.
+    NonStrict,
+}
 
 /// tx_policy_name -- text of a policy for console lines.
 pub const fn tx_policy_name(policy: TxPolicy) -> &'static str {
@@ -157,6 +187,8 @@ pub struct LinkConfig {
     pub b_fitted: bool,
     /// Response bus policy.
     pub tx_policy: TxPolicy,
+    /// IPMB-B behaviour before the first Set IPMB State that sets IPMB-B (`Link::b_window_open`).
+    pub b_power_up: IpmbBPowerUp,
     /// The requester may send requests: Tier 2 and 3 (VITA 46.11 Rule 7-3); a Tier-1 IPMC sends
     /// none (Rule 7-4).
     pub requests_allowed: bool,
@@ -167,7 +199,14 @@ impl LinkConfig {
     pub const fn from_defs() -> LinkConfig {
         LinkConfig {
             b_fitted: ipmc_defs::IPMB_BUS_B_ENABLE,
-            tx_policy: ipmc_defs::IPMB_TX_POLICY,
+            tx_policy: match ipmc_defs::IPMB_COMPLIANCE {
+                ipmc_defs::IpmbCompliance::Strict => TxPolicy::Alternate,
+                ipmc_defs::IpmbCompliance::NonStrict => TxPolicy::Arrival,
+            },
+            b_power_up: match ipmc_defs::IPMB_COMPLIANCE {
+                ipmc_defs::IpmbCompliance::Strict => IpmbBPowerUp::Strict,
+                ipmc_defs::IpmbCompliance::NonStrict => IpmbBPowerUp::NonStrict,
+            },
             requests_allowed: ipmc_defs::IPMC_TIER >= 2,
         }
     }
@@ -281,8 +320,11 @@ pub type BusPair = PerBus<BusState>;
 
 impl PerBus<BusState> {
     /// power_up -- IPMB-A Local Control and enabled, IPMB-B isolated (VITA 46.11 Rule 4.1.1-4),
-    /// fitted only when `b_fitted`. An invalid hardware address (`address_usable` false) leaves
-    /// IPMB-A isolated as well, so neither bus accepts or sends a frame (Rule 4.1.5.4.1-5).
+    /// fitted only when `b_fitted`. The state is the same with `IpmbBPowerUp::NonStrict`: the
+    /// window it opens lives in the Link (`Link::b_window_open`), not in the bus state, so the
+    /// IPMB Link sensor still reports IPMB-B isolated. An invalid hardware address
+    /// (`address_usable` false) leaves IPMB-A isolated as well, so neither bus accepts or sends a
+    /// frame (Rule 4.1.5.4.1-5).
     pub const fn power_up(b_fitted: bool, address_usable: bool) -> BusPair {
         let a_mode = if address_usable {
             BusMode::LocalControl
@@ -526,6 +568,10 @@ pub struct BusCounters {
     pub rx_answers: u32,
     /// Frames that arrived while the bus was disabled or not built in.
     pub bus_unavailable: u32,
+    /// Requests queued and responses matched that arrived on IPMB-B before the first Set IPMB
+    /// State that sets it (`IpmbBPowerUp::NonStrict`); a frame that fails to parse or is dropped
+    /// later is not counted.
+    pub rx_power_up_window: u32,
     /// Valid requests lost because the ingress FIFO was full.
     pub ingress_full: u32,
     /// Frames transmitted successfully.
@@ -551,6 +597,8 @@ struct Pending {
     len: usize,
     bus: Bus,
     arrival_ms: u32,
+    /// Accepted on IPMB-B inside the power-up window (`Link::b_window_open`).
+    window: bool,
 }
 
 impl Pending {
@@ -559,6 +607,7 @@ impl Pending {
         len: 0,
         bus: Bus::A,
         arrival_ms: 0,
+        window: false,
     };
 }
 
@@ -584,6 +633,10 @@ pub struct Link {
     /// Own 8-bit IPMB address; `on_frame` has no Context, so it is copied at start-up.
     own_addr: u8,
     buses: BusPair,
+    /// The IPMB-B power-up window is armed (`IpmbBPowerUp::NonStrict`, IPMB-B fitted, usable
+    /// hardware address) and no Set IPMB State has set IPMB-B yet; `b_window_open` adds the
+    /// condition that IPMB-B is still isolated and healthy.
+    b_power_up_window: bool,
     counters: PerBus<BusCounters>,
     ingress: Fifo<Pending, INGRESS_DEPTH>,
     drops: Fifo<DropRecord, INGRESS_DEPTH>,
@@ -609,7 +662,10 @@ impl Link {
     /// new -- a link in the power-up state: IPMB-A Local Control and enabled, IPMB-B isolated
     /// (VITA 46.11 Rule 4.1.1-4) and fitted only when `config.b_fitted`. `addr` supplies the
     /// own IPMB address; an invalid hardware address (bad parity or GA 0) isolates both buses
-    /// (Rule 4.1.5.4.1-5), so `on_frame` drops everything and nothing is sent.
+    /// (Rule 4.1.5.4.1-5), so `on_frame` drops everything and nothing is sent. With
+    /// `IpmbBPowerUp::NonStrict`, a fitted IPMB-B and a usable address, the IPMB-B power-up window
+    /// is open (`b_window_open`): requests that arrive on IPMB-B are answered on IPMB-B until the
+    /// first Set IPMB State that sets IPMB-B.
     pub const fn new(config: LinkConfig, addr: &AddrInfo) -> Link {
         Self::with_first_request_seq(config, addr, 0, 0, 0)
     }
@@ -630,6 +686,9 @@ impl Link {
             config,
             own_addr: addr.ipmb_address,
             buses: BusPair::power_up(config.b_fitted, addr.usable()),
+            b_power_up_window: matches!(config.b_power_up, IpmbBPowerUp::NonStrict)
+                && config.b_fitted
+                && addr.usable(),
             counters: PerBus {
                 a: BusCounters::ZERO,
                 b: BusCounters::ZERO,
@@ -678,7 +737,10 @@ impl Link {
     // ---- ingress ----
 
     /// on_frame -- the main loop hands in each frame a driver received on `bus`, STOP at `now_ms`.
-    /// 1. A bus that is disabled or not built in drops the frame.
+    /// 1. A bus that is disabled or not built in drops the frame, except IPMB-B while the
+    ///    power-up window is open (`b_window_open`), which accepts it. A request queued that way
+    ///    carries the window mark to its response (`Pending::window`), and the request or
+    ///    matched response is counted in `BusCounters::rx_power_up_window`.
     /// 2. A leading general-call byte 00h is stripped (Broadcast Get Device ID, IPMI v2.0
     ///    section 20.9).
     /// 3. `ipmb::parse` validates it; a response goes to the requester, which keeps it when it
@@ -704,7 +766,8 @@ impl Link {
     }
 
     fn accept(&mut self, bus: Bus, frame: &[u8], now_ms: u32) -> Result<(), FrameDrop> {
-        if !self.buses.get(bus).enabled() {
+        let via_window = !self.buses.get(bus).enabled() && bus == Bus::B && self.b_window_open();
+        if !self.buses.get(bus).enabled() && !via_window {
             let counters = self.counters.get_mut(bus);
             counters.bus_unavailable = counters.bus_unavailable.saturating_add(1);
             return Err(FrameDrop::BusUnavailable);
@@ -724,6 +787,7 @@ impl Link {
         if request.header.is_response() {
             if REQUESTS_BUILT && self.requester.on_response(&request) {
                 counters.rx_answers = counters.rx_answers.saturating_add(1);
+                counters.rx_power_up_window += u32::from(via_window);
                 return Ok(());
             }
             counters.rx_response = counters.rx_response.saturating_add(1);
@@ -746,11 +810,13 @@ impl Link {
         pending.len = body.len();
         pending.bus = bus;
         pending.arrival_ms = now_ms;
+        pending.window = via_window;
         if self.ingress.push(pending).is_err() {
             counters.ingress_full = counters.ingress_full.saturating_add(1);
             return Err(FrameDrop::IngressFull);
         }
         counters.rx_ok = counters.rx_ok.saturating_add(1);
+        counters.rx_power_up_window += u32::from(via_window);
         Ok(())
     }
 
@@ -882,10 +948,16 @@ impl Link {
                 ));
             }
             // The replay answers the retry: the deadline runs from the retry's arrival.
+            let window = pending.window
+                || (pending.bus == Bus::B
+                    && key
+                        .as_ref()
+                        .is_some_and(|key| self.cache.window_flag(key, pending.arrival_ms)));
             self.enqueue(
                 frame.get(..len).unwrap_or(&[]),
                 pending.bus,
                 pending.arrival_ms,
+                window,
             );
             return;
         }
@@ -901,10 +973,19 @@ impl Link {
         match dispatched {
             Some(response) => {
                 if let Some(key) = key {
-                    self.cache
-                        .insert(key, response.as_bytes(), pending.arrival_ms);
+                    self.cache.insert_flagged(
+                        key,
+                        response.as_bytes(),
+                        pending.arrival_ms,
+                        pending.window,
+                    );
                 }
-                self.enqueue(response.as_bytes(), pending.bus, pending.arrival_ms);
+                self.enqueue(
+                    response.as_bytes(),
+                    pending.bus,
+                    pending.arrival_ms,
+                    pending.window,
+                );
             }
             None => self.dispatch_errors = self.dispatch_errors.saturating_add(1),
         }
@@ -1030,8 +1111,12 @@ impl Link {
     /// enqueue -- puts a response frame on the egress queue with the request's arrival bus and
     /// time. The transmit bus is chosen later, in `next_tx`, so ALTERNATE follows the frames
     /// actually handed to a driver (resends included), not the order they were queued in.
-    fn enqueue(&mut self, frame: &[u8], arrival: Bus, arrival_ms: u32) {
-        if self.egress.push(frame, arrival, arrival_ms).is_err() {
+    fn enqueue(&mut self, frame: &[u8], arrival: Bus, arrival_ms: u32, window: bool) {
+        if self
+            .egress
+            .push_flagged(frame, arrival, arrival_ms, window)
+            .is_err()
+        {
             self.dispatch_errors = self.dispatch_errors.saturating_add(1);
         }
     }
@@ -1043,6 +1128,26 @@ impl Link {
             TxPolicy::Alternate => self.last_tx_bus.other(),
             TxPolicy::Arrival => arrival,
         }
+    }
+
+    /// b_window_open -- the IPMB-B power-up window (`IpmbBPowerUp::NonStrict`) is open: no Set
+    /// IPMB State has set IPMB-B and no fault of IPMB-B has been recorded since power-up or
+    /// restart, and IPMB-B is still isolated and without a local fault (Rule 9.3-10). While it
+    /// is open a request that arrives on IPMB-B is accepted and its response goes out on
+    /// IPMB-B; the bus state itself is unchanged. The one place that decides the window, for
+    /// `accept` and `window_response_on_b`.
+    fn b_window_open(&self) -> bool {
+        self.b_power_up_window
+            && self.buses.b.mode == BusMode::Isolated
+            && self.buses.b.status == LocalStatus::None
+    }
+
+    /// window_response_on_b -- a response (`window`: its request was accepted on IPMB-B inside the
+    /// power-up window) goes out on IPMB-B: IPMB-B is still in the window or has become enabled.
+    /// After an explicit Override or a local fault of IPMB-B it goes by the TX policy instead
+    /// (IPMB-A, the only enabled bus). The one place that decides it, for `next_tx`.
+    fn window_response_on_b(&self, window: bool) -> bool {
+        window && (self.b_window_open() || self.buses.b.enabled())
     }
 
     /// choose_tx_bus -- the bus for a frame being handed to a driver for the first time, and the
@@ -1067,11 +1172,22 @@ impl Link {
     /// first; with none queued, a request of the requester that is due goes out (`next_request_tx`),
     /// and the same request frame is returned until its outcome is reported.
     /// 1. A frame handed out for the first time gets its bus from the TX policy now
-    ///    (`choose_tx_bus`), which makes ALTERNATE follow the real transmission order.
+    ///    (`choose_tx_bus`), which makes ALTERNATE follow the real transmission order. The
+    ///    exception is the response to a request accepted on IPMB-B inside the power-up window
+    ///    (`EgressFrame::window`, decided when the request arrived): it goes out on IPMB-B
+    ///    whatever the policy says while IPMB-B is still in the window or has become enabled
+    ///    (`window_response_on_b`), so the Set IPMB State that ends the window is answered on
+    ///    IPMB-B too. After an explicit Override or a local fault of IPMB-B it goes by the
+    ///    policy.
     /// 2. A frame already handed out whose bus has since been disabled moves to the other bus
-    ///    (and that is then the latest transmission).
+    ///    (and that is then the latest transmission); a window response on IPMB-B stays there
+    ///    while the window is open.
     ///
-    /// None also when neither bus is enabled.
+    /// Responses to IPMB-A requests and the requester's own requests (`next_request_tx`) never
+    /// use IPMB-B while it is not enabled. None also when neither bus is enabled and the head
+    /// is not a window response. Only the head of the queue is handed out, so with IPMB-A
+    /// faulted an unsent response to an IPMB-A request at the head holds back the window
+    /// responses behind it (the existing queue order, unchanged).
     pub fn next_tx(&mut self) -> Option<(Bus, &[u8])> {
         if let Some(bus) = self.requester.sending_bus() {
             return Some((bus, self.requester.frame()));
@@ -1085,13 +1201,18 @@ impl Link {
         };
         let head = self.egress.peek()?;
         let (assigned, current, arrival) = (head.assigned, head.bus, head.arrival);
+        let window = head.window;
         let bus = if !assigned {
-            if !enabled.a && !enabled.b {
+            if self.window_response_on_b(window) {
+                self.last_tx_bus = Bus::B;
+                Bus::B
+            } else if !enabled.a && !enabled.b {
                 return None;
+            } else {
+                let preferred = self.response_preference(arrival);
+                self.choose_tx_bus(preferred)
             }
-            let preferred = self.response_preference(arrival);
-            self.choose_tx_bus(preferred)
-        } else if *enabled.get(current) {
+        } else if *enabled.get(current) || (current == Bus::B && window && self.b_window_open()) {
             current
         } else {
             let other = current.other();
@@ -1267,13 +1388,18 @@ impl Link {
     /// set_ipmb_state -- applies a Set IPMB State request through `plan_ipmb_state`, the one
     /// rule: Err(BusNotFitted) or Err(IsolatesBothBuses) leave the state unchanged. The state
     /// changes only here and in `set_local_status` (Rule 9.3-10). `poll` calls it for the change
-    /// the Set IPMB State handler left in `Context::pending_ipmb`.
+    /// the Set IPMB State handler left in `Context::pending_ipmb`. A successful change that sets
+    /// IPMB-B (`b` is Some, any mode; byte FFh is None) ends the IPMB-B power-up window for good
+    /// (`b_window_open`); a refused change, and a change of IPMB-A only, leave it as it was.
     pub fn set_ipmb_state(
         &mut self,
         a: Option<BusMode>,
         b: Option<BusMode>,
     ) -> Result<(), LinkError> {
         self.buses = plan_ipmb_state(&self.buses, a, b)?;
+        if b.is_some() {
+            self.b_power_up_window = false;
+        }
         Ok(())
     }
 
@@ -1300,9 +1426,15 @@ impl Link {
 
     /// set_local_status -- records a persistent local fault of `bus` (or its removal with
     /// `LocalStatus::None`); a faulted bus is not enabled (Rule 9.3-10). The Phase 6 driver
-    /// decides when a fault is persistent, from the `counters`.
+    /// decides when a fault is persistent, from the `counters`. A fault of IPMB-B closes the
+    /// IPMB-B power-up window for good: removing the fault does not reopen it.
     pub fn set_local_status(&mut self, bus: Bus, status: LocalStatus) {
         self.buses.get_mut(bus).status = status;
+        if bus == Bus::B && status != LocalStatus::None {
+            // A recorded fault of IPMB-B closes the power-up window for good; clearing the fault
+            // does not reopen it (only a restart does).
+            self.b_power_up_window = false;
+        }
     }
 
     // ---- readers ----
@@ -1384,6 +1516,7 @@ impl BusCounters {
         rx_response: 0,
         rx_answers: 0,
         bus_unavailable: 0,
+        rx_power_up_window: 0,
         ingress_full: 0,
         tx_ok: 0,
         tx_requests: 0,
@@ -1444,13 +1577,19 @@ mod tests {
         Context::new(addr::resolve(0x7F))
     }
 
+    /// link_with -- a power-up link with the Strict IPMB-B behaviour (VITA 46.11 as written).
     fn link_with(b_fitted: bool, tx_policy: TxPolicy) -> Link {
+        link_power_up(b_fitted, tx_policy, IpmbBPowerUp::Strict)
+    }
+
+    fn link_power_up(b_fitted: bool, tx_policy: TxPolicy, b_power_up: IpmbBPowerUp) -> Link {
         let addr = addr::resolve(0x7F);
         assert_eq!(addr.ipmb_address, OWN);
         Link::new(
             LinkConfig {
                 b_fitted,
                 tx_policy,
+                b_power_up,
                 requests_allowed: false,
             },
             &addr,
@@ -1526,7 +1665,12 @@ mod tests {
     fn default_config_follows_defs() {
         let c = LinkConfig::default();
         assert_eq!(c.b_fitted, ipmc_defs::IPMB_BUS_B_ENABLE);
-        assert_eq!(c.tx_policy, ipmc_defs::IPMB_TX_POLICY);
+        // (compliance, response bus policy, IPMB-B power-up window): one define, both fields.
+        let (policy, window) = match ipmc_defs::IPMB_COMPLIANCE {
+            ipmc_defs::IpmbCompliance::Strict => (TxPolicy::Alternate, IpmbBPowerUp::Strict),
+            ipmc_defs::IpmbCompliance::NonStrict => (TxPolicy::Arrival, IpmbBPowerUp::NonStrict),
+        };
+        assert_eq!((c.tx_policy, c.b_power_up), (policy, window));
     }
 
     #[test]
@@ -1567,18 +1711,28 @@ mod tests {
         let mut frame = vec![GENERAL_CALL];
         frame.extend(request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, 9, &[]));
         assert_eq!(link.on_frame(Bus::A, &frame, 0), Ok(()));
-        assert_eq!(poll_real(&mut link, 0), 1);
-        let sent = drain(&mut link);
-        let [(Bus::A, bytes)] = sent.as_slice() else {
-            panic!("one response on A: {sent:?}");
+        let bytes = only_response(&mut link, Bus::A, 9);
+        let rsp = ipmb::parse(&bytes).unwrap();
+        assert_eq!(rsp.data.len(), crate::cmd::app::GET_DEVICE_ID_LEN);
+    }
+
+    /// only_response -- polls the real table once and drains the link: exactly one response, sent
+    /// on `bus`, from OWN to the Chassis Manager with sequence number `seq` and completion code
+    /// OK. Returns its bytes.
+    fn only_response(link: &mut Link, bus: Bus, seq: u8) -> Vec<u8> {
+        assert_eq!(poll_real(link, 0), 1);
+        let sent = drain(link);
+        let [(sent_on, bytes)] = sent.as_slice() else {
+            panic!("one response on {bus:?}: {sent:?}");
         };
+        assert_eq!(*sent_on, bus);
         let rsp = ipmb::parse(bytes).unwrap();
         assert_eq!(
             (rsp.header.dest, rsp.header.src, rsp.header.seq),
-            (CM, OWN, 9)
+            (CM, OWN, seq)
         );
         assert_eq!(rsp.completion_code, Some(cc::OK));
-        assert_eq!(rsp.data.len(), crate::cmd::app::GET_DEVICE_ID_LEN);
+        bytes.clone()
     }
 
     /// poll over the real COMMANDS table.
@@ -2116,6 +2270,7 @@ mod tests {
             LinkConfig {
                 b_fitted: true,
                 tx_policy: TxPolicy::Alternate,
+                b_power_up: IpmbBPowerUp::NonStrict,
                 requests_allowed: false,
             },
             &bad,
@@ -2248,18 +2403,20 @@ mod tests {
         }
     }
 
-    /// requesting_link -- a link whose requester may send; both buses enabled when `both`.
-    fn requesting_link(both: bool) -> Link {
+    /// requesting_link -- a link whose requester may send; IPMB-B fitted when `b_fitted` and put
+    /// in Local Control when `b_enabled`.
+    fn requesting_link(b_fitted: bool, b_enabled: bool, b_power_up: IpmbBPowerUp) -> Link {
         let addr = addr::resolve(0x7F);
         let mut link = Link::new(
             LinkConfig {
-                b_fitted: both,
+                b_fitted,
                 tx_policy: TxPolicy::Alternate,
+                b_power_up,
                 requests_allowed: true,
             },
             &addr,
         );
-        if both {
+        if b_enabled {
             link.set_ipmb_state(None, Some(BusMode::LocalControl))
                 .unwrap();
         }
@@ -2273,7 +2430,7 @@ mod tests {
 
     #[test]
     fn a_request_goes_out_and_its_response_ends_it() {
-        let mut link = requesting_link(true);
+        let mut link = requesting_link(true, true, IpmbBPowerUp::Strict);
         let mut trace = RecordingTrace::default();
         assert_eq!(link.requester.submit(&platform_event(), 0), Ok(0));
         let (bus, frame) = next_frame(&mut link).unwrap();
@@ -2306,7 +2463,7 @@ mod tests {
 
     #[test]
     fn a_failed_request_transmission_names_destination_command_and_cause() {
-        let mut link = requesting_link(false);
+        let mut link = requesting_link(false, false, IpmbBPowerUp::Strict);
         let mut trace = RecordingTrace::default();
         link.requester.submit(&platform_event(), 0).unwrap();
         let (bus, _) = next_frame(&mut link).unwrap();
@@ -2322,7 +2479,7 @@ mod tests {
 
     #[test]
     fn a_request_without_a_response_ends_with_the_destination_and_the_count() {
-        let mut link = requesting_link(false);
+        let mut link = requesting_link(false, false, IpmbBPowerUp::Strict);
         let mut trace = RecordingTrace::default();
         link.requester.submit(&platform_event(), 0).unwrap();
         let mut now = 0;
@@ -2447,7 +2604,7 @@ mod tests {
 
     #[test]
     fn a_response_that_matches_nothing_is_dropped_and_the_request_stays() {
-        let mut link = requesting_link(false);
+        let mut link = requesting_link(false, false, IpmbBPowerUp::Strict);
         link.requester.submit(&platform_event(), 0).unwrap();
         let (bus, _) = next_frame(&mut link).unwrap();
         link.on_tx_result(bus, true, 1, &mut NoTrace).unwrap();
@@ -2465,7 +2622,7 @@ mod tests {
     /// run_unanswered -- one request, never answered, every transmission succeeds; steps time in
     /// 1 ms and returns (time, bus, seq) of each transmission and the time the request ended.
     fn run_unanswered(both: bool) -> (Vec<(u32, Bus, u8)>, Option<u32>) {
-        let mut link = requesting_link(both);
+        let mut link = requesting_link(both, both, IpmbBPowerUp::Strict);
         link.requester.submit(&platform_event(), 0).unwrap();
         let (mut sent, mut ended) = (Vec::new(), None);
         for now in 0..=3 * requester::TIMEOUT_MS * u32::from(requester::MAX_TRANSMISSIONS) {
@@ -2504,7 +2661,7 @@ mod tests {
 
     #[test]
     fn a_failed_request_transmission_is_retried_after_t6_on_the_other_enabled_bus() {
-        let mut link = requesting_link(true);
+        let mut link = requesting_link(true, true, IpmbBPowerUp::Strict);
         let mut trace = RecordingTrace::default();
         link.requester.submit(&platform_event(), 0).unwrap();
         let (bus, first) = next_frame(&mut link).unwrap();
@@ -2549,7 +2706,7 @@ mod tests {
 
     #[test]
     fn a_response_sent_during_the_backoff_does_not_change_the_retry_bus() {
-        let mut link = requesting_link(true);
+        let mut link = requesting_link(true, true, IpmbBPowerUp::Strict);
         link.requester.submit(&platform_event(), 0).unwrap();
         let (bus, _) = next_frame(&mut link).unwrap();
         assert_eq!(bus, Bus::A);
@@ -2579,7 +2736,7 @@ mod tests {
 
     #[test]
     fn a_failed_request_transmission_with_one_bus_waits_for_the_timeout() {
-        let mut link = requesting_link(false);
+        let mut link = requesting_link(false, false, IpmbBPowerUp::Strict);
         link.requester.submit(&platform_event(), 0).unwrap();
         let (bus, _) = next_frame(&mut link).unwrap();
         link.on_tx_result(bus, false, 10, &mut NoTrace).unwrap();
@@ -2591,7 +2748,7 @@ mod tests {
 
     #[test]
     fn responses_go_out_before_a_due_request() {
-        let mut link = requesting_link(true);
+        let mut link = requesting_link(true, true, IpmbBPowerUp::Strict);
         link.requester.submit(&platform_event(), 0).unwrap();
         link.on_frame(
             Bus::A,
@@ -2741,5 +2898,269 @@ mod tests {
             fresh.recent_request_seqs(500),
             link.recent_request_seqs(500)
         );
+    }
+
+    // ---- IPMB-B power-up window (IpmbBPowerUp::NonStrict) ----
+
+    fn device_id_request(seq: u8) -> Vec<u8> {
+        request(OWN, NETFN_APP, CMD_GET_DEVICE_ID, seq, &[])
+    }
+
+    fn window_link(tx_policy: TxPolicy) -> Link {
+        link_power_up(true, tx_policy, IpmbBPowerUp::NonStrict)
+    }
+
+    /// buses_of -- the buses of a drained list of (bus, frame).
+    fn buses_of(sent: &[(Bus, Vec<u8>)]) -> Vec<Bus> {
+        sent.iter().map(|(bus, _)| *bus).collect()
+    }
+
+    #[test]
+    fn strict_power_up_drops_ipmb_b_requests() {
+        let mut link = link_power_up(true, TxPolicy::Alternate, IpmbBPowerUp::Strict);
+        assert_eq!(
+            link.on_frame(Bus::B, &device_id_request(1), 0),
+            Err(FrameDrop::BusUnavailable)
+        );
+        let c = link.counters(Bus::B);
+        assert_eq!(
+            (c.bus_unavailable, c.rx_power_up_window, c.rx_ok),
+            (1, 0, 0)
+        );
+        assert_eq!(poll_real(&mut link, 0), 0);
+        assert!(link.next_tx().is_none());
+    }
+
+    #[test]
+    fn nonstrict_answers_an_ipmb_b_request_on_ipmb_b_without_changing_the_bus_state() {
+        for policy in [TxPolicy::Alternate, TxPolicy::Arrival] {
+            let mut link = window_link(policy);
+            let power_up = link.sensor_data();
+            assert_eq!(link.on_frame(Bus::B, &device_id_request(1), 0), Ok(()));
+            only_response(&mut link, Bus::B, 1);
+            let c = link.counters(Bus::B);
+            assert_eq!((c.rx_power_up_window, c.rx_ok, c.tx_ok), (1, 1, 1));
+            assert_eq!(c.bus_unavailable, 0);
+            assert_eq!(link.counters(Bus::A).tx_ok, 0);
+            let b = link.bus_state(Bus::B);
+            assert_eq!((b.mode, b.enabled()), (BusMode::Isolated, false));
+            assert_eq!(link.sensor_data(), power_up, "{policy:?}");
+        }
+    }
+
+    #[test]
+    fn nonstrict_answers_ipmb_a_requests_on_ipmb_a_around_a_window_response() {
+        let order = [
+            (Bus::A, 1),
+            (Bus::B, 2),
+            (Bus::A, 3),
+            (Bus::A, 4),
+            (Bus::B, 5),
+        ];
+        for policy in [TxPolicy::Alternate, TxPolicy::Arrival] {
+            let mut link = window_link(policy);
+            for (bus, seq) in order {
+                assert_eq!(link.on_frame(bus, &device_id_request(seq), 0), Ok(()));
+                poll_real(&mut link, 0);
+                let sent = drain(&mut link);
+                assert_eq!(buses_of(&sent), [bus], "{policy:?} seq {seq}");
+            }
+            assert_eq!(link.counters(Bus::B).rx_power_up_window, 2);
+        }
+    }
+
+    #[test]
+    fn nonstrict_window_ends_with_the_first_set_ipmb_state_that_sets_ipmb_b() {
+        use BusMode::{Isolated, LocalControl};
+        // The Set IPMB State (A, B, its result), then whether a B request is accepted and how
+        // many window frames are counted after it.
+        let refused = Err(LinkError::IsolatesBothBuses);
+        let cases = [
+            (None, Some(Isolated), Ok(()), false, 0),
+            (None, Some(LocalControl), Ok(()), true, 0),
+            (Some(LocalControl), None, Ok(()), true, 1),
+            (None, None, Ok(()), true, 1),
+            (Some(Isolated), Some(Isolated), refused, true, 1),
+        ];
+        for (a, b, plan, accepted, window) in cases {
+            let mut link = window_link(TxPolicy::Alternate);
+            assert_eq!(link.set_ipmb_state(a, b), plan, "{a:?} {b:?}");
+            let result = link.on_frame(Bus::B, &device_id_request(1), 0);
+            assert_eq!(result.is_ok(), accepted, "{a:?} {b:?}");
+            let counted = link.counters(Bus::B).rx_power_up_window;
+            assert_eq!(counted, window, "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn nonstrict_window_is_closed_without_ipmb_b_or_with_an_ipmb_b_fault() {
+        // The invalid hardware address case is an_invalid_hardware_address_isolates_both_buses.
+        let frame = device_id_request(1);
+        let mut unfitted = link_power_up(false, TxPolicy::Alternate, IpmbBPowerUp::NonStrict);
+        assert_eq!(
+            unfitted.on_frame(Bus::B, &frame, 0),
+            Err(FrameDrop::BusUnavailable)
+        );
+        let mut faulted = window_link(TxPolicy::Alternate);
+        faulted.set_local_status(Bus::B, LocalStatus::ClockLowTimeout);
+        assert_eq!(
+            faulted.on_frame(Bus::B, &frame, 0),
+            Err(FrameDrop::BusUnavailable)
+        );
+        assert_eq!(faulted.counters(Bus::B).rx_power_up_window, 0);
+        // Clearing the fault does not reopen the window; only a Set IPMB State (or a restart)
+        // changes anything for IPMB-B now.
+        faulted.set_local_status(Bus::B, LocalStatus::None);
+        assert_eq!(
+            faulted.on_frame(Bus::B, &frame, 0),
+            Err(FrameDrop::BusUnavailable)
+        );
+        faulted
+            .set_ipmb_state(None, Some(BusMode::LocalControl))
+            .unwrap();
+        assert_eq!(faulted.on_frame(Bus::B, &frame, 0), Ok(()));
+    }
+
+    #[test]
+    fn nonstrict_failed_transmission_on_ipmb_b_is_resent_on_ipmb_a() {
+        let mut link = window_link(TxPolicy::Arrival);
+        link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+        poll_real(&mut link, 0);
+        assert_eq!(link.next_tx().map(|(b, _)| b), Some(Bus::B));
+        link.on_tx_result(Bus::B, false, 1, &mut NoTrace).unwrap();
+        assert_eq!(link.next_tx().map(|(b, _)| b), Some(Bus::A));
+        link.on_tx_result(Bus::A, true, 2, &mut NoTrace).unwrap();
+        assert_eq!(link.counters(Bus::B).tx_fail, 1);
+        assert_eq!(link.counters(Bus::A).resends, 1);
+        assert_eq!(link.counters(Bus::A).tx_ok, 1);
+        assert!(link.next_tx().is_none());
+    }
+
+    #[test]
+    fn nonstrict_window_response_stays_on_ipmb_b_once_handed_out() {
+        let mut link = window_link(TxPolicy::Alternate);
+        link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+        poll_real(&mut link, 0);
+        assert_eq!(link.next_tx().map(|(b, _)| b), Some(Bus::B));
+        let again = link.next_tx().map(|(b, _)| b);
+        assert_eq!(again, Some(Bus::B), "same frame, same bus");
+    }
+
+    #[test]
+    fn a_restart_reopens_the_nonstrict_window() {
+        let mut link = window_link(TxPolicy::Alternate);
+        link.set_ipmb_state(None, Some(BusMode::Isolated)).unwrap();
+        assert_eq!(
+            link.on_frame(Bus::B, &device_id_request(1), 0),
+            Err(FrameDrop::BusUnavailable)
+        );
+        let mut fresh = link.restarted(&addr::resolve(0x7F), 500);
+        assert_eq!(fresh.on_frame(Bus::B, &device_id_request(2), 500), Ok(()));
+        assert_eq!(fresh.counters(Bus::B).rx_power_up_window, 1);
+    }
+
+    #[test]
+    fn nonstrict_requester_sends_on_ipmb_a_and_matches_a_response_that_arrives_on_ipmb_b() {
+        let mut link = requesting_link(true, false, IpmbBPowerUp::NonStrict);
+        // A window response on B first, so the latest transmission was on B.
+        link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+        only_response(&mut link, Bus::B, 1);
+        assert_eq!(link.requester.submit(&platform_event(), 0), Ok(0));
+        let (bus, frame) = next_frame(&mut link).unwrap();
+        assert_eq!((bus, frame.as_slice()), (Bus::A, &PLATFORM_EVENT_FRAME[..]));
+        link.on_tx_result(bus, true, 1, &mut NoTrace).unwrap();
+        assert_eq!(link.counters(Bus::B).tx_requests, 0);
+        // The Chassis Manager answers on IPMB-B, still inside the window.
+        let response = [0x82, 0x14, 0x6A, 0x20, 0x00, 0x02, 0x00, 0xDE];
+        assert_eq!(link.on_frame(Bus::B, &response, 5), Ok(()));
+        let c = link.counters(Bus::B);
+        assert_eq!((c.rx_answers, c.rx_power_up_window), (1, 2));
+    }
+
+    #[test]
+    fn nonstrict_window_responses_stay_on_ipmb_b_when_the_window_ends_first() {
+        // The Set IPMB State that ends the window arrives on IPMB-B itself (case a), or a request
+        // on IPMB-B and a later Set IPMB State on IPMB-A are handled in one poll (case b); a
+        // Chassis Manager matches a response only on the bus its request used.
+        let set_b_local = |seq: u8| request(OWN, 0x2C, 0x09, seq, &[0x03, 0xFF, 0x01]);
+        for policy in [TxPolicy::Alternate, TxPolicy::Arrival] {
+            let mut link = link_power_up(true, policy, IpmbBPowerUp::NonStrict);
+            let mut ctx = ctx();
+            link.on_frame(Bus::B, &set_b_local(1), 0).unwrap();
+            link.poll(&mut ctx, &mut NoExtension, 0, &mut NoTrace);
+            assert!(link.bus_state(Bus::B).enabled());
+            assert_eq!(buses_of(&drain(&mut link)), [Bus::B], "case a {policy:?}");
+            // A later request on A follows the policy: the latest transmission was on B, so A
+            // under ALTERNATE, and the arrival bus A under ARRIVAL.
+            link.on_frame(Bus::A, &device_id_request(2), 1).unwrap();
+            link.poll(&mut ctx, &mut NoExtension, 1, &mut NoTrace);
+            assert_eq!(buses_of(&drain(&mut link)), [Bus::A], "after a {policy:?}");
+
+            let mut link = link_power_up(true, policy, IpmbBPowerUp::NonStrict);
+            link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+            link.on_frame(Bus::A, &set_b_local(2), 0).unwrap();
+            link.poll(&mut ctx, &mut NoExtension, 0, &mut NoTrace);
+            assert!(link.bus_state(Bus::B).enabled());
+            let sent = drain(&mut link);
+            // The window response stays on B; the Set IPMB State from A follows the policy (A).
+            assert_eq!(buses_of(&sent), [Bus::B, Bus::A], "case b {policy:?}");
+        }
+    }
+
+    #[test]
+    fn nonstrict_window_response_goes_on_a_after_an_override_or_fault_of_ipmb_b() {
+        let mut ctx = ctx();
+        for fault in [false, true] {
+            let mut link = window_link(TxPolicy::Arrival);
+            link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+            link.poll(&mut ctx, &mut NoExtension, 0, &mut NoTrace);
+            if fault {
+                link.set_local_status(Bus::B, LocalStatus::ClockLowTimeout);
+            } else {
+                link.set_ipmb_state(None, Some(BusMode::Isolated)).unwrap();
+            }
+            assert_eq!(buses_of(&drain(&mut link)), [Bus::A], "fault {fault}");
+        }
+    }
+
+    #[test]
+    fn nonstrict_window_response_goes_on_ipmb_b_while_ipmb_a_is_faulted() {
+        let mut link = window_link(TxPolicy::Alternate);
+        link.set_local_status(Bus::A, LocalStatus::ClockLowTimeout);
+        link.on_frame(Bus::B, &device_id_request(1), 0).unwrap();
+        only_response(&mut link, Bus::B, 1);
+    }
+
+    #[test]
+    fn nonstrict_retry_of_a_window_request_after_the_window_ends_is_answered_on_ipmb_b() {
+        let mut link = window_link(TxPolicy::Alternate);
+        let frame = count_request(0x14, &[5, 6]);
+        link.on_frame(Bus::B, &frame, 1000).unwrap();
+        poll(&mut link, 1000);
+        assert_eq!(buses_of(&drain(&mut link)), [Bus::B]);
+        // IPMB-B is enabled meanwhile; the retry hits the cache entry stored for the window.
+        link.set_ipmb_state(None, Some(BusMode::LocalControl))
+            .unwrap();
+        link.on_frame(Bus::B, &frame, 1250).unwrap();
+        poll(&mut link, 1250);
+        assert_eq!(runs(), 1);
+        assert_eq!(buses_of(&drain(&mut link)), [Bus::B]);
+        assert_eq!(link.counters(Bus::B).replays, 1);
+    }
+
+    #[test]
+    fn nonstrict_duplicate_of_an_ipmb_b_request_is_answered_from_the_cache_on_ipmb_b() {
+        let mut link = window_link(TxPolicy::Alternate);
+        let frame = count_request(0x14, &[5, 6]);
+        link.on_frame(Bus::B, &frame, 1000).unwrap();
+        poll(&mut link, 1000);
+        link.on_frame(Bus::B, &frame, 1250).unwrap();
+        poll(&mut link, 1250);
+        assert_eq!(runs(), 1);
+        let sent = drain(&mut link);
+        assert_eq!(buses_of(&sent), [Bus::B, Bus::B]);
+        assert_eq!(sent[0].1, sent[1].1);
+        assert_eq!(link.counters(Bus::B).replays, 1);
+        assert_eq!(link.counters(Bus::B).rx_power_up_window, 2);
     }
 }

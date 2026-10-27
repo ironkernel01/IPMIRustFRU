@@ -6,7 +6,9 @@ allowed, a leading minus), a bool, a str (a "text" literal), a bare earlier NAME
 an enum variant (`Type::Variant`, returned as the variant name string). Everything else in the
 file is a comment, an attribute, an enum body or a blank line. rustfmt wraps a long value onto
 the next line (`pub const NAME: T =` then the value indented); that form, and only that, is
-joined. Any line this reader does not understand raises DefsError with the file and line number.
+joined. The six FRU strings that name the Tier exist in the file as `NAME_T1`, `NAME_T2` and
+`NAME_T3`; `read` also returns `NAME` itself, the variant of `tier` (default 1, the public
+build; ipmc-defs lib.rs selects the same way from IPMC_TIER). Any line this reader does not understand raises DefsError with the file and line number.
 
 Command line:  python -I tools/defs.py NAME [NAME ...]   prints one value per line.
 """
@@ -53,8 +55,21 @@ def _value(text, type_name, known, where):
     raise DefsError(f"{where}: not a {type_name} variant: {text}")
 
 
-def read(path=None):
-    """{NAME: value} of the defs file at `path` (default: the repository's defs.rs)."""
+TIER_NAMES = (
+    "IPMC_FRU_BOARD_PRODUCT",
+    "IPMC_FRU_BOARD_SERIAL",
+    "IPMC_FRU_BOARD_PART",
+    "IPMC_FRU_PRODUCT_NAME",
+    "IPMC_FRU_PRODUCT_PART",
+    "IPMC_FRU_PRODUCT_SERIAL",
+)
+
+
+def read(path=None, tier=1):
+    """{NAME: value} of the defs file at `path` (default: the repository's defs.rs); the six
+    TIER_NAMES are added as the `_T<tier>` variant, 1..=3."""
+    if tier not in (1, 2, 3):
+        raise DefsError(f"tier must be 1, 2 or 3, not {tier}")
     path = Path(path) if path else DEFAULT_PATH
     values = {}
     in_enum = False
@@ -91,6 +106,9 @@ def read(path=None):
         values[name] = _value(text.strip(), type_name, values, where)
     if in_enum:
         raise DefsError(f"{path}: enum not closed")
+    for name in TIER_NAMES:
+        if f"{name}_T{tier}" in values:
+            values[name] = values[f"{name}_T{tier}"]
     return values
 
 

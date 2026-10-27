@@ -5,11 +5,12 @@
 mod common;
 use common::{by_tier, sensor0, Answer, Rig};
 use ipmc_core::addr;
-use ipmc_core::ipmb::{NETFN_GROUP_EXT, NETFN_SE};
-use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
+use ipmc_core::ipmb::{NETFN_APP, NETFN_GROUP_EXT, NETFN_SE};
+use ipmc_core::link::{BusMode, FrameDrop, IpmbBPowerUp, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::Bus;
 
 const SET_IPMB_STATE: u8 = 0x09;
+const GET_DEVICE_ID: u8 = 0x01;
 const RESERVE_DEVICE_SDR: u8 = 0x22;
 const GET_DEVICE_SDR: u8 = 0x21;
 const CC_OK: u8 = 0x00;
@@ -88,6 +89,7 @@ fn a_refused_set_ipmb_state_leaves_the_buses_alone() {
         LinkConfig {
             b_fitted: false,
             tx_policy: TxPolicy::Alternate,
+            b_power_up: IpmbBPowerUp::Strict,
             requests_allowed: false,
         },
         &addr::resolve(0x7F),
@@ -143,4 +145,44 @@ fn an_sdr_record_reads_back_across_both_buses_with_one_reservation() {
         let stale = rig.send(bus, NETFN_SE, GET_DEVICE_SDR, &sdr_request(res, 0, 16, 16));
         assert_eq!(stale.cc, CC_BAD_RESERVATION);
     }
+}
+
+/// rig_with_power_up -- a power-up Rig (IPMB-B fitted, not enabled) with the IPMB-B behaviour
+/// `b_power_up`.
+fn rig_with_power_up(b_power_up: IpmbBPowerUp) -> Rig {
+    let mut rig = Rig::new();
+    rig.link = Link::new(
+        LinkConfig {
+            b_fitted: true,
+            tx_policy: TxPolicy::Alternate,
+            b_power_up,
+            requests_allowed: false,
+        },
+        &addr::resolve(0x7F),
+    );
+    rig
+}
+
+#[test]
+fn a_chassis_manager_that_starts_on_ipmb_b_is_answered_only_when_nonstrict() {
+    // Strict: VITA 46.11 Rule 4.1.1-4, the request on IPMB-B is dropped.
+    let mut strict = rig_with_power_up(IpmbBPowerUp::Strict);
+    let frame = strict.frame(NETFN_APP, GET_DEVICE_ID, &[]);
+    assert_eq!(
+        strict.link.on_frame(Bus::B, &frame, 1),
+        Err(FrameDrop::BusUnavailable)
+    );
+    // NonStrict: answered on IPMB-B at power-up, and the Set IPMB State that enables IPMB-B
+    // (sent on IPMB-B) ends the window and is applied as usual.
+    let mut rig = rig_with_power_up(IpmbBPowerUp::NonStrict);
+    let answer = rig.send(Bus::B, NETFN_APP, GET_DEVICE_ID, &[]);
+    assert_eq!((answer.bus, answer.cc), (Bus::B, CC_OK));
+    assert!(!rig.link.bus_state(Bus::B).enabled());
+    let answer = set_ipmb_state(&mut rig, Bus::B, 0xFF, 0x01);
+    assert_eq!((answer.bus, answer.cc), (Bus::B, CC_OK));
+    assert!(rig.link.bus_state(Bus::B).enabled());
+    // The next request, on IPMB-A, follows ALTERNATE: the latest transmission was on IPMB-B.
+    let answer = rig.send(Bus::A, NETFN_APP, GET_DEVICE_ID, &[]);
+    assert_eq!((answer.bus, answer.cc), (Bus::A, CC_OK));
+    assert_eq!(rig.link.counters(Bus::B).rx_power_up_window, 2);
 }

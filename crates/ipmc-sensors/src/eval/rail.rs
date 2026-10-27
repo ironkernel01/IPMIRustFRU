@@ -42,6 +42,19 @@ pub fn evaluate(def: &RailDef, mv: u32) -> RailStatus {
     }
 }
 
+/// edge_x100 -- the window edge of `pct` percent of `nominal_mv`, in hundredths of a millivolt:
+/// nominal x (100 + pct) above, nominal x (100 - pct) below. A reading is past the edge exactly
+/// when `mv x 100` is beyond it (`deviates_beyond`), so a threshold byte of an SDR record and the
+/// status of a reading come from the same edge. `pct` is below 100 (ipmc-defs guard).
+pub const fn edge_x100(nominal_mv: u32, pct: u32, upper: bool) -> u64 {
+    let nominal = nominal_mv as u64;
+    if upper {
+        nominal * (PERCENT + pct as u64)
+    } else {
+        nominal * (PERCENT - pct as u64)
+    }
+}
+
 /// scale_mv -- pin millivolts to rail millivolts through `divider`, rounded to nearest.
 /// `Err(InvalidDivisor)` for a zero denominator, `Err(Overflow)` when the result does not fit
 /// u32; the ipmc-defs guards keep every board divider nonzero and in range.
@@ -90,6 +103,21 @@ mod tests {
         assert_eq!(evaluate(&FIVE_VOLT, 5000), RailStatus::InRange);
         assert_eq!(evaluate(&FIVE_VOLT, 0), RailStatus::Critical);
         assert_eq!(evaluate(&FIVE_VOLT, u32::MAX), RailStatus::Critical);
+    }
+
+    #[test]
+    fn the_edges_are_the_ones_evaluate_uses() {
+        // edge_x100 / 100 mV is the last in-range voltage: 5 % of 5000 mV is 5250 and 4750 mV.
+        assert_eq!(edge_x100(5000, 5, true), 525_000);
+        assert_eq!(edge_x100(5000, 5, false), 475_000);
+        for (pct, upper) in [(5, true), (5, false), (10, true), (10, false)] {
+            let edge_mv = (edge_x100(5000, pct, upper) / 100) as u32;
+            let beyond = if upper { edge_mv + 1 } else { edge_mv - 1 };
+            let status = |mv| evaluate(&FIVE_VOLT, mv);
+            let (inside, outside) = (status(edge_mv), status(beyond));
+            assert_eq!(inside == RailStatus::InRange, pct == 5, "{pct} {upper}");
+            assert_ne!(inside, outside, "{pct} {upper}");
+        }
     }
 
     #[test]

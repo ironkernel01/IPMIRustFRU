@@ -19,6 +19,7 @@
 #![cfg_attr(not(feature = "stm32f401"), forbid(unsafe_code))]
 #![cfg_attr(feature = "stm32f401", deny(unsafe_code))]
 
+pub mod analog;
 pub mod board_sensors;
 pub mod drivers;
 pub mod eval;

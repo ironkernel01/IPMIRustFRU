@@ -10,6 +10,7 @@
 //! identifier and every 2Dh response starts with it, in `run_request` only.
 
 use crate::addr::AddrInfo;
+use crate::analog::{AnalogSensors, NO_ANALOG};
 use crate::commands::{self, Command, COMMANDS};
 use crate::event_enable::EventEnables;
 use crate::ext::{Extension, NoExtension};
@@ -116,6 +117,9 @@ pub enum PowerRequest {
 ///   RESTORE.
 /// - `sdr`: the Device SDR repository and its reservation; Reserve Device SDR Repository is
 ///   the only writer.
+/// - `analog`: the build's analog sensors (`analog::AnalogSensors`): written once at construction
+///   (`with_analog`), read-only afterwards; the SDR repository holds their records and
+///   `read_sensor` asks it for their readings.
 /// - `event_enables`: the per-sensor event enables; written only by the Tier-3 Set Sensor Event
 ///   Enable handler (extension); read by Get Sensor Reading (status byte bit 7) and by the
 ///   Tier-2/3 event generator before it sends. The SDR builder's masks come from the same table
@@ -165,6 +169,8 @@ pub struct Context {
     pub fru: FruStore,
     /// Device SDR repository and reservation state.
     pub sdr: SdrRepository,
+    /// The analog sensors of this build (`NO_ANALOG` by default).
+    pub analog: &'static dyn AnalogSensors,
     /// Per-sensor event enables (power-up values of this build's Tier).
     pub event_enables: EventEnables,
     /// Result of the latest self test (IPMI v2.0 Table 20-5).
@@ -193,15 +199,26 @@ impl Context {
     /// them, no sensor sample yet, FRU state M0 and the link view of a fresh link with the
     /// defs.rs configuration.
     pub fn new(addr: AddrInfo) -> Context {
+        Context::with_analog(addr, &NO_ANALOG)
+    }
+
+    /// with_analog -- `new` for a build with analog sensors: their Full Sensor Records join the SDR
+    /// repository between the compact records and the locator, their event enables start off
+    /// (they send no events), and `read_sensor` answers their numbers from `analog`.
+    pub fn with_analog(addr: AddrInfo, analog: &'static dyn AnalogSensors) -> Context {
         let fru = FruStore::new();
-        let sdr = SdrRepository::new(addr.ipmb_address);
+        let sdr = SdrRepository::with_analog(addr.ipmb_address, ipmc_defs::IPMC_TIER, analog);
         let self_test = selftest::run(fru.bytes(), &sdr);
         Context {
             addr,
             sensors: SensorSnapshot::EMPTY,
             fru,
             sdr,
-            event_enables: EventEnables::power_up(),
+            analog,
+            event_enables: EventEnables::power_up_with_analog(
+                ipmc_defs::IPMC_TIER,
+                analog.count().min(crate::analog::ANALOG_COUNT_MAX),
+            ),
             self_test,
             fru_state: FruMachine::new(),
             link: LinkView::power_up(LinkConfig::from_defs(), addr.usable()),
@@ -312,7 +329,9 @@ impl Context {
     /// - 2 FRU Health, 3 FRU Voltage, 4 FRU Temperature from the latest sensor snapshot;
     /// - 5 Payload Test Results: unavailable, no payload test has run (Table 10.2.6-1);
     /// - 6 Payload Test Status: not in progress (Table 10.2.7-1);
-    /// - 7 Payload Mode (Tier-3 only, Table 10.2.8-1) from `payload_mode`; four bytes.
+    /// - 7 Payload Mode (Tier-3 only, Table 10.2.8-1) from `payload_mode`; four bytes;
+    /// - from `analog::ANALOG_FIRST` the analog sensors (`analog`), threshold-based readings from
+    ///   the latest sensor snapshot.
     ///
     /// Status byte bit 7 (event messages enabled) is the sensor's `event_enables` flag.
     ///
@@ -348,7 +367,12 @@ impl Context {
             }
             SENSOR_PAYLOAD_TEST_RESULTS => sensor::encode_payload_test_results(out),
             SENSOR_PAYLOAD_TEST_STATUS => sensor::encode_payload_test_status(false, out),
-            _ => return Err(SensorReadError::NotPresent),
+            _ => match usize::from(number).checked_sub(usize::from(crate::analog::ANALOG_FIRST)) {
+                Some(index) if index < self.analog.count() => {
+                    self.analog.read(index, &self.sensors, out)
+                }
+                _ => return Err(SensorReadError::NotPresent),
+            },
         };
         let len = encoded.map_err(|error| match error {
             EncodeError::BufferTooShort => SensorReadError::OutputTooSmall,

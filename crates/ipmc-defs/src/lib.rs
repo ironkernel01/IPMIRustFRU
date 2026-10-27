@@ -47,6 +47,52 @@ const _: () = assert!(
     "IPMC_TIER must be 1, 2 or 3 (VITA 46.11 section 4)"
 );
 
+/// by_tier -- the text of the build's IPMC_TIER: `t1` for Tier 1, `t2` for Tier 2, `t3` otherwise
+/// (IPMC_TIER is guarded to 1..=3 above). The FRU strings that name the Tier use it.
+const fn by_tier(t1: &'static str, t2: &'static str, t3: &'static str) -> &'static str {
+    match IPMC_TIER {
+        1 => t1,
+        2 => t2,
+        _ => t3,
+    }
+}
+/// FRU board area: product name, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_BOARD_PRODUCT: &str = by_tier(
+    IPMC_FRU_BOARD_PRODUCT_T1,
+    IPMC_FRU_BOARD_PRODUCT_T2,
+    IPMC_FRU_BOARD_PRODUCT_T3,
+);
+/// FRU board area: serial number, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_BOARD_SERIAL: &str = by_tier(
+    IPMC_FRU_BOARD_SERIAL_T1,
+    IPMC_FRU_BOARD_SERIAL_T2,
+    IPMC_FRU_BOARD_SERIAL_T3,
+);
+/// FRU board area: part number, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_BOARD_PART: &str = by_tier(
+    IPMC_FRU_BOARD_PART_T1,
+    IPMC_FRU_BOARD_PART_T2,
+    IPMC_FRU_BOARD_PART_T3,
+);
+/// FRU product area: product name, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_PRODUCT_NAME: &str = by_tier(
+    IPMC_FRU_PRODUCT_NAME_T1,
+    IPMC_FRU_PRODUCT_NAME_T2,
+    IPMC_FRU_PRODUCT_NAME_T3,
+);
+/// FRU product area: part or model number, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_PRODUCT_PART: &str = by_tier(
+    IPMC_FRU_PRODUCT_PART_T1,
+    IPMC_FRU_PRODUCT_PART_T2,
+    IPMC_FRU_PRODUCT_PART_T3,
+);
+/// FRU product area: serial number, the variant of this build's IPMC_TIER
+pub const IPMC_FRU_PRODUCT_SERIAL: &str = by_tier(
+    IPMC_FRU_PRODUCT_SERIAL_T1,
+    IPMC_FRU_PRODUCT_SERIAL_T2,
+    IPMC_FRU_PRODUCT_SERIAL_T3,
+);
+
 const _: () = assert!(
     IPMB_GA_FORCED >= 1 && IPMB_GA_FORCED <= 0x1F,
     "IPMB_GA_FORCED must be 1..=0x1F (GA[4:0], 0 is invalid)"
@@ -438,14 +484,32 @@ macro_rules! fru_string_guard {
 }
 fru_string_guard!(IPMC_FRU_BOARD_MFR);
 fru_string_guard!(IPMC_FRU_BOARD_PRODUCT);
+fru_string_guard!(IPMC_FRU_BOARD_PRODUCT_T1);
+fru_string_guard!(IPMC_FRU_BOARD_PRODUCT_T2);
+fru_string_guard!(IPMC_FRU_BOARD_PRODUCT_T3);
 fru_string_guard!(IPMC_FRU_BOARD_SERIAL);
+fru_string_guard!(IPMC_FRU_BOARD_SERIAL_T1);
+fru_string_guard!(IPMC_FRU_BOARD_SERIAL_T2);
+fru_string_guard!(IPMC_FRU_BOARD_SERIAL_T3);
 fru_string_guard!(IPMC_FRU_BOARD_PART);
+fru_string_guard!(IPMC_FRU_BOARD_PART_T1);
+fru_string_guard!(IPMC_FRU_BOARD_PART_T2);
+fru_string_guard!(IPMC_FRU_BOARD_PART_T3);
 fru_string_guard!(IPMC_FRU_FILE_ID);
 fru_string_guard!(IPMC_FRU_PRODUCT_MFR);
 fru_string_guard!(IPMC_FRU_PRODUCT_NAME);
+fru_string_guard!(IPMC_FRU_PRODUCT_NAME_T1);
+fru_string_guard!(IPMC_FRU_PRODUCT_NAME_T2);
+fru_string_guard!(IPMC_FRU_PRODUCT_NAME_T3);
 fru_string_guard!(IPMC_FRU_PRODUCT_PART);
+fru_string_guard!(IPMC_FRU_PRODUCT_PART_T1);
+fru_string_guard!(IPMC_FRU_PRODUCT_PART_T2);
+fru_string_guard!(IPMC_FRU_PRODUCT_PART_T3);
 fru_string_guard!(IPMC_FRU_PRODUCT_VERSION);
 fru_string_guard!(IPMC_FRU_PRODUCT_SERIAL);
+fru_string_guard!(IPMC_FRU_PRODUCT_SERIAL_T1);
+fru_string_guard!(IPMC_FRU_PRODUCT_SERIAL_T2);
+fru_string_guard!(IPMC_FRU_PRODUCT_SERIAL_T3);
 fru_string_guard!(IPMC_FRU_ASSET_TAG);
 fru_string_guard!(IPMC_FRU_PRODUCT_FILE_ID);
 
@@ -483,19 +547,61 @@ fru_room_guard!(
     IPMC_FRU_BOARD_SERIAL,
     MAC_TEXT_LEN
 );
+fru_room_guard!(
+    IPMC_FRU_BOARD_SERIAL_MAX,
+    IPMC_FRU_BOARD_SERIAL_T1,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(
+    IPMC_FRU_BOARD_SERIAL_MAX,
+    IPMC_FRU_BOARD_SERIAL_T2,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(
+    IPMC_FRU_BOARD_SERIAL_MAX,
+    IPMC_FRU_BOARD_SERIAL_T3,
+    MAC_TEXT_LEN
+);
 fru_room_guard!(IPMC_FRU_BOARD_PART_MAX, IPMC_FRU_BOARD_PART, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PART_MAX, IPMC_FRU_BOARD_PART_T1, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PART_MAX, IPMC_FRU_BOARD_PART_T2, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PART_MAX, IPMC_FRU_BOARD_PART_T3, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_PART_MAX, IPMC_FRU_PRODUCT_PART, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_PART_MAX, IPMC_FRU_PRODUCT_PART_T1, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_PART_MAX, IPMC_FRU_PRODUCT_PART_T2, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_PART_MAX, IPMC_FRU_PRODUCT_PART_T3, 2);
 fru_room_guard!(
     IPMC_FRU_PRODUCT_SERIAL_MAX,
     IPMC_FRU_PRODUCT_SERIAL,
     MAC_TEXT_LEN
 );
+fru_room_guard!(
+    IPMC_FRU_PRODUCT_SERIAL_MAX,
+    IPMC_FRU_PRODUCT_SERIAL_T1,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(
+    IPMC_FRU_PRODUCT_SERIAL_MAX,
+    IPMC_FRU_PRODUCT_SERIAL_T2,
+    MAC_TEXT_LEN
+);
+fru_room_guard!(
+    IPMC_FRU_PRODUCT_SERIAL_MAX,
+    IPMC_FRU_PRODUCT_SERIAL_T3,
+    MAC_TEXT_LEN
+);
 fru_room_guard!(IPMC_FRU_ASSET_TAG_MAX, IPMC_FRU_ASSET_TAG, 2);
 fru_room_guard!(IPMC_FRU_BOARD_MFR_MAX, IPMC_FRU_BOARD_MFR, 2);
 fru_room_guard!(IPMC_FRU_BOARD_PRODUCT_MAX, IPMC_FRU_BOARD_PRODUCT, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PRODUCT_MAX, IPMC_FRU_BOARD_PRODUCT_T1, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PRODUCT_MAX, IPMC_FRU_BOARD_PRODUCT_T2, 2);
+fru_room_guard!(IPMC_FRU_BOARD_PRODUCT_MAX, IPMC_FRU_BOARD_PRODUCT_T3, 2);
 fru_room_guard!(IPMC_FRU_BOARD_FILE_ID_MAX, IPMC_FRU_FILE_ID, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_MFR_MAX, IPMC_FRU_PRODUCT_MFR, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_NAME_MAX, IPMC_FRU_PRODUCT_NAME, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_NAME_MAX, IPMC_FRU_PRODUCT_NAME_T1, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_NAME_MAX, IPMC_FRU_PRODUCT_NAME_T2, 2);
+fru_room_guard!(IPMC_FRU_PRODUCT_NAME_MAX, IPMC_FRU_PRODUCT_NAME_T3, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_VERSION_MAX, IPMC_FRU_PRODUCT_VERSION, 2);
 fru_room_guard!(IPMC_FRU_PRODUCT_FILE_ID_MAX, IPMC_FRU_PRODUCT_FILE_ID, 2);
 // The flash persistence switch is a boolean; the save delay is long enough to coalesce a chunked
@@ -567,6 +673,31 @@ sdr_name_guard!(IPMC_SDR_PAYLOAD_RESULTS_NAME);
 sdr_name_guard!(IPMC_SDR_PAYLOAD_STATUS_NAME);
 sdr_name_guard!(IPMC_SDR_PAYLOAD_MODE_NAME);
 sdr_name_guard!(IPMC_SDR_IPMC_NAME);
+sdr_name_guard!(IPMC_SDR_DIE_TEMP_NAME);
+sdr_name_guard!(IPMC_RAIL0_NAME);
+sdr_name_guard!(IPMC_RAIL1_NAME);
+sdr_name_guard!(IPMC_RAIL2_NAME);
+sdr_name_guard!(IPMC_RAIL3_NAME);
+sdr_name_guard!(IPMC_RAIL4_NAME);
+
+const _: () = assert!(
+    IPMC_SDR_RAIL_SPAN_PCT >= 100 + IPMC_RAIL_CRIT_PCT && IPMC_SDR_RAIL_SPAN_PCT <= 1000,
+    "IPMC_SDR_RAIL_SPAN_PCT must be 100 + IPMC_RAIL_CRIT_PCT ..= 1000 (the critical window inside the 8-bit range)"
+);
+
+/// SDR_ANALOG_COUNT -- the analog sensors the build publishes: one per rail and the die
+/// temperature, or none (IPMC_SDR_ANALOG_SENSORS false). Numbers IPMC_SDR_ANALOG_FIRST + n.
+pub const SDR_ANALOG_COUNT: usize = if IPMC_SDR_ANALOG_SENSORS {
+    IPMC_RAIL_COUNT + 1
+} else {
+    0
+};
+// The mandatory sensors are 0..=7 (VITA 46.11 Table 10.2-1, sensor 7 at Tier-3), so the analog
+// numbers start at 8 and the last one must be a sensor number (FFh is reserved).
+const _: () = assert!(
+    IPMC_SDR_ANALOG_FIRST == 8 && IPMC_SDR_ANALOG_FIRST as usize + SDR_ANALOG_COUNT <= 0xFF,
+    "IPMC_SDR_ANALOG_FIRST must be 8 (after the mandatory sensors) and the analog numbers below FFh"
+);
 
 // ---- sensors and board I/O ----
 
@@ -588,10 +719,10 @@ const _: () = assert!(
     IPMC_PGOOD_TIMEOUT_MS >= IPMC_SENSOR_PERIOD_MS,
     "IPMC_PGOOD_TIMEOUT_MS must be at least IPMC_SENSOR_PERIOD_MS"
 );
-// Rails 0..=4 are the board table in ipmc-sensors board_sensors.rs.
-const BOARD_RAIL_COUNT: usize = 5;
+// Rails 0..=4 are the board table in ipmc-sensors board_sensors.rs, which guards its length
+// against IPMC_RAIL_COUNT.
 const _: () = assert!(
-    IPMC_RAILS_MAX >= BOARD_RAIL_COUNT && IPMC_RAILS_MAX <= 32,
+    IPMC_RAILS_MAX >= IPMC_RAIL_COUNT && IPMC_RAILS_MAX <= 32,
     "IPMC_RAILS_MAX must be 5..=32 (the board table has 5 rails)"
 );
 const _: () = assert!(
@@ -654,6 +785,10 @@ rail_guard!(
     IPMC_RAIL4_DIV_DEN
 );
 
+const _: () = assert!(
+    IPMC_TEMP_NOMINAL_C > IPMC_TEMP_LNC_C && IPMC_TEMP_NOMINAL_C < IPMC_TEMP_UNC_C,
+    "IPMC_TEMP_NOMINAL_C must lie between IPMC_TEMP_LNC_C and IPMC_TEMP_UNC_C"
+);
 // The die sensor works from -40 C to +125 C (DS10086 Table 14 junction range).
 const _: () = assert!(
     IPMC_TEMP_LC_C >= -40 && IPMC_TEMP_UNR_C <= 125,

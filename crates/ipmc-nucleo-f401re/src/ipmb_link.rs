@@ -43,6 +43,7 @@ use ipmc_fru::persist::{FlashError, FlashLog, PersistError, Status};
 use ipmc_fru::{FieldError, FruField, FruStore};
 use ipmc_log::{CaptureTrace, DefaultLog, Dir, FrameStatus, Kind, LogState, Record, TraceRow};
 use ipmc_menu::{Args, CmdResult};
+use ipmc_sensors::analog::BOARD_ANALOG;
 use stm32f4::stm32f401::{I2C1, I2C3, RCC};
 
 use crate::bsp::{boot_request, fault, ga, reset_cause, systick, uart};
@@ -617,7 +618,7 @@ impl IpmbLink {
                 }
             }
         }
-        let mut dispatch = DispatchContext::new(resolved);
+        let mut dispatch = DispatchContext::with_analog(resolved, &BOARD_ANALOG);
         if let Some(image) = fru_image {
             // The stored image replaces the built one; the self test runs on it (owner decision 8).
             dispatch.set_fru(image);
@@ -1442,13 +1443,14 @@ fn print_bus_stats(link: &Link, bus: Bus) {
     let e = &c.rx_errors;
     let name = bus.name();
     out!(
-        "IPMB-{} rx:    ok={} not-for-us={} response={} answers={} unavailable={} ingress-full={}\n",
+        "IPMB-{} rx:    ok={} not-for-us={} response={} answers={} unavailable={} power-up-window={} ingress-full={}\n",
         name,
         c.rx_ok,
         c.not_for_us,
         c.rx_response,
         c.rx_answers,
         c.bus_unavailable,
+        c.rx_power_up_window,
         c.ingress_full
     );
     out!(
@@ -1514,7 +1516,7 @@ pub fn cmd_ipmb_state(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
         );
     }
     out!(
-        "TX policy: {} (ipmc-defs IPMB_TX_POLICY)\n",
+        "TX policy: {} (from ipmc-defs IPMB_COMPLIANCE)\n",
         ipmc_core::link::tx_policy_name(link.config().tx_policy)
     );
     let mut data = [0u8; sensor::READING_LEN];

@@ -2,8 +2,9 @@
 //!
 //! This file is plain Rust: one `pub const NAME: T = value;` per tunable, in the order of the
 //! sections below. A person changes a build by editing a value here (and the small selector enums
-//! `MasterMode`, `TxPolicy`, `StrapSource`, `Source` and `TraceLevel`, whose variants name the
-//! alternatives of a value). The file holds no `use`, no function, no macro and no check.
+//! `MasterMode`, `IpmbCompliance`, `StrapSource`, `Source` and `TraceLevel`, whose
+//! variants name the alternatives of a value). The file holds no `use`, no function, no macro and
+//! no check.
 //!
 //! `src/lib.rs` checks every value at compile time: a type mismatch or a value outside the range
 //! of the rule written beside it stops the build at the define it names. Every crate reads a value
@@ -59,18 +60,28 @@ pub const IPMB_I2C_FAST_HZ: u32 = 400_000;
 /// whole IPMB frame incl. rsSA and both checksums
 pub const IPMB_MSG_MAX: usize = 32;
 
-/// Response bus policy.
+/// IpmbCompliance -- the values of IPMB_COMPLIANCE below.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TxPolicy {
-    /// alternate transmissions between IPMB-A and IPMB-B when both are enabled (VITA 46.11 Rule
-    /// 4.1.1-6)
-    Alternate,
-    /// send responses on the bus the request arrived on
-    Arrival,
+pub enum IpmbCompliance {
+    /// VITA 46.11 as written (see IPMB_COMPLIANCE).
+    Strict,
+    /// The two tolerances described at IPMB_COMPLIANCE.
+    NonStrict,
 }
 
-/// response bus policy
-pub const IPMB_TX_POLICY: TxPolicy = TxPolicy::Alternate;
+/// IPMB_COMPLIANCE -- IPMB link behaviour on IPMB-B at power-up and the bus of each response.
+///   Strict    VITA 46.11 as written:
+///             - IPMB-B ignores every frame until a Set IPMB State enables it (Rules 4.1.1-4, 4.1.8-1)
+///             - responses alternate between IPMB-A and IPMB-B when both are enabled (Rule 4.1.1-6)
+///   NonStrict (default):
+///             - until the first Set IPMB State that sets IPMB-B, a request that arrives on IPMB-B
+///               is answered on IPMB-B; the IPMB-B state and the IPMB Link sensor still read isolated
+///             - every response goes back on the bus its request arrived on
+///   Both: the IPMC's own requests and events alternate buses, and a failed transmission is resent
+///   on the other bus (Rule 4.1.1-7). The conformance case LINK-ALTERNATION fails under NonStrict.
+/// Owner decisions 10-27-2026 (PLAN.md 3.7).
+pub const IPMB_COMPLIANCE: IpmbCompliance = IpmbCompliance::NonStrict;
+
 /// Chassis Manager 8-bit address; spec value, the captured CM used 0x10
 pub const IPMB_CM_ADDR8: u8 = 0x20;
 /// responses kept for retry replay (8..=64); 64 holds about 4 s at the captured peak of 16 requests
@@ -314,26 +325,50 @@ pub const IPMC_AUX_FIRMWARE: u32 = 0;
 
 /// FRU board area: manufacturer; each FRU string is at most 63 bytes (8-bit ASCII type/length)
 pub const IPMC_FRU_BOARD_MFR: &str = "IronKernel";
-/// FRU board area: product name
-pub const IPMC_FRU_BOARD_PRODUCT: &str = "VPX Tier-1 IPMC";
-/// FRU board area: serial number
-pub const IPMC_FRU_BOARD_SERIAL: &str = "IK-T1-000001";
-/// FRU board area: part number
-pub const IPMC_FRU_BOARD_PART: &str = "IK-IPMC-T1-NUC";
+/// FRU board area: product name, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PRODUCT_T1: &str = "VPX Tier-1 IPMC";
+/// FRU board area: product name, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PRODUCT_T2: &str = "VPX Tier-2 IPMC";
+/// FRU board area: product name, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PRODUCT_T3: &str = "VPX Tier-3 IPMC";
+/// FRU board area: serial number, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_SERIAL_T1: &str = "IK-T1-000001";
+/// FRU board area: serial number, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_SERIAL_T2: &str = "IK-T2-000001";
+/// FRU board area: serial number, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_SERIAL_T3: &str = "IK-T3-000001";
+/// FRU board area: part number, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PART_T1: &str = "IK-IPMC-T1-NUC";
+/// FRU board area: part number, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PART_T2: &str = "IK-IPMC-T2-NUC";
+/// FRU board area: part number, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_BOARD_PART_T3: &str = "IK-IPMC-T3-NUC";
 /// FRU board area: FRU file ID (the board file ID; the product area has its own,
 /// IPMC_FRU_PRODUCT_FILE_ID)
 pub const IPMC_FRU_FILE_ID: &str = "ipmc-fru-v1";
 /// FRU product area: manufacturer
 pub const IPMC_FRU_PRODUCT_MFR: &str = "IronKernel";
-/// FRU product area: product name
-pub const IPMC_FRU_PRODUCT_NAME: &str = "Tier-1 IPMC Reference";
-/// FRU product area: part or model number
-pub const IPMC_FRU_PRODUCT_PART: &str = "IK-IPMC-T1";
+/// FRU product area: product name, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_NAME_T1: &str = "Tier-1 IPMC Reference";
+/// FRU product area: product name, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_NAME_T2: &str = "Tier-2 IPMC Reference";
+/// FRU product area: product name, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_NAME_T3: &str = "Tier-3 IPMC Reference";
+/// FRU product area: part or model number, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_PART_T1: &str = "IK-IPMC-T1";
+/// FRU product area: part or model number, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_PART_T2: &str = "IK-IPMC-T2";
+/// FRU product area: part or model number, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_PART_T3: &str = "IK-IPMC-T3";
 /// FRU product area: version; the default must equal the major.minor of the crate version (guard in
 /// ipmc-core identity.rs); a value written later with SET is not checked against it
 pub const IPMC_FRU_PRODUCT_VERSION: &str = "0.1";
-/// FRU product area: serial number
-pub const IPMC_FRU_PRODUCT_SERIAL: &str = "IK-T1-000001";
+/// FRU product area: serial number, Tier-1 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_SERIAL_T1: &str = "IK-T1-000001";
+/// FRU product area: serial number, Tier-2 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_SERIAL_T2: &str = "IK-T2-000001";
+/// FRU product area: serial number, Tier-3 build (the build selects the variant of its IPMC_TIER, ipmc-defs lib.rs)
+pub const IPMC_FRU_PRODUCT_SERIAL_T3: &str = "IK-T3-000001";
 /// FRU product area: asset tag, empty
 pub const IPMC_FRU_ASSET_TAG: &str = "";
 /// FRU product area: FRU file ID, empty (the built product area carries the no-data field)
@@ -423,6 +458,16 @@ pub const IPMC_SDR_PAYLOAD_STATUS_NAME: &str = "Payload Status";
 /// sensor 7 (Tier-3 only): ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit ASCII
 /// needs at least 2 characters; Table 43-2 allows 16)
 pub const IPMC_SDR_PAYLOAD_MODE_NAME: &str = "Payload Mode";
+/// publish the measured rails and the die temperature as analog sensors with Full Sensor SDR
+/// records (volts and degrees C in an SDR listing), numbers after the VITA 46.11 mandatory sensors;
+/// false leaves the repository at the mandatory sensors (owner decision 10-27-2026)
+pub const IPMC_SDR_ANALOG_SENSORS: bool = true;
+/// number of the first analog sensor: rail n is sensor FIRST + n, the die temperature follows the
+/// last rail; 8 (0x08), the number after the VITA mandatory sensors 0..=7
+pub const IPMC_SDR_ANALOG_FIRST: u8 = 0x08;
+/// analog sensor, die temperature: ID string of its SDR, 2..=16 bytes (IPMI v2.0 section 43.15: 8-bit
+/// ASCII needs at least 2 characters; Table 43-1 allows 16); the rail sensors use IPMC_RAILn_NAME
+pub const IPMC_SDR_DIE_TEMP_NAME: &str = "IPMC Die Temp";
 /// management controller device locator record (SDR type 12h) ID string, 2..=16 bytes; at most 6 so
 /// the whole record fits one Get Device SDR response (IPMI v2.0 Table 43-8: 16 + N bytes)
 pub const IPMC_SDR_IPMC_NAME: &str = "IPMC";
@@ -483,6 +528,14 @@ pub enum TraceLevel {
 
 /// sensor trace level at start-up; SENSORS TRACE {OFF|EVENTS|ALL} sets it at run time
 pub const IPMC_SENSOR_TRACE: TraceLevel = TraceLevel::Events;
+/// full-scale reading of an analog rail sensor as a percent of its nominal voltage (SDR Full
+/// records, owner decision 10-27-2026): sets the volts per count, M = ceil(nominal x pct / 100 /
+/// (255 counts x 10 mV)); at least 100 + IPMC_RAIL_CRIT_PCT so the critical window fits the 8-bit
+/// range, at most 1000
+pub const IPMC_SDR_RAIL_SPAN_PCT: u32 = 170;
+/// rails in the board rail table (ipmc-sensors board_sensors.rs RAILS; a guard there checks the
+/// two agree): VDDA, 12V payload, 5V, 3V3 payload, +3.3V_AUX
+pub const IPMC_RAIL_COUNT: usize = 5;
 /// capacity of the sensor snapshot rail array; the board rail table must fit
 pub const IPMC_RAILS_MAX: usize = 8;
 /// rail non-critical window, +/- percent of nominal
@@ -525,6 +578,9 @@ pub const IPMC_RAIL4_NOMINAL_MV: u32 = 3300;
 pub const IPMC_RAIL4_DIV_NUM: u32 = 2;
 /// rail 4 divider denominator
 pub const IPMC_RAIL4_DIV_DEN: u32 = 1;
+/// nominal die temperature, degrees C: the nominal reading of the analog die temperature sensor
+/// (between the lower and upper non-critical thresholds)
+pub const IPMC_TEMP_NOMINAL_C: i32 = 25;
 /// lower non-critical threshold, degrees C: reading <= it sets the flag
 pub const IPMC_TEMP_LNC_C: i32 = 0;
 /// lower critical threshold, degrees C
