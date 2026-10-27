@@ -9,9 +9,9 @@
 // the built image (gen.ps1), and `arm-none-eabi-objcopy --update-section` writes the result back
 // into the ELF. The runtime also reads the header back from flash (`image_line`) for the banner.
 
+use crate::bsp::flash_regs::read_flash;
 use ipmc_boot::header::{self, FLAG_EVAL, FLAG_TIER23, HEADER_ADDR, HEADER_LEN};
 use ipmc_boot::text::{put_dec, put_hex_bytes, put_version, TextOut};
-use ipmc_boot::ImageSource;
 
 /// flag -- `bit` when `on`, else 0.
 const fn flag(on: bool, bit: u32) -> u32 {
@@ -34,25 +34,13 @@ static APP_HEADER: [u8; HEADER_LEN] =
 /// DIGEST_SHOWN -- digest bytes the image line prints (16 hex digits).
 const DIGEST_SHOWN: usize = 8;
 
-/// FlashImage -- the program flash as an `ImageSource`.
-struct FlashImage;
-
-impl ImageSource for FlashImage {
-    fn read(&self, addr: u32, out: &mut [u8]) {
-        for (index, byte) in out.iter_mut().enumerate() {
-            // SAFETY: the callers read the header (HEADER_ADDR, 64 bytes), which lies inside the
-            // mapped, readable flash; a volatile read sees the bytes `fwimage patch` wrote, which
-            // the compiler cannot know.
-            *byte = unsafe { core::ptr::read_volatile((addr as usize + index) as *const u8) };
-        }
-    }
-}
-
 /// image_line -- `v<x.y.z>, <n> bytes, SHA-256 <first 16 hex digits>` from the header in flash
 /// (the text after the `Image:` label of the banner and `SYS VERSION`).
 pub fn image_line(out: &mut dyn TextOut) {
     let mut raw = [0u8; HEADER_LEN];
-    FlashImage.read(HEADER_ADDR, &mut raw);
+    // The header address and length lie inside the flash, so the read cannot fail; a failure
+    // would leave `raw` zero and the line would print an empty header.
+    let _ = read_flash(HEADER_ADDR, &mut raw);
     let image = header::decode(&raw);
     put_version(out, image.version);
     out.put(", ");

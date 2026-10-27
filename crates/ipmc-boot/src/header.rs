@@ -26,8 +26,9 @@ const OFF_FLAGS: usize = 0x10;
 const OFF_VECTORS: usize = 0x14;
 /// ERASED_WORD -- an erased flash word.
 const ERASED_WORD: u32 = 0xFFFF_FFFF;
-/// READ_CHUNK -- most bytes the digest reads from the source at once.
-const READ_CHUNK: usize = 256;
+/// READ_CHUNK -- most bytes the digest reads from the source at once (defs.rs
+/// `IPMC_BOOT_READ_CHUNK`).
+const READ_CHUNK: usize = ipmc_defs::IPMC_BOOT_READ_CHUNK;
 
 /// Header -- the 64 header bytes decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,7 +292,7 @@ fn hash_range(src: &dyn ImageSource, hash: &mut Sha256, from: u32, to: u32) {
 }
 
 /// digest -- SHA-256 over APP_START..APP_START+length minus the 32 digest bytes (the hashed
-/// range of section 4), read in chunks of at most 256 bytes from `src`.
+/// range of section 4), read in chunks of at most `READ_CHUNK` bytes from `src`.
 pub fn digest(src: &dyn ImageSource, length: u32) -> [u8; 32] {
     let end = APP_START.saturating_add(length).min(APP_END);
     let digest_start = HEADER_ADDR + DIGEST_OFFSET as u32;

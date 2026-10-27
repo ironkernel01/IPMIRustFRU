@@ -1053,7 +1053,11 @@ impl IpmbLink {
                 }
                 reset_cause::system_reset();
             }
-            Some(ResetRequest::Warm) => self.warm_reset(now_ms),
+            Some(ResetRequest::Warm) => {
+                // A bootloader request never outlives the reset it rode on.
+                self.boot_request = None;
+                self.warm_reset(now_ms);
+            }
             None => {}
         }
     }

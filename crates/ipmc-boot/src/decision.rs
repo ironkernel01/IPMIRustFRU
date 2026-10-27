@@ -104,8 +104,8 @@ impl Countdown {
     }
 
     /// step -- `wakeup` is the port whose WAKEUP line completed since the last call (the caller
-    /// passes the first in arrival order). Returns Digit(d) once for each digit when its second
-    /// begins (N at 0 ms, N-1 at 1000 ms, ... 1 at (N-1)*1000 ms), Session(port) for a WAKEUP
+    /// passes the first port whose `WAKEUP` line completed; within one pass the console is read
+    /// first). Returns Digit(d) once for each digit when its second begins (N at 0 ms, N-1 at 1000 ms, ... 1 at (N-1)*1000 ms), Session(port) for a WAKEUP
     /// completed before N*1000 ms, Start at N*1000 ms or later, Wait otherwise. Call again after
     /// a Digit until it returns something else.
     pub fn step(&mut self, elapsed_ms: u32, wakeup: Option<PortId>) -> Tick {

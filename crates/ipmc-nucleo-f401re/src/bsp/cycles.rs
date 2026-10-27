@@ -1,9 +1,9 @@
 // cycles.rs - the DWT cycle counter: the one free-running time base of the firmware (the IPMB
 // masters' waits, the flash stall catch-up, the bootloader's hash timer).
 //
-// Ownership: this module owns the DWT cycle counter use; `start_cycle_counter` is the only
-// writer of DCB trace enable and DWT_CTRL.CYCCNTENA. The bootloader's hand-over (boot/start.rs)
-// switches the counter off with `stop_cycle_counter`.
+// Ownership: this module owns the DWT cycle counter use; `start_cycle_counter` and
+// `stop_cycle_counter` are the only writers of DCB trace enable and DWT_CTRL.CYCCNTENA. The
+// bootloader's hand-over (boot/start.rs) calls `stop_cycle_counter`.
 
 use cortex_m::peripheral::{DCB, DWT};
 

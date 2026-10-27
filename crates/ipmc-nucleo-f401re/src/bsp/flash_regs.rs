@@ -1,6 +1,6 @@
 // flash_regs.rs - the FLASH peripheral's erase and program sequences (RM0368 sections 3.5 to
-// 3.7) and flash reads. The FRU store driver (firmware drivers/flash.rs) and, later, the
-// bootloader's loader are built over it.
+// 3.7) and flash reads. The FRU store driver (firmware drivers/flash.rs) and the bootloader's
+// loader (boot/flash_image.rs) are built over it.
 //
 // Ownership: this module owns the FLASH peripheral once `clock::init` has set the wait states
 // (FLASH_ACR LATENCY, prefetch and cache enables) and the binary has moved the peripheral in with
@@ -295,18 +295,25 @@ impl FlashRegs {
         result
     }
 
-    /// read -- volatile byte reads of `addr..addr + out.len()` inside the flash (any sector: a
-    /// read changes nothing). Err(Range) for a range outside the flash.
+    /// read -- `read_flash` (a read needs no peripheral handle; this method keeps the call form
+    /// of the other flash operations).
     pub fn read(&self, addr: u32, out: &mut [u8]) -> Result<(), FlashError> {
-        check_range(addr, out.len(), FLASH_START)?;
-        for (index, byte) in out.iter_mut().enumerate() {
-            // SAFETY: `check_range` checked that addr + index lies inside the flash, which is
-            // mapped, readable memory; a volatile read keeps the compiler from caching a byte
-            // that the program and erase paths change.
-            *byte = unsafe { ptr::read_volatile((addr as usize + index) as *const u8) };
-        }
-        Ok(())
+        read_flash(addr, out)
     }
+}
+
+/// read_flash -- volatile byte reads of `addr..addr + out.len()` inside the flash (any sector: a
+/// read changes nothing). Err(Range) for a range outside the flash. The one flash read of the
+/// firmware: `FlashRegs::read` and the runtime header read (app_header.rs) call it.
+pub fn read_flash(addr: u32, out: &mut [u8]) -> Result<(), FlashError> {
+    check_range(addr, out.len(), FLASH_START)?;
+    for (index, byte) in out.iter_mut().enumerate() {
+        // SAFETY: `check_range` checked that addr + index lies inside the flash, which is
+        // mapped, readable memory; a volatile read keeps the compiler from caching a byte
+        // that the program and erase paths change.
+        *byte = unsafe { ptr::read_volatile((addr as usize + index) as *const u8) };
+    }
+    Ok(())
 }
 
 /// check_range -- `addr..addr + len` lies in `low..FLASH_END` without overflow; Err(Range) when it

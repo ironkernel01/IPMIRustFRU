@@ -720,6 +720,16 @@ const _: () = assert!(
     IPMC_BOOT_COUNTDOWN_FIELD < 31,
     "IPMC_BOOT_COUNTDOWN_FIELD must be 0..=30"
 );
+// The two bootloader read-back buffers are stack arrays: non-zero (a zero chunk never advances),
+// and small. No alignment is relied on: the readers take byte counts.
+const _: () = assert!(
+    IPMC_BOOT_COMPARE_CHUNK >= 1 && IPMC_BOOT_COMPARE_CHUNK <= 255,
+    "IPMC_BOOT_COMPARE_CHUNK must be 1..=255"
+);
+const _: () = assert!(
+    IPMC_BOOT_READ_CHUNK >= 1 && IPMC_BOOT_READ_CHUNK <= 1024,
+    "IPMC_BOOT_READ_CHUNK must be 1..=1024"
+);
 const _: () = assert!(
     IPMC_FWU_PIN_SETTLE_US >= 10 && IPMC_FWU_PIN_SETTLE_US <= 10_000,
     "IPMC_FWU_PIN_SETTLE_US must be 10..=10000"

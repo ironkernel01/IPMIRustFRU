@@ -6,8 +6,8 @@ use crate::header::ImageSource;
 use crate::hex::{parse, Record, DATA_MAX};
 use ipmc_fru::persist::FlashError;
 
-/// COMPARE_CHUNK -- bytes read back at a time.
-const COMPARE_CHUNK: usize = 64;
+/// COMPARE_CHUNK -- bytes read back at a time (defs.rs `IPMC_BOOT_COMPARE_CHUNK`).
+const COMPARE_CHUNK: usize = ipmc_defs::IPMC_BOOT_COMPARE_CHUNK;
 /// ERASED -- what the erased-check compares against.
 const ERASED: [u8; DATA_MAX] = [0xFF; DATA_MAX];
 

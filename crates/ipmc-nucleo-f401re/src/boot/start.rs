@@ -14,8 +14,9 @@ use stm32f4::stm32f401;
 use crate::console;
 
 extern "C" {
-    /// The runtime vector table: `__app_vectors` of flash_map.x. Only its address is used.
-    static __app_vectors: u32;
+    /// The runtime vector table: `__app_vectors` of flash_map.x, whose first two words are the
+    /// initial stack pointer and the reset vector.
+    static __app_vectors: [u32; 2];
 }
 
 /// NVIC_WORDS -- 32-bit words of the NVIC enable and pending registers that hold the 85
@@ -24,9 +25,10 @@ const NVIC_WORDS: usize = 3;
 
 /// start_runtime -- steps 2 to 8 of design 6.4:
 /// 2. flush the console (and APP_UART when up);
-/// 3. mask interrupts, clear every NVIC enable and pending bit, stop SysTick;
-/// 4. reset USART1, USART2, PWR and GPIOA..C through RCC (each pulsed set then clear) and put
-///    their clock enables back to the reset values;
+/// 3. mask interrupts, stop SysTick;
+/// 4. reset USART1, USART2, PWR and GPIOA..C through RCC (each pulsed set then clear), put
+///    their clock enables back to the reset values, then clear every NVIC enable and pending
+///    bit (after the peripheral reset, so an IRQ latched while a USART still ran is cleared too);
 /// 5. `clock::restore_reset_state`; a fault there does not stop the start, the runtime
 ///    `clock::init` reports a PLL it finds running as its clock fault;
 /// 6. DWT cycle counter off;
@@ -48,15 +50,7 @@ pub fn start_runtime() -> ! {
         )
     };
 
-    // Step 3: no interrupt enabled or pending, SysTick stopped (CTRL = 0) and not pending.
-    for index in 0..NVIC_WORDS {
-        // SAFETY: ICER and ICPR are write-one-to-clear registers; the writes only disable and
-        // un-pend interrupts, with interrupts masked.
-        unsafe {
-            (*NVIC::PTR).icer[index].write(u32::MAX);
-            (*NVIC::PTR).icpr[index].write(u32::MAX);
-        }
-    }
+    // Step 3: SysTick stopped (CTRL = 0) and not pending; interrupts stay masked.
     // SAFETY: SYST_CSR = 0 stops the counter and its interrupt; nothing else uses SysTick now.
     unsafe { (*SYST::PTR).csr.write(0) };
     SCB::clear_pendst();
@@ -83,6 +77,15 @@ pub fn start_runtime() -> ! {
     rcc.ahb1enr().reset();
     rcc.apb1enr().reset();
     rcc.apb2enr().reset();
+    // Step 4, last part: no interrupt enabled or pending, now that no peripheral can raise one.
+    for index in 0..NVIC_WORDS {
+        // SAFETY: ICER and ICPR are write-one-to-clear registers; the writes only disable and
+        // un-pend interrupts, with interrupts masked.
+        unsafe {
+            (*NVIC::PTR).icer[index].write(u32::MAX);
+            (*NVIC::PTR).icpr[index].write(u32::MAX);
+        }
+    }
 
     // Step 5: the clock tree. A failure is not fatal here (see above).
     let _ = clock::restore_reset_state(rcc, &dp.FLASH);
@@ -93,15 +96,20 @@ pub fn start_runtime() -> ! {
     // Step 7: VTOR to the runtime table.
     let vectors = core::ptr::addr_of!(__app_vectors);
     // SAFETY: `__app_vectors` is the 512-byte aligned start of APP (flash_map.x), where the
-    // runtime vector table is (link.x asserts it; the image check read it).
+    // runtime vector table is (link.x asserts it; the image check read it); only the address of
+    // the static is used here.
     unsafe { cp.SCB.vtor.write(vectors as u32) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 
     // Step 8: initial stack pointer and reset vector from the table.
     // SAFETY: the image check accepted the table: word 0 is an 8-byte aligned address in RAM and
-    // word 1 an odd (Thumb) address inside the image; both words are read from the mapped flash.
-    let (stack, reset) = unsafe { (vectors.read_volatile(), vectors.add(1).read_volatile()) };
+    // word 1 an odd (Thumb) address inside the image; `__app_vectors` is declared as those two words
+    // and both are read from the mapped flash.
+    let (stack, reset) = unsafe {
+        let words = vectors.cast::<u32>();
+        (words.read_volatile(), words.add(1).read_volatile())
+    };
     // SAFETY: loads MSP with the checked stack pointer, selects the main stack in thread mode
     // (CONTROL = 0, no FPU context), unmasks interrupts (the NVIC holds no enabled interrupt, so
     // none can fire before the runtime enables its own) and branches to the checked reset

@@ -214,6 +214,10 @@ pub const IPMC_FWU_LOAD_IDLE_S: u32 = 30;
 pub const IPMC_BOOT_COUNTDOWN_BENCH: u32 = 3;
 /// field image (`gen.ps1 build -Field`): the same wait; 0 = no countdown, the image starts at once
 pub const IPMC_BOOT_COUNTDOWN_FIELD: u32 = 0;
+/// bootloader LOAD: bytes read back from flash at a time to verify a programmed record (ipmc-boot load.rs); 1..=255 (one Intel HEX data field); the buffer lives on the bootloader stack
+pub const IPMC_BOOT_COMPARE_CHUNK: usize = 64;
+/// bootloader image check: bytes read from flash at a time while the SHA-256 runs (ipmc-boot header.rs); 1..=1024; the buffer lives on the bootloader stack (256 bytes cost 256 bytes of the 32 KB region's stack headroom)
+pub const IPMC_BOOT_READ_CHUNK: usize = 256;
 /// name the firmware and the bootloader print for the console UART (USART2); a PC's port number is
 /// not known to the firmware and is never printed (1..=8 printable ASCII bytes, no space)
 pub const IPMC_CONSOLE_UART_NAME: &str = "CLI";

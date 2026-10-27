@@ -73,11 +73,11 @@ input or the end of input stops the run (`refused: entry not confirmed`, exit 1)
    tool prints `record N: ERR ABORTED, LOAD again from record N`, sends `LOAD`, the last 04 record sent
    before record N, then record N again, and goes on. At most 3 resumes per update (`LOAD_RESUMES`); the
    next `ERR ABORTED` stops the run. Record numbers and the progress counter stay those of the file.
-5. The end record, `VERIFY`, then `RUN` (not with `--no-run` or `--field`).
+5. The end record, `VERIFY`, then `RUN` (not with `--no-run` or `--field`). The digest in the `OK VERIFY valid SHA-256 <hex>` answer must equal the digest in the image header of the file (a difference is a refusal, `VERIFY digest <got> differs from the file's <want>`); with `--as-is` or a file without a readable header the tool says it did not compare. A port that cannot be opened (missing or busy) is a refusal, `refused: <port>: <message>`, exit 1.
 
 Exit codes: 0 success, 1 a refusal or an `ERR` answer, 2 usage, 3 a timeout.
 
-Time: a full update of today's image takes about 77 s over APP and about 95 s over CLI at 115200 baud
+Time: a full update of today's image (139 456 bytes, 4 354 records) takes about 75 s over APP and about 40 s over CLI at 115200 baud
 (the five sectors 3-7 erase in up to 8.5 s by the datasheet maxima, about 3.5 s measured).
 
 ## Field procedure

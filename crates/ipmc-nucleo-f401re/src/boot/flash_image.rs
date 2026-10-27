@@ -1,5 +1,5 @@
 // flash_image.rs - the flash as the bootloader uses it: the header check reads it
-// (`ImageSource`), and the session of the next brief erases and programs it (`FlashOps`).
+// (`ImageSource`), and the bootloader session erases and programs it (`FlashOps`).
 //
 // Ownership: `FlashImage` owns the library's `FlashRegs` (the FLASH peripheral). The register
 // layer refuses sectors 0 and 1 and every address below 0x0800_8000 on its own; the region policy

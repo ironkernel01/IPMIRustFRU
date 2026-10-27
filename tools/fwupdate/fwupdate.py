@@ -43,14 +43,18 @@ RETRY_CODES = ("FORMAT", "CHECKSUM", "LINE_TOO_LONG")
 ENTER_COMMANDS = {"cli": "DEBUG BOOTLOADER", "app": "BOOTLOADER"}
 # The word that confirms the restart while payload power is on (the reset releases PWR_EN).
 CONFIRM_WORD = "CONFIRM"
-# Most lines read after an entry command, and the answers that end it (the app port's final `OK`
-# is tested separately). The last three ask for CONFIRM: the console's `Send DEBUG BOOTLOADER
-# CONFIRM to restart` and the app port's `ERROR CONFIRM: ...`; other `ERROR` lines end it too.
-ENTER_LINES_MAX = 6
+# The answers that end an entry command (the app port's final `OK` is tested separately). The
+# last three ask for CONFIRM: the console's `Send DEBUG BOOTLOADER CONFIRM to restart` and the app
+# port's `ERROR CONFIRM: ...`; other `ERROR` lines end it too. The most lines read after an entry
+# command is `fwu_settings.ENTER_LINES_MAX`.
 ENTER_LAST_PREFIXES = ("Payload power drops", "Send DEBUG BOOTLOADER CONFIRM", "ERROR")
 ENTER_ASKS_PREFIXES = ("Send DEBUG BOOTLOADER CONFIRM", "ERROR CONFIRM")
 CONFIRM_PROMPT = "Payload power is on. Type CONFIRM to restart into the bootloader: "
 STATUS_PATTERN = re.compile(r"^(OK|ERR)(?: |$)")
+# The digest of the answer `OK VERIFY valid SHA-256 <64 hex> <t> ms`.
+VERIFY_DIGEST_PATTERN = re.compile(r"SHA-256 ([0-9A-Fa-f]{64})(?: |$)")
+DIGEST_OFFSET = 0x20
+DIGEST_LEN = 32
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EXIT_TIMEOUT = 0, 1, 2, 3
 
@@ -184,6 +188,18 @@ def precheck(low, image):
         raise Refused(f"SHA-256 differs: computed {digest.hex()} stored {stored.hex()}")
 
 
+def header_digest(low, image):
+    """The digest field of the image header (hex) when the data holds a whole header with the
+    right magic, else None."""
+    start = HEADER_ADDR - low
+    if start < 0 or start + HEADER_SIZE > len(image):
+        return None
+    header = bytes(image[start : start + HEADER_SIZE])
+    if int.from_bytes(header[:4], "little") != HEADER_MAGIC:
+        return None
+    return header[DIGEST_OFFSET : DIGEST_OFFSET + DIGEST_LEN].hex()
+
+
 def rechunk(low, image, size=fwu_settings.RECORD_BYTES):
     """Record lines for the image: aligned `size`-byte data records, an 04 record when the upper
     16 bits change (also before the first), the 01 record last. A chunk that is all FFh is
@@ -255,6 +271,13 @@ class SerialTransport:
             if expected not in self._partial and time.monotonic() >= deadline:
                 self._partial = b""
                 return False
+
+    def drain(self):
+        """Reads and drops what is waiting now (no waiting), and clears the partial line."""
+        if self._serial.in_waiting:
+            self._serial.read(self._serial.in_waiting)
+        self._serial.reset_input_buffer()
+        self._partial = b""
 
     def settle(self, seconds):
         """Reads and drops everything that arrives for `seconds`, then clears the input buffer."""
@@ -402,7 +425,9 @@ class Bootloader:
 
     def _resume(self, before, number):
         """LOAD again (the upper address restarts at 0) and the last type-04 record of `before`;
-        the caller sends the refused record next."""
+        the caller sends the refused record next. What is still waiting (the prompt, a partial
+        line after `ERR ABORTED`) is dropped first, so it is not read as the answer to `LOAD`."""
+        self._transport.drain()
         self.run_ok("LOAD", expect="OK LOAD")
         upper = [text for text in before if text[7:9] == "04"]
         for text in upper[-1:]:
@@ -421,21 +446,32 @@ def plain_lines(path):
 
 
 def prepare(args, out):
-    """The record lines to send for `update`, after the pre-check (before anything is sent)."""
+    """(record lines to send for `update`, the header digest to expect from VERIFY or None),
+    after the pre-check (before anything is sent). `--as-is` expects no digest."""
     with open(args.file, encoding="ascii", errors="replace") as handle:
         records = parse_records(handle.read())
     low, image = build_image(build_memory(records))
     if not args.no_precheck:
         precheck(low, image)
         out("pre-check passed")
-    return plain_lines(args.file) if args.as_is else rechunk(low, image)
+    if args.as_is:
+        return plain_lines(args.file), None
+    return rechunk(low, image), header_digest(low, image)
 
 
-def update(boot, args, lines, out, progress):
-    """The update sequence: erase, load, verify, then run (or the field message)."""
+def update(boot, args, lines, want, out, progress):
+    """The update sequence: erase, load, verify, then run (or the field message). `want` is the
+    digest of the file's image header (hex) that the VERIFY answer must carry, or None."""
     boot.erase("APP")
     boot.load(lines, progress)
-    boot.run_ok("VERIFY", expect="OK VERIFY valid")
+    _, status = boot.run_ok("VERIFY", expect="OK VERIFY valid")
+    if want is None:
+        out("VERIFY digest not compared with the file (--as-is or no readable image header)")
+    else:
+        found = VERIFY_DIGEST_PATTERN.search(status)
+        got = found.group(1).lower() if found else "(none)"
+        if got != want:
+            raise Refused(f"VERIFY digest {got} differs from the file's {want}")
     if args.field:
         out("remove the BOOTLOADER jumper and power-cycle the board")
     elif not args.no_run:
@@ -484,7 +520,7 @@ def enter_once(port, command, out):
     line is skipped."""
     port.write(command.encode("ascii") + LINE_END)
     asks = False
-    for _ in range(ENTER_LINES_MAX):
+    for _ in range(fwu_settings.ENTER_LINES_MAX):
         line = port.read_line(fwu_settings.ANSWER_TIMEOUT_S)
         if line is None:
             break
@@ -548,19 +584,23 @@ def main(
         end_progress()
         out(text)
 
+    opening = [args.port]  # the port being opened, named in a serial error
+
     try:
-        lines = prepare(args, out) if args.action == "update" else None
+        lines, want = prepare(args, out) if args.action == "update" else (None, None)
         if args.enter:
+            opening[0] = args.enter_port
             enter_runtime(args, transport_factory, out, read_input)
         if args.field:
             out("power-cycle the board now")
         baud = args.baud or fwu_settings.baud_for(args.uart)
+        opening[0] = args.port
         transport = transport_factory(args.port, baud)
         try:
             boot = Bootloader(transport, say, clock)
             boot.wakeup(None if args.field else fwu_settings.WAKEUP_GIVE_UP_S)
             if args.action == "update":
-                update(boot, args, lines, out, progress)
+                update(boot, args, lines, want, out, progress)
             elif args.action in ("erase-app", "erase-fru"):
                 boot.erase(args.action[-3:].upper())
             elif args.action in SIMPLE:
@@ -573,6 +613,13 @@ def main(
     except BootTimeout as error:
         say(f"timeout: {error}")
         return EXIT_TIMEOUT
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        # pyserial is imported on first use, so its exception is found by class name (a missing
+        # or busy port); anything else is a bug and goes on.
+        if not any(cls.__name__ == "SerialException" for cls in type(error).__mro__):
+            raise
+        say(f"refused: {opening[0]}: {error}")
+        return EXIT_REFUSED
     out(f"done in {clock() - start:.1f} s")
     return EXIT_OK
 

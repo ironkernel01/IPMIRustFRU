@@ -6,7 +6,7 @@
 // NOINIT region). No start-up code of either image clears NOINIT, so the words keep their value
 // through SYSRESETREQ and through the bootloader.
 
-use core::ptr::{addr_of, write_volatile};
+use core::ptr::{addr_of_mut, write_volatile};
 
 use crate::bsp::raw::read_raw_word;
 
@@ -16,14 +16,15 @@ pub const WORDS: usize = 4;
 const CHECK: usize = WORDS - 1;
 
 extern "C" {
-    /// The first word of the boot request: `__boot_request` of flash_map.x (ORIGIN(NOINIT)). Only
-    /// its address is used.
-    static __boot_request: u32;
+    /// The boot request: `__boot_request` of flash_map.x (ORIGIN(NOINIT)), the `WORDS` words at
+    /// the start of NOINIT. Accessed only through its address (`addr_of_mut!`) with volatile
+    /// writes and the raw word read.
+    static mut __boot_request: [u32; WORDS];
 }
 
 /// words -- the address of the first request word.
 fn words() -> *mut u32 {
-    addr_of!(__boot_request).cast_mut()
+    addr_of_mut!(__boot_request).cast::<u32>()
 }
 
 /// read -- the four words as integers, however the RAM got its value (the raw word read).
@@ -35,7 +36,7 @@ pub fn read() -> [u32; WORDS] {
 pub fn write(request: [u32; WORDS]) {
     let base = words();
     for (index, word) in request.into_iter().enumerate() {
-        // SAFETY: `__boot_request` is the first of the `WORDS` words at the start of NOINIT
+        // SAFETY: `__boot_request` is declared as the `WORDS` words at the start of NOINIT
         // (flash_map.x), which both link scripts leave to these words (the runtime's `.uninit`
         // starts 16 bytes later, the bootloader has no section there) and which no start-up code
         // clears; `index < WORDS`; the main loop is the only caller and no interrupt handler

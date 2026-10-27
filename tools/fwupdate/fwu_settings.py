@@ -28,6 +28,10 @@ WAKEUP_GIVE_UP_S = 60.0
 # on the monotonic clock over reads of this length.
 POLL_S = 0.02
 
+# Most lines read after a runtime entry command (`DEBUG BOOTLOADER`, `BOOTLOADER`) while waiting
+# for the line that ends it; the read stops earlier at the first ending line.
+ENTER_LINES_MAX = 6
+
 # Seconds to wait for the status line of one command.
 ANSWER_TIMEOUT_S = 2.0
 

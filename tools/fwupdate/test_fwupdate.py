@@ -8,6 +8,8 @@ import hashlib
 import io
 import os
 import tempfile
+import time
+import types
 import unittest
 from pathlib import Path
 
@@ -37,6 +39,11 @@ def good_image(length=0x400):
     return image
 
 
+def good_digest():
+    """The digest field of `good_image()`, hex."""
+    return bytes(good_image()[HEADER + 0x20 : HEADER + 0x40]).hex()
+
+
 def hex_text(image, low=LOW, per_record=16, extra=()):
     """Intel HEX text for `image`: an 04 record, data records, any `extra` lines, the 01 record."""
     lines = [fwupdate.record_line(4, 0, (low >> 16).to_bytes(2, "big"))]
@@ -58,8 +65,17 @@ class FakeBoot:
     `record_answers` maps a record number (1 based) to the list of answers for its attempts."""
 
     def __init__(
-        self, wake_after=1, record_answers=None, erase_answer=True, preamble=(), double_ok=False
+        self,
+        wake_after=1,
+        record_answers=None,
+        erase_answer=True,
+        preamble=(),
+        double_ok=False,
+        verify_digest=None,
+        stale_after_abort=False,
     ):
+        self._verify_digest = verify_digest or good_digest()
+        self._stale_after_abort = stale_after_abort
         self._double_ok = double_ok
         self.now = 0.0
         self.written = []
@@ -130,7 +146,7 @@ class FakeBoot:
         elif line == "INFO":
             self._reply("Bootloader: ipmc-boot v0.1.0", "OK")
         elif line == "VERIFY":
-            self._reply("OK VERIFY valid SHA-256 " + "0" * 64 + " 40 ms")
+            self._reply(f"OK VERIFY valid SHA-256 {self._verify_digest} 40 ms")
         elif line == "RUN":
             self._reply("OK RUN")
         else:
@@ -149,6 +165,8 @@ class FakeBoot:
             answer = answers.pop(0)
             self._reply(answer)
             if answer == "ERR ABORTED":
+                if self._stale_after_abort:
+                    self._reply("ERR UNKNOWN stale", PROMPT)  # the damaged line's tail, the prompt
                 self._records = False  # the line ended record mode; ERASE APP stays in force
                 self._aborted = True
                 self._record_number -= 1
@@ -175,6 +193,9 @@ class FakeBoot:
     def settle(self, seconds):
         self._queue.clear()
         self.now += seconds
+
+    def drain(self):
+        self._queue.clear()
 
     def close(self):
         self.closed = True
@@ -369,6 +390,54 @@ class SequenceTests(unittest.TestCase):
         self.assertIn("record 5: ERR ABORTED, LOAD again from record 5", out)
         self.assertEqual(fake.written[-2:], ["VERIFY", "RUN"])
 
+    def test_resume_drops_stale_input_before_load(self):
+        fake = FakeBoot(record_answers={5: ["ERR ABORTED"]}, stale_after_abort=True)
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(fake.written.count("LOAD"), 2)
+
+    def test_verify_digest_is_compared_with_the_file_header(self):
+        fake = FakeBoot()
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 0, out)
+        self.assertFalse(any("not compared" in line for line in out), out)
+        wrong = "ab" * 32
+        fake = FakeBoot(verify_digest=wrong)
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 1)
+        self.assertIn(f"refused: VERIFY digest {wrong} differs from the file's {good_digest()}", out)
+        self.assertNotIn("RUN", fake.written)
+
+    def test_verify_digest_comparison_is_skipped_as_is_and_without_a_header(self):
+        headerless = good_image()
+        headerless[HEADER] = 0  # no readable header: --no-precheck lets it through
+        for flags, image in ((["--as-is"], good_image()), (["--no-precheck"], headerless)):
+            with self.subTest(flags):
+                with open(self.path, "w") as out_file:
+                    out_file.write(hex_text(image))
+                fake = FakeBoot(verify_digest="ab" * 32)
+                code, out = run_main(fake, "--port", "COM5", *flags, "update", self.path)
+                self.assertEqual(code, 0, out)
+                self.assertTrue(any("not compared" in line for line in out), out)
+
+    def test_serial_exception_is_a_refusal_not_a_traceback(self):
+        class SerialException(OSError):
+            """Named like pyserial's, which is not imported here."""
+
+        def factory(port, baud):
+            raise SerialException(f"could not open port {port}: busy")
+
+        code, out = run_main(types.SimpleNamespace(factory=factory, clock=time.monotonic), "--port", "COM9", "info")
+        self.assertEqual(code, 1)
+        self.assertEqual(out, ["refused: COM9: could not open port COM9: busy"])
+
+    def test_other_exceptions_still_propagate(self):
+        def factory(port, baud):
+            raise ValueError("bug")
+
+        with self.assertRaises(ValueError):
+            run_main(types.SimpleNamespace(factory=factory, clock=time.monotonic), "--port", "COM9", "info")
+
     def test_resumes_run_out(self):
         answers = ["ERR ABORTED"] * (fwu_settings.LOAD_RESUMES + 1)
         fake = FakeBoot(record_answers={5: answers})
@@ -467,6 +536,13 @@ class SerialTransportTests(unittest.TestCase):
         self.assertIsNone(transport.read_line(0.05))
         transport.settle(0.05)
         self.assertEqual(transport._serial.timeout_sets, 1)
+
+    def test_drain_drops_what_is_waiting_and_the_partial_line(self):
+        transport = self.make([b"OK\r\npart", b"ial"])
+        self.assertEqual(transport.read_line(0.05), "OK")
+        transport.drain()
+        self.assertEqual(transport._partial, b"")
+        self.assertIsNone(transport.read_line(0.0))
 
     def test_two_lines_in_one_read_are_two_results(self):
         transport = self.make([b"one\r\ntwo\r\n"])
