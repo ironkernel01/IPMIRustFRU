@@ -29,6 +29,9 @@ pub struct Status {
     pub nvmro: bool,
     /// Seconds since reset.
     pub uptime_s: u32,
+    /// PWR_EN is asserted: the payload has power (the same test as the console's
+    /// `Sensing::payload_power_on`).
+    pub payload_power: bool,
 }
 
 /// SaveState -- whether the FRU image in RAM is in the flash log.

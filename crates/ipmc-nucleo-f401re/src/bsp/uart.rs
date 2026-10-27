@@ -298,6 +298,13 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
                 if overrun {
                     counters.overrun.fetch_add(1, Ordering::Relaxed);
                 }
+                // FE, NF and PE belong to the byte in DR and clear with the same SR-then-DR
+                // read (RM0368 19.6.1); the byte is queued as received and the error counted.
+                if received
+                    && (sr.fe().bit_is_set() || sr.nf().bit_is_set() || sr.pe().bit_is_set())
+                {
+                    counters.line_errors.fetch_add(1, Ordering::Relaxed);
+                }
                 // ORE can be set with RXNE clear (RM0368 19.3.3); DR then holds no new
                 // character, so the byte is queued only when this SR capture had RXNE.
                 if received && !self.rx.push(byte) {
@@ -378,6 +385,7 @@ struct PortCounters {
     rx_overflow: AtomicU32,
     tx_timeout: AtomicU32,
     overrun: AtomicU32,
+    line_errors: AtomicU32,
     tx_lines_dropped: AtomicU32,
 }
 
@@ -387,6 +395,7 @@ impl PortCounters {
             rx_overflow: AtomicU32::new(0),
             tx_timeout: AtomicU32::new(0),
             overrun: AtomicU32::new(0),
+            line_errors: AtomicU32::new(0),
             tx_lines_dropped: AtomicU32::new(0),
         }
     }
@@ -400,6 +409,8 @@ pub struct Counters {
     pub rx_overflow: u32,
     pub tx_timeout: u32,
     pub overrun: u32,
+    /// Bytes received with a framing, noise or parity error (FE, NF, PE).
+    pub line_errors: u32,
     /// Trace lines dropped because the TX ring had no room for the whole line.
     pub tx_lines_dropped: u32,
 }
@@ -411,6 +422,7 @@ pub fn counters(port: Port) -> Counters {
         rx_overflow: c.rx_overflow.load(Ordering::Relaxed),
         tx_timeout: c.tx_timeout.load(Ordering::Relaxed),
         overrun: c.overrun.load(Ordering::Relaxed),
+        line_errors: c.line_errors.load(Ordering::Relaxed),
         tx_lines_dropped: c.tx_lines_dropped.load(Ordering::Relaxed),
     }
 }

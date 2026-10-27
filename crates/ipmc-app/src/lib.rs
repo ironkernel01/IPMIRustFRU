@@ -50,7 +50,7 @@
 //! - A request may start with a tag, `#` and 1 to 8 letters or digits. The final line carries it
 //!   after the `OK` or `ERROR`: `OK #a7`, `ERROR #a7 TOO_LONG: ...`. Data lines carry no tag. A
 //!   bad tag, or a line that was lost or could not be read (too long, a byte that is not
-//!   printable ASCII, bytes lost on the port), is answered without a tag.
+//!   printable ASCII, bytes lost or damaged on the port), is answered without a tag.
 //! - Commands are not case sensitive.
 //!
 //! The banner is not an answer, so it has no final line:
@@ -76,7 +76,7 @@
 //!
 //! The UART counts the bytes it loses (overrun, receive ring full). When the count moves, the
 //! firmware discards every byte waiting in the receive ring and calls `LineEditor::damage`;
-//! the next line end answers `ERROR LINE_DAMAGED: <n> bytes lost on the port; the line was
+//! the next line end answers `ERROR LINE_DAMAGED: <n> bytes lost or damaged on the port; the line was
 //! dropped` (no tag, because the tag may be among the lost bytes), nothing runs for it, and the
 //! lines after it run normally. The firmware looks at the loss counter after every byte it takes,
 //! before it serves that byte. A loss found then discards the byte in hand as well (it can be the

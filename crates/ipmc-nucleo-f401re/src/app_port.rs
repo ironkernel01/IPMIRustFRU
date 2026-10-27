@@ -28,7 +28,8 @@
 // stays pending and the receive ring fills; a full ring then holds the sender off (RTS
 // deasserted), so only the byte already in flight can be lost, and the port counts that loss and
 // answers the next line end `LINE_DAMAGED`. Without flow control a sender that fills the ring
-// loses bytes, with the same answer.
+// loses bytes, with the same answer. A byte received with a framing, noise or parity error
+// counts as lost: its line gets the same answer and does not run.
 //
 // Ownership: the UART driver (ipmc-nucleo-f401re src/bsp/uart.rs) owns USART1 and its rings; this file only reads and
 // writes through its functions. The per-unit FRU fields are written through the same path as a
@@ -77,10 +78,14 @@ pub struct AppPort {
     started: bool,
 }
 
-/// lost_bytes -- bytes the application port has lost since reset (overrun and RX overflow).
+/// lost_bytes -- bytes the application port has lost or received damaged since reset (overrun,
+/// RX overflow, and a framing, noise or parity error): a damaged byte cannot be trusted, so its
+/// line is refused like a line with a lost byte.
 fn lost_bytes() -> u32 {
     let c = uart::counters(Port::App);
-    c.overrun.wrapping_add(c.rx_overflow)
+    c.overrun
+        .wrapping_add(c.rx_overflow)
+        .wrapping_add(c.line_errors)
 }
 
 impl AppPort {
@@ -103,22 +108,28 @@ impl AppPort {
     /// most BYTES_PER_POLL bytes and answers at most one request line: the pass ends after the
     /// answer, so a payload CPU that sends many requests cannot hold the IPMB link service off.
     /// Does nothing when the port is off or did not start.
-    pub fn poll(&mut self, link: &mut IpmbLink) {
+    pub fn poll(&mut self, link: &mut IpmbLink, payload_power: bool) {
         if !ENABLED || !uart::is_up(Port::App) {
             return;
         }
-        self.poll_pass(link);
+        self.poll_pass(link, payload_power);
         // A Cold Reset asked for from this port waits for its own answer: the link's reset gate
         // counts the output still in `out` or in the TX ring as "not idle".
         link.set_app_output_pending(self.sent < self.out.len() || uart::tx_pending(Port::App));
     }
 
     /// poll_pass -- the work of one `poll` pass, with the port up.
-    fn poll_pass(&mut self, link: &mut IpmbLink) {
+    fn poll_pass(&mut self, link: &mut IpmbLink, payload_power: bool) {
         if !self.started {
             self.started = true;
             // The banner fits the empty buffer.
-            let _ = banner(&LinkHost { link: &mut *link }, &mut self.out);
+            let _ = banner(
+                &LinkHost {
+                    link: &mut *link,
+                    payload_power,
+                },
+                &mut self.out,
+            );
         }
         self.check_loss(link);
         if self.drain() {
@@ -139,7 +150,10 @@ impl AppPort {
             let served = serve(
                 &mut self.editor,
                 byte,
-                &mut LinkHost { link: &mut *link },
+                &mut LinkHost {
+                    link: &mut *link,
+                    payload_power,
+                },
                 &mut self.out,
             );
             match &served.fed {
@@ -150,9 +164,9 @@ impl AppPort {
                     "app request (line longer than {LINE_MAX} bytes)"
                 )),
                 Fed::BadChar => link.log_text(format_args!("app request (not printable ASCII)")),
-                Fed::Damaged(lost) => {
-                    link.log_text(format_args!("app request (damaged, {lost} bytes lost)"))
-                }
+                Fed::Damaged(lost) => link.log_text(format_args!(
+                    "app request (damaged, {lost} bytes lost or damaged)"
+                )),
             }
             if let Some(line) = answer_final_line(&self.out, served.answer_at) {
                 link.log_text(format_args!("app answer {line}"));
@@ -174,7 +188,9 @@ impl AppPort {
             uart::discard_rx(Port::App);
             self.editor.damage(moved);
             self.lost_seen = lost_now;
-            link.log_text(format_args!("app port lost {moved} bytes, ring discarded"));
+            link.log_text(format_args!(
+                "app port lost or damaged {moved} bytes, ring discarded"
+            ));
         }
         moved > 0
     }
@@ -196,6 +212,8 @@ impl AppPort {
 /// LinkHost -- the board as `ipmc-app` sees it, over the IPMB link layer.
 struct LinkHost<'a> {
     link: &'a mut IpmbLink,
+    /// PWR_EN is asserted (`Sensing::payload_power_on`), read by the caller at the pass.
+    payload_power: bool,
 }
 
 impl AppHost for LinkHost<'_> {
@@ -212,6 +230,7 @@ impl AppHost for LinkHost<'_> {
             health: dispatch.sensors.health,
             nvmro: crate::bsp::ga::nvmro_asserted(),
             uptime_s: systick::seconds(),
+            payload_power: self.payload_power,
         }
     }
 

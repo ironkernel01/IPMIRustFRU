@@ -41,10 +41,15 @@ BLANK = 0xFF
 RETRY_CODES = ("FORMAT", "CHECKSUM", "LINE_TOO_LONG")
 # Runtime entry commands, by the port they are typed on.
 ENTER_COMMANDS = {"cli": "DEBUG BOOTLOADER", "app": "BOOTLOADER"}
+# The word that confirms the restart while payload power is on (the reset releases PWR_EN).
+CONFIRM_WORD = "CONFIRM"
 # Most lines read after an entry command, and the answers that end it (the app port's final `OK`
-# is tested separately).
+# is tested separately). The last three ask for CONFIRM: the console's `Send DEBUG BOOTLOADER
+# CONFIRM to restart` and the app port's `ERROR CONFIRM: ...`; other `ERROR` lines end it too.
 ENTER_LINES_MAX = 6
-ENTER_LAST_PREFIXES = ("Payload power drops", "ERROR")
+ENTER_LAST_PREFIXES = ("Payload power drops", "Send DEBUG BOOTLOADER CONFIRM", "ERROR")
+ENTER_ASKS_PREFIXES = ("Send DEBUG BOOTLOADER CONFIRM", "ERROR CONFIRM")
+CONFIRM_PROMPT = "Payload power is on. Type CONFIRM to restart into the bootloader: "
 STATUS_PATTERN = re.compile(r"^(OK|ERR)(?: |$)")
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EXIT_TIMEOUT = 0, 1, 2, 3
@@ -204,12 +209,16 @@ def rechunk(low, image, size=fwu_settings.RECORD_BYTES):
 
 
 class SerialTransport:
-    """A serial port that writes bytes and reads one line (pyserial, imported on first use)."""
+    """A serial port that writes bytes and reads one line (pyserial, imported on first use).
+
+    The port is opened once with the short timeout `POLL_S` and `.timeout` is never assigned
+    again: on Windows that reconfigures the port, and the ST-Link virtual COM driver drops the
+    bytes arriving at that moment. Each call's own timeout is a deadline on the monotonic clock."""
 
     def __init__(self, port, baud):
         import serial  # pylint: disable=import-outside-toplevel
 
-        self._serial = serial.Serial(port, baud, timeout=1.0)
+        self._serial = serial.Serial(port, baud, timeout=fwu_settings.POLL_S)
         self._serial.reset_input_buffer()
         self._partial = b""
 
@@ -217,28 +226,41 @@ class SerialTransport:
         self._serial.write(data)
         self._serial.flush()
 
+    def _fill(self):
+        """One read of what is waiting (or of one byte, up to `POLL_S`), added to the buffer."""
+        self._partial += self._serial.read(self._serial.in_waiting or 1)
+
     def read_line(self, timeout):
         """One line without its CR LF, or None when `timeout` seconds passed with no complete
-        line (a partial line stays for the next call)."""
-        self._serial.timeout = timeout
-        self._partial += self._serial.readline()
-        if not self._partial.endswith(b"\n"):
-            return None
-        raw, self._partial = self._partial, b""
-        return raw.decode("ascii", errors="replace").rstrip("\r\n")
+        line (a partial line stays for the next call; bytes after the line stay too)."""
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self._partial:
+            self._fill()
+            if b"\n" not in self._partial and time.monotonic() >= deadline:
+                return None
+        raw, _, self._partial = self._partial.partition(b"\n")
+        return raw.decode("ascii", errors="replace").rstrip("\r")
 
     def wait_prompt(self, prompt, timeout):
-        """Reads until the prompt (no line end) arrives; True when it came before the timeout."""
+        """Reads until the buffer ends with the prompt (no line end); True when it came before
+        the timeout. Everything up to and including the prompt is consumed."""
         expected = prompt.encode("ascii")
-        self._serial.timeout = timeout
-        got = self._partial + self._serial.read_until(expected)
-        self._partial = b""
-        return got.endswith(expected)
+        deadline = time.monotonic() + timeout
+        while True:
+            at = self._partial.find(expected)
+            if at >= 0:
+                self._partial = self._partial[at + len(expected) :]
+                return True
+            self._fill()
+            if expected not in self._partial and time.monotonic() >= deadline:
+                self._partial = b""
+                return False
 
     def settle(self, seconds):
         """Reads and drops everything that arrives for `seconds`, then clears the input buffer."""
-        self._serial.timeout = seconds
-        self._serial.read_until(b"\x00")  # no NUL arrives: returns when the time is up
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self._fill()
         self._serial.reset_input_buffer()
         self._partial = b""
 
@@ -343,16 +365,31 @@ class Bootloader:
             code = words[1] if len(words) > 1 else ""
             if code not in RETRY_CODES or attempt == fwu_settings.RECORD_RETRIES:
                 break
+            self._out(f"record {number}: {status}, sending it again")
         raise Refused(f"record {number}: {status}")
 
     def load(self, lines, progress=lambda done, total, sent, rate: None):
-        """LOAD, then the record lines stop-and-wait; the last one is the end record."""
+        """LOAD, then the record lines stop-and-wait; the last one is the end record. A record
+        answered `ERR ABORTED` (a line in record mode that did not start with `:`, damaged on
+        the way) ended record mode: the bootloader keeps the erase in force and every earlier
+        record is programmed, so the tool sends LOAD again, the last type-04 record before the
+        refused one and then that record, at most `LOAD_RESUMES` times."""
         self.run_ok("LOAD", expect="OK LOAD")
         begin = self._clock()
         sent = 0
         status = ""
+        resumes = 0
         for number, line in enumerate(lines, 1):
-            status = self.send_record(line, number)
+            while True:
+                try:
+                    status = self.send_record(line, number)
+                    break
+                except Refused as error:
+                    if "ERR ABORTED" not in str(error) or resumes >= fwu_settings.LOAD_RESUMES:
+                        raise
+                    resumes += 1
+                    self._out(f"record {number}: ERR ABORTED, LOAD again from record {number}")
+                    self._resume(lines[: number - 1], number)
             sent += (len(line) - 11) // 2
             elapsed = max(self._clock() - begin, 1e-6)
             progress(number, len(lines), sent, sent / elapsed)
@@ -362,6 +399,16 @@ class Bootloader:
             if not last and status != "OK":
                 raise Refused(f"record {number}: {status}")
         self._out(status)
+
+    def _resume(self, before, number):
+        """LOAD again (the upper address restarts at 0) and the last type-04 record of `before`;
+        the caller sends the refused record next."""
+        self.run_ok("LOAD", expect="OK LOAD")
+        upper = [text for text in before if text[7:9] == "04"]
+        for text in upper[-1:]:
+            status = self.send_record(text, number)
+            if not status.startswith("OK"):
+                raise Refused(f"record {number}: {status}")
 
 
 # ---------------------------------------------------------------- the actions
@@ -405,6 +452,9 @@ def parse_args(argv=None):
     parser.add_argument("--baud", type=int, help="baud rate (default from defs.rs)")
     parser.add_argument("--enter", choices=("cli", "app"), help="runtime port used to enter")
     parser.add_argument("--enter-port", help="serial port of the --enter runtime port")
+    parser.add_argument(
+        "--confirm", action="store_true", help="send CONFIRM with the entry command (power on)"
+    )
     parser.add_argument("--field", action="store_true", help="field procedure (jumper, no RUN)")
     parser.add_argument("--no-precheck", action="store_true", help="skip the image pre-check")
     parser.add_argument("--as-is", action="store_true", help="send the file's own records")
@@ -420,32 +470,59 @@ def parse_args(argv=None):
         parser.error(f"{args.action} takes no file")
     if bool(args.enter) != bool(args.enter_port):
         parser.error("--enter and --enter-port go together")
+    if args.confirm and not args.enter:
+        parser.error("--confirm needs --enter")
     return args
 
 
-def enter_runtime(args, factory, out):
-    """Sends the runtime entry command on the runtime port and prints the answer."""
+def enter_once(port, command, out):
+    """Sends one entry command and prints the answer; returns True when the answer asks for
+    CONFIRM. The console answers `Restarting into the bootloader` and, with payload power on,
+    `Payload power drops at the reset`, or (power on, no CONFIRM) the two `Payload power is on`
+    / `Send DEBUG BOOTLOADER CONFIRM` lines; the app port answers `BOOTLOADER: restarting` then
+    `OK`, or `ERROR CONFIRM` / another `ERROR` line. The app port echoes the command first; that
+    line is skipped."""
+    port.write(command.encode("ascii") + LINE_END)
+    asks = False
+    for _ in range(ENTER_LINES_MAX):
+        line = port.read_line(fwu_settings.ANSWER_TIMEOUT_S)
+        if line is None:
+            break
+        text = line.strip()
+        if text and text != command:
+            out(text)
+        if text.startswith(ENTER_ASKS_PREFIXES):
+            asks = True
+        if text == "OK" or text.startswith(ENTER_LAST_PREFIXES):
+            break
+    return asks
+
+
+def enter_runtime(args, factory, out, read_input=input):
+    """Sends the runtime entry command on the runtime port and prints the answer. With
+    `--confirm` the command carries CONFIRM from the start. Without it, an answer that asks for
+    CONFIRM (payload power on) is followed by a question on stdin (`read_input`); the word
+    CONFIRM in any case sends the CONFIRM form, anything else or end of input is refused."""
     port = factory(args.enter_port, fwu_settings.baud_for(args.enter))
     try:
-        port.write(ENTER_COMMANDS[args.enter].encode("ascii") + LINE_END)
-        # The console answers `Restarting into the bootloader` and, with payload power on,
-        # `Payload power drops at the reset`; the app port answers `BOOTLOADER: restarting` then
-        # `OK` (or an `ERROR` line). The app port echoes the command first; that line is skipped.
         command = ENTER_COMMANDS[args.enter]
-        for _ in range(ENTER_LINES_MAX):
-            line = port.read_line(fwu_settings.ANSWER_TIMEOUT_S)
-            if line is None:
-                break
-            text = line.strip()
-            if text and text != command:
-                out(text)
-            if text == "OK" or text.startswith(ENTER_LAST_PREFIXES):
-                break
+        if args.confirm:
+            enter_once(port, f"{command} {CONFIRM_WORD}", out)
+        elif enter_once(port, command, out):
+            try:
+                reply = read_input(CONFIRM_PROMPT)
+            except EOFError:
+                reply = ""
+            if reply.strip().upper() != CONFIRM_WORD:
+                raise Refused("entry not confirmed")
+            enter_once(port, f"{command} {CONFIRM_WORD}", out)
     finally:
         port.close()
 
 
-def main(argv=None, transport_factory=SerialTransport, out=print, clock=time.monotonic):
+def main(
+    argv=None, transport_factory=SerialTransport, out=print, clock=time.monotonic, read_input=input
+):
     """Runs one action; returns the exit status."""
     args = parse_args(argv)
     start = clock()
@@ -467,16 +544,20 @@ def main(argv=None, transport_factory=SerialTransport, out=print, clock=time.mon
             sys.stdout.flush()
             open_line[0] = False
 
+    def say(text):
+        end_progress()
+        out(text)
+
     try:
         lines = prepare(args, out) if args.action == "update" else None
         if args.enter:
-            enter_runtime(args, transport_factory, out)
+            enter_runtime(args, transport_factory, out, read_input)
         if args.field:
             out("power-cycle the board now")
         baud = args.baud or fwu_settings.baud_for(args.uart)
         transport = transport_factory(args.port, baud)
         try:
-            boot = Bootloader(transport, out, clock)
+            boot = Bootloader(transport, say, clock)
             boot.wakeup(None if args.field else fwu_settings.WAKEUP_GIVE_UP_S)
             if args.action == "update":
                 update(boot, args, lines, out, progress)
@@ -487,12 +568,10 @@ def main(argv=None, transport_factory=SerialTransport, out=print, clock=time.mon
         finally:
             transport.close()
     except Refused as error:
-        end_progress()
-        out(f"refused: {error}")
+        say(f"refused: {error}")
         return EXIT_REFUSED
     except BootTimeout as error:
-        end_progress()
-        out(f"timeout: {error}")
+        say(f"timeout: {error}")
         return EXIT_TIMEOUT
     out(f"done in {clock() - start:.1f} s")
     return EXIT_OK

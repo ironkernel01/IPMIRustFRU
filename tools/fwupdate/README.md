@@ -23,7 +23,7 @@ required. `--uart cli|app` (default `app`) names what the port is and picks the 
 ## Usage
 
     python fwupdate.py --port COMx [--uart cli|app] [--baud N] [--enter cli|app --enter-port COMy]
-                       [--field] [--no-precheck] [--as-is] [--no-run] <action> [file.hex]
+                       [--confirm] [--field] [--no-precheck] [--as-is] [--no-run] <action> [file.hex]
 
 Every action sends `WAKEUP` every 0.2 s first (60 s limit; `--field` has none) and prints when it
 sees the countdown line and when the `BOOT> ` prompt arrives.
@@ -48,6 +48,13 @@ Examples:
 The console answers `Restarting into the bootloader` (and `Payload power drops at the reset` while
 payload power is on); the APP port answers `BOOTLOADER: restarting` then `OK`.
 
+The reset drops payload power, so while PWR_EN is asserted the plain command only warns (the console
+prints `Send DEBUG BOOTLOADER CONFIRM to restart`, the APP port answers `ERROR CONFIRM`) and does not
+restart. `--confirm` sends the command with ` CONFIRM` appended from the start (power on or off).
+Without it, the tool prints the answer, asks `Payload power is on. Type CONFIRM to restart into the
+bootloader:` on stdin and, when the input is `CONFIRM` in any case, sends the CONFIRM form; any other
+input or the end of input stops the run (`refused: entry not confirmed`, exit 1).
+
 ## What update does
 
 1. Reads the file (Intel HEX types 00, 01, 04, 05; 02 and 03 are refused) and builds the memory image
@@ -61,12 +68,17 @@ payload power is on); the APP port answers `BOOTLOADER: restarting` then `OK`.
    32-byte records with an 04 record at each 64 KB boundary; an all-FFh chunk is skipped (the flash is
    erased). `--as-is` sends the file's own records. An `ERR FORMAT`, `ERR CHECKSUM` or `ERR LINE_TOO_LONG`
    answer is sent again up to 3 times; any other `ERR` stops the run and names the record number and the
-   answer. One progress line shows records, bytes and rate.
+   answer. One progress line shows records, bytes and rate. An `ERR ABORTED` answer (a damaged leading `:`
+   ended record mode; the erase stays in force and every earlier record is programmed) is resumed: the
+   tool prints `record N: ERR ABORTED, LOAD again from record N`, sends `LOAD`, the last 04 record sent
+   before record N, then record N again, and goes on. At most 3 resumes per update (`LOAD_RESUMES`); the
+   next `ERR ABORTED` stops the run. Record numbers and the progress counter stay those of the file.
 5. The end record, `VERIFY`, then `RUN` (not with `--no-run` or `--field`).
 
 Exit codes: 0 success, 1 a refusal or an `ERR` answer, 2 usage, 3 a timeout.
 
-Time: about 30 to 85 s for today's image at 115200 baud (the five-sector erase takes up to 6 s of it).
+Time: a full update of today's image takes about 77 s over APP and about 95 s over CLI at 115200 baud
+(the five sectors 3-7 erase in up to 8.5 s by the datasheet maxima, about 3.5 s measured).
 
 ## Field procedure
 

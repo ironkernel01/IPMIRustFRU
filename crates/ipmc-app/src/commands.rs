@@ -91,8 +91,8 @@ pub const COMMANDS: &[Row] = &[
         handler: cmd_ipmi,
     },
     Row {
-        syntax: "BOOTLOADER",
-        help: "Restart into the bootloader; payload power drops at the reset",
+        syntax: "BOOTLOADER {CONFIRM}",
+        help: "Restart into the bootloader; CONFIRM needed while payload power is on",
         handler: cmd_bootloader,
     },
 ];
@@ -228,7 +228,7 @@ pub fn respond<const N: usize>(
             out,
             Fail::new(
                 "LINE_DAMAGED",
-                format_args!("{lost} bytes lost on the port; the line was dropped"),
+                format_args!("{lost} bytes lost or damaged on the port; the line was dropped"),
             ),
         ),
     }
@@ -516,15 +516,33 @@ fn cmd_fru_save(_args: &Args<'_>, host: &mut dyn AppHost, out: &mut dyn Write) -
     data(out, "SAVE", format_args!("{word}"))
 }
 
-/// cmd_bootloader -- `BOOTLOADER` answers `BOOTLOADER: restarting`; the board restarts into the
-/// bootloader after the answer has left the port (the host asks for the reset). The application
-/// port is silent from the reset on, until the bootloader's `RUN` starts the runtime again.
+/// cmd_bootloader -- `BOOTLOADER {CONFIRM}` answers `BOOTLOADER: restarting`; the board restarts
+/// into the bootloader after the answer has left the port (the host asks for the reset). The
+/// reset releases PWR_EN, so while payload power is on the command is refused with `CONFIRM`
+/// until the line says `BOOTLOADER CONFIRM` (any letter case). The application port is silent
+/// from the reset on, until the bootloader's `RUN` starts the runtime again.
 #[allow(clippy::result_large_err)] // Fail holds its sentence inline (no allocator); it is returned on the failure path only
 fn cmd_bootloader(
-    _args: &Args<'_>,
+    args: &Args<'_>,
     host: &mut dyn AppHost,
     out: &mut dyn Write,
 ) -> Result<(), Fail> {
+    let confirmed = match args.get(0) {
+        None => false,
+        Some(word) if word.eq_ignore_ascii_case("CONFIRM") => true,
+        Some(_) => {
+            return Err(Fail::new(
+                "ARGS",
+                format_args!("usage: BOOTLOADER {{CONFIRM}}"),
+            ))
+        }
+    };
+    if host.status().payload_power && !confirmed {
+        return Err(Fail::new(
+            "CONFIRM",
+            format_args!("payload power is on and drops at the reset; send BOOTLOADER CONFIRM"),
+        ));
+    }
     host.request_bootloader();
     data(out, "BOOTLOADER", format_args!("restarting"))
 }

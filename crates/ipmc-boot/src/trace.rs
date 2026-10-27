@@ -19,6 +19,7 @@ const LABEL_STORED: &str = "Stored digest:  ";
 const LABEL_BOOTLOADER: &str = "Bootloader:     ";
 const LABEL_BUILD: &str = "Build:          ";
 const LABEL_PORT: &str = "Port:           ";
+const LABEL_PORT_ERRORS: &str = "Port errors:    ";
 const LABEL_ERASED: &str = "Erased:         ";
 /// DIGEST_SHOWN -- digest bytes the trace prints (16 hex digits).
 const DIGEST_SHOWN: usize = 8;
@@ -166,6 +167,31 @@ pub fn port(out: &mut dyn TextOut, name: &str, baud: u32, flow: bool) {
         } else {
             " 8N1 RTS/CTS off"
         });
+    });
+}
+
+/// PortCounts -- the failure counts of the session port since reset, from the firmware's UART
+/// counters: a byte lost to an overrun, a byte received with a framing, noise or parity error, a
+/// byte the full RX ring dropped, a TX wait that ran out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PortCounts {
+    pub overrun: u32,
+    pub line_errors: u32,
+    pub rx_overflow: u32,
+    pub tx_timeout: u32,
+}
+
+/// port_errors -- `overrun 0, line 0, rx overflow 0, tx timeout 0` (`INFO`).
+pub fn port_errors(out: &mut dyn TextOut, counts: &PortCounts) {
+    line(out, LABEL_PORT_ERRORS, |out| {
+        out.put("overrun ");
+        put_dec(out, counts.overrun);
+        out.put(", line ");
+        put_dec(out, counts.line_errors);
+        out.put(", rx overflow ");
+        put_dec(out, counts.rx_overflow);
+        out.put(", tx timeout ");
+        put_dec(out, counts.tx_timeout);
     });
 }
 
@@ -410,7 +436,7 @@ Starting the runtime firmware at 0x0800_C000\r\n";
             computed: None,
             result: Err(ImageError::Missing),
         };
-        let rows: [(String, String); 12] = [
+        let rows: [(String, String); 13] = [
             (
                 text(|o| image_check_full(o, &full, 81)),
                 format!("Image check:    SHA-256 {hex} match, 81 ms\r\n"),
@@ -449,6 +475,18 @@ Starting the runtime firmware at 0x0800_C000\r\n";
                 "Port:           APP 9600 8N1 RTS/CTS on\r\n".into(),
             ),
             (
+                text(|o| {
+                    let counts = PortCounts {
+                        overrun: 1,
+                        line_errors: 2,
+                        rx_overflow: 3,
+                        tx_timeout: 4,
+                    };
+                    port_errors(o, &counts)
+                }),
+                "Port errors:    overrun 1, line 2, rx overflow 3, tx timeout 4\r\n".into(),
+            ),
+            (
                 text(|o| erased(o, true, true)),
                 "Erased:         FRU APP\r\n".into(),
             ),
@@ -478,6 +516,7 @@ Starting the runtime firmware at 0x0800_C000\r\n";
             LABEL_BOOTLOADER,
             LABEL_BUILD,
             LABEL_PORT,
+            LABEL_PORT_ERRORS,
             LABEL_ERASED,
         ] {
             assert_eq!(label.len(), 16, "{label:?}");

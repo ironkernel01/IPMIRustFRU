@@ -75,6 +75,8 @@ class FakeBoot:
         self._record_answers = record_answers or {}
         self._erase_answer = erase_answer
         self.record_attempts = []
+        self._aborted = False
+        self._skip_04 = False
 
     def clock(self):
         return self.now
@@ -120,7 +122,10 @@ class FakeBoot:
             self._pending = False
         elif line == "LOAD":
             self._records = True
-            self._record_number = 0
+            if self._aborted:
+                self._skip_04 = True  # the resent 04 record is not a new record number
+            else:
+                self._record_number = 0
             self._reply("OK LOAD APP: send records")
         elif line == "INFO":
             self._reply("Bootloader: ipmc-boot v0.1.0", "OK")
@@ -132,12 +137,22 @@ class FakeBoot:
             self._reply("OK")
 
     def _on_record(self, line):
+        if self._skip_04:
+            self._skip_04 = False
+            if line[7:9] == "04":
+                self._reply("OK")
+                return
         self._record_number += 1
         self.record_attempts.append(self._record_number)
         answers = self._record_answers.get(self._record_number)
         if answers:
             answer = answers.pop(0)
             self._reply(answer)
+            if answer == "ERR ABORTED":
+                self._records = False  # the line ended record mode; ERASE APP stays in force
+                self._aborted = True
+                self._record_number -= 1
+                return
             if answer.startswith("ERR") and answers:
                 self._record_number -= 1  # the record is sent again
             return
@@ -169,10 +184,30 @@ class FakeBoot:
         return self
 
 
+class FakeRuntime:
+    """The runtime port: answers each command line with the lines `answers` holds for it."""
+
+    def __init__(self, answers):
+        self._answers = answers
+        self.written = []
+        self._queue = []
+
+    def write(self, data):
+        line = data.decode("ascii").rstrip("\r\n")
+        self.written.append(line)
+        self._queue.extend(self._answers.get(line, []))
+
+    def read_line(self, timeout):
+        return self._queue.pop(0) if self._queue else None
+
+    def close(self):
+        pass
+
+
 def run_main(fake, *argv):
     out = []
     with contextlib.redirect_stdout(io.StringIO()):
-        code = fwupdate.main(list(argv), fake.factory, out.append, fake.clock)
+        code = fwupdate.main(list(argv), fake.factory, out.append, fake.clock, lambda prompt: "")
     return code, out
 
 
@@ -303,6 +338,7 @@ class SequenceTests(unittest.TestCase):
         expected = fwupdate.rechunk(LOW, good_image())
         self.assertEqual(len(records), len(expected) + 1)
         self.assertEqual(records[2], records[3])
+        self.assertIn("record 3: ERR CHECKSUM, sending it again", out)
 
     def test_abort_after_range_error_names_the_record(self):
         fake = FakeBoot(record_answers={5: ["ERR RANGE address 0800 outside"]})
@@ -318,6 +354,29 @@ class SequenceTests(unittest.TestCase):
         code, out = run_main(fake, "--port", "COM5", "update", self.path)
         self.assertEqual(code, 1)
         self.assertTrue(any("record 2" in line and "ERR FORMAT" in line for line in out), out)
+
+    def test_resume_after_err_aborted(self):
+        fake = FakeBoot(record_answers={5: ["ERR ABORTED"]})
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 0, out)
+        expected = fwupdate.rechunk(LOW, good_image())
+        # record 5 is refused, LOAD starts again, the 04 record comes first, then record 5 again
+        at = fake.written.index("LOAD", fake.written.index("LOAD") + 1)
+        self.assertEqual(fake.written[at - 1], expected[4])
+        self.assertEqual(fake.written[at + 1], expected[0])
+        self.assertEqual(fake.written[at + 2], expected[4])
+        self.assertEqual(fake.written[at + 3], expected[5])
+        self.assertIn("record 5: ERR ABORTED, LOAD again from record 5", out)
+        self.assertEqual(fake.written[-2:], ["VERIFY", "RUN"])
+
+    def test_resumes_run_out(self):
+        answers = ["ERR ABORTED"] * (fwu_settings.LOAD_RESUMES + 1)
+        fake = FakeBoot(record_answers={5: answers})
+        code, out = run_main(fake, "--port", "COM5", "update", self.path)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("record 5" in line and "ERR ABORTED" in line for line in out), out)
+        self.assertEqual(fake.written.count("LOAD"), 1 + fwu_settings.LOAD_RESUMES)
+        self.assertNotIn("VERIFY", fake.written)
 
     def test_precheck_refusal_sends_nothing_and_no_precheck_skips_it(self):
         image = good_image()
@@ -360,6 +419,64 @@ class SequenceTests(unittest.TestCase):
         fake._awake = False
         code, _ = run_main(fake, "--port", "COM5", "info")
         self.assertEqual(code, 1)
+
+
+class FakeSerial:
+    """A pyserial stand-in: `chunks` are the reads; `.timeout` assignments are counted."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.timeout_sets = 0
+        self._timeout = None
+        self.in_waiting = 0
+
+    @property
+    def timeout(self):
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        self.timeout_sets += 1
+        self._timeout = value
+
+    def read(self, size=1):
+        if not self._chunks:
+            return b""
+        chunk = self._chunks.pop(0)
+        self.in_waiting = len(self._chunks[0]) if self._chunks else 0
+        return chunk
+
+    def reset_input_buffer(self):
+        self._chunks.clear()
+
+
+class SerialTransportTests(unittest.TestCase):
+    def make(self, chunks):
+        transport = fwupdate.SerialTransport.__new__(fwupdate.SerialTransport)
+        transport._serial = FakeSerial(chunks)
+        transport._serial.timeout = fwu_settings.POLL_S  # the one assignment, at open
+        transport._partial = b""
+        return transport
+
+    def test_timeout_is_assigned_once_and_lines_split_from_one_read(self):
+        transport = self.make([b"OK\r\nBOOT", b"> ", b"x\r\ny\r\n"])
+        self.assertEqual(transport.read_line(0.05), "OK")
+        self.assertTrue(transport.wait_prompt("BOOT> ", 0.05))
+        self.assertEqual(transport.read_line(0.05), "x")
+        self.assertEqual(transport.read_line(0.05), "y")
+        self.assertIsNone(transport.read_line(0.05))
+        transport.settle(0.05)
+        self.assertEqual(transport._serial.timeout_sets, 1)
+
+    def test_two_lines_in_one_read_are_two_results(self):
+        transport = self.make([b"one\r\ntwo\r\n"])
+        self.assertEqual(transport.read_line(0.05), "one")
+        self.assertEqual(transport.read_line(0.05), "two")
+
+    def test_a_partial_line_stays_for_the_next_call(self):
+        transport = self.make([b"par", b"tial\r\n"])
+        self.assertIsNone(transport.read_line(0.0))
+        self.assertEqual(transport.read_line(0.05), "partial")
 
 
 class WakeupTests(unittest.TestCase):
@@ -425,6 +542,108 @@ class WakeupTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 0, out)
                 self.assertEqual(out[: len(printed)], printed)
+
+    def run_enter(self, uart, answers, typed, *flags):
+        """`info` through a runtime port that answers each command as `answers` says; `typed` is
+        what stdin gives (a string, or None for end of input)."""
+        runtime = FakeRuntime(answers)
+        boot = FakeBoot()
+        asked = []
+
+        def read_input(prompt):
+            asked.append(prompt)
+            if typed is None:
+                raise EOFError
+            return typed
+
+        def factory(port, baud):
+            return runtime if port == "COM9" else boot.factory(port, baud)
+
+        out = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = fwupdate.main(
+                ["--port", "COM5", "--enter", uart, "--enter-port", "COM9", *flags, "info"],
+                factory,
+                out.append,
+                boot.clock,
+                read_input,
+            )
+        return code, out, runtime.written, asked
+
+    def test_confirm_flag_sends_the_confirm_form_from_the_start(self):
+        for uart, command in (("cli", "DEBUG BOOTLOADER"), ("app", "BOOTLOADER")):
+            with self.subTest(uart):
+                answers = {
+                    f"{command} CONFIRM": [
+                        "Restarting into the bootloader",
+                        "Payload power drops at the reset",
+                        "OK",
+                    ]
+                }
+                code, out, written, asked = self.run_enter(uart, answers, None, "--confirm")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(written, [f"{command} CONFIRM"])
+                self.assertEqual(asked, [])
+
+    def test_the_stdin_prompt_accepts_confirm_in_any_case(self):
+        rows = (
+            (
+                "cli",
+                "DEBUG BOOTLOADER",
+                [
+                    "Payload power is on and drops at the reset into the bootloader",
+                    "Send DEBUG BOOTLOADER CONFIRM to restart",
+                ],
+            ),
+            (
+                "app",
+                "BOOTLOADER",
+                [
+                    "ERROR CONFIRM: payload power is on and drops at the reset; "
+                    "send BOOTLOADER CONFIRM"
+                ],
+            ),
+        )
+        for uart, command, ask in rows:
+            for typed in ("CONFIRM", " confirm "):
+                with self.subTest(uart, typed=typed):
+                    answers = {
+                        command: ask,
+                        f"{command} CONFIRM": ["Restarting into the bootloader", "OK"],
+                    }
+                    code, out, written, asked = self.run_enter(uart, answers, typed)
+                    self.assertEqual(code, 0, out)
+                    self.assertEqual(written, [command, f"{command} CONFIRM"])
+                    self.assertEqual(asked, [fwupdate.CONFIRM_PROMPT])
+                    self.assertEqual(out[: len(ask)], ask)
+
+    def test_other_input_and_end_of_input_refuse_the_entry(self):
+        ask = [
+            "Payload power is on and drops at the reset into the bootloader",
+            "Send DEBUG BOOTLOADER CONFIRM to restart",
+        ]
+        for typed in ("yes", "", None):
+            with self.subTest(typed=typed):
+                code, out, written, _ = self.run_enter("cli", {"DEBUG BOOTLOADER": ask}, typed)
+                self.assertEqual(code, 1)
+                self.assertIn("refused: entry not confirmed", out)
+                self.assertEqual(written, ["DEBUG BOOTLOADER"])
+
+    def test_power_off_answers_need_no_prompt(self):
+        rows = (
+            ("cli", "DEBUG BOOTLOADER", ["Restarting into the bootloader"]),
+            ("app", "BOOTLOADER", ["BOOTLOADER: restarting", "OK"]),
+        )
+        for uart, command, answer in rows:
+            with self.subTest(uart):
+                code, out, written, asked = self.run_enter(uart, {command: answer}, None)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(written, [command])
+                self.assertEqual(asked, [])
+
+    def test_confirm_needs_enter(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            fwupdate.parse_args(["--port", "COM5", "--confirm", "info"])
 
     def test_usage_errors_exit_2(self):
         for argv in (["info"], ["--port", "COM5", "update"], ["--port", "COM5", "--enter", "app", "info"]):

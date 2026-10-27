@@ -12,6 +12,7 @@ use cortex_m::peripheral::{NVIC, SYST};
 use ipmc_boot::decision::PortId;
 use ipmc_boot::session::{Action, BootHw, Session, StartRecord};
 use ipmc_boot::text::{TextOut, CRLF};
+use ipmc_boot::trace::PortCounts;
 use ipmc_boot::{is_wakeup, trace};
 use ipmc_menu::{EditEvent, LineEditor};
 use ipmc_nucleo_f401re::bsp::reset_cause;
@@ -124,6 +125,19 @@ impl BootHw for FlashImage {
 
     fn activity(&self) {
         led::activity();
+    }
+
+    fn port_counts(&self, port: PortId) -> PortCounts {
+        let c = uart::counters(match port {
+            PortId::Cli => Port::Console,
+            PortId::App => Port::App,
+        });
+        PortCounts {
+            overrun: c.overrun,
+            line_errors: c.line_errors,
+            rx_overflow: c.rx_overflow,
+            tx_timeout: c.tx_timeout,
+        }
     }
 }
 

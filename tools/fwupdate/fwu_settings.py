@@ -22,13 +22,20 @@ WAKEUP_INTERVAL_S = 0.2
 # Seconds the wakeup action waits before it gives up. --field waits without limit.
 WAKEUP_GIVE_UP_S = 60.0
 
+# The one timeout the serial port is opened with, seconds. The transport never assigns `.timeout`
+# again: on Windows that reconfigures the port, and the ST-Link virtual COM driver drops the bytes
+# arriving at that moment (INFO lost about 6 of 700 bytes). Each call's own timeout is a deadline
+# on the monotonic clock over reads of this length.
+POLL_S = 0.02
+
 # Seconds to wait for the status line of one command.
 ANSWER_TIMEOUT_S = 2.0
 
 # Seconds to wait for the answer to one record line.
 RECORD_TIMEOUT_S = 2.0
 
-# Seconds to wait for the answer to CONFIRM after an erase (the six sectors take up to 8 s).
+# Seconds to wait for the answer to CONFIRM after an erase (the five sectors 3-7 take up to 8.5 s
+# by the datasheet maxima, about 3.5 s measured).
 ERASE_TIMEOUT_S = 20.0
 
 # Data bytes in one record the tool sends.
@@ -36,6 +43,10 @@ RECORD_BYTES = 32
 
 # Times a record is sent again after ERR FORMAT, ERR CHECKSUM or ERR LINE_TOO_LONG.
 RECORD_RETRIES = 3
+
+# Times LOAD is started again after `ERR ABORTED` (a record line that lost its leading `:`) in
+# one update; one more is a refusal.
+LOAD_RESUMES = 3
 
 # Seconds to wait for the prompt after the status line of WAKEUP.
 PROMPT_TIMEOUT_S = 2.0

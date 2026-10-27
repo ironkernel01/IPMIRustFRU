@@ -18,7 +18,7 @@ use ipmc_core::link::{LocalError, CM_ADDR8};
 use ipmc_core::names::{CommandName, HexBytes, NetFnName};
 use ipmc_core::queue::Bus;
 use ipmc_log::{LogLine, SwitchLines};
-use ipmc_menu::{optional, Args, CmdError, CmdResult};
+use ipmc_menu::{eq_ignore_case, optional, Args, CmdError, CmdResult};
 
 use crate::bsp::systick;
 use crate::bsp::uart;
@@ -377,17 +377,32 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
 
 // ---- BOOTLOADER ----
 
-/// cmd_debug_bootloader -- `DEBUG BOOTLOADER` restarts the processor into the bootloader
-/// (Documentation/ipmc_boot_plan.md 7.1). Two lines first: the restart, and while PWR_EN is
-/// asserted that the payload loses power at the reset (the reset releases PWR_EN). The reset is
-/// the one Cold Reset path (`IpmbLink::request_bootloader`): the console is flushed, an accepted
-/// FRU write is saved first, and the request words are written just before the restart.
-pub fn cmd_debug_bootloader(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+/// cmd_debug_bootloader -- `DEBUG BOOTLOADER {CONFIRM}` restarts the processor into the bootloader
+/// (Documentation/ipmc_boot_plan.md 7.1). While PWR_EN is asserted the payload loses power at the
+/// reset (the reset releases PWR_EN), so the command only warns and waits for `CONFIRM` (any
+/// letter case); with power off, or with `CONFIRM`, it prints the restart line and restarts. The
+/// reset is the one Cold Reset path (`IpmbLink::request_bootloader`): the console is flushed, an
+/// accepted FRU write is saved first, and the request words are written just before the restart.
+pub fn cmd_debug_bootloader(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+    let confirmed = match optional(args.text_at(0))? {
+        None => false,
+        Some(word) if eq_ignore_case(word, "CONFIRM") => true,
+        Some(_) => return Err(reported(format_args!("argument is CONFIRM"))),
+    };
+    let power_on = ctx.sensing.payload_power_on();
+    if power_on && !confirmed {
+        out!(
+            "Payload power is on and drops at the reset into the bootloader
+Send DEBUG BOOTLOADER CONFIRM to restart
+"
+        );
+        return Ok(());
+    }
     out!(
         "Restarting into the bootloader
 "
     );
-    if ctx.sensing.payload_power_on() {
+    if power_on {
         out!(
             "Payload power drops at the reset
 "

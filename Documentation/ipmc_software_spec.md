@@ -1477,7 +1477,7 @@ after that echo, so the echo of a request such as `OK` is not taken for its answ
 | `FRU SET [FIELD] {VALUE...}` | Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM | `<FIELD>: <value as stored>`; `MFG_DATE: unspecified` after a clear |
 | `FRU SAVE` | Whether the FRU image is in flash (a change saves itself after the save delay) | `SAVE: done`, or `SAVE: pending` while a change waits (not an error) |
 | `IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally (hex bytes); nothing goes on the IPMB | `CC: 00h`, `DATA: 01 80 00 01 02 09 00 00 00 4B 49 00 00 00 00` (empty after the colon-space when there is none), `COMMAND: App Get Device ID` (no line when the build has no name for it) |
-| `BOOTLOADER` | Restart into the bootloader; payload power drops at the reset | `BOOTLOADER: restarting`; the restart follows the answer (section 8.3); the port is silent until the bootloader starts the runtime again |
+| `BOOTLOADER {CONFIRM}` | Restart into the bootloader; CONFIRM needed while payload power is on | `BOOTLOADER: restarting`; the restart follows the answer (section 8.3); the port is silent until the bootloader starts the runtime again. While payload power is on, the line without `CONFIRM` answers `ERROR CONFIRM` and asks for no restart |
 
 Syntax strings: leading keywords in capitals, then `[NAME]` for a required parameter, `{NAME}` for
 an optional one and `{NAME...}` for the rest of the line as one value (last only). The
@@ -1536,7 +1536,8 @@ The codes; each has its own sentence:
 | `BAD_DATE` | the date text is malformed or out of range (`use YYYY-MM-DD HH:MM (UTC), 1996-01-01 00:01 to 9999-12-31 23:59`) |
 | `FRU_IMAGE` | the area is missing or damaged, the image's areas overlap, or the rewritten image would fail `verify` |
 | `WRITE_DISABLED` | `IPMC_APP_FRU_WRITE` is false and the request is `FRU SET` or an `IPMI` Write FRU Data; nothing runs |
-| `LINE_DAMAGED` | `<n> bytes lost on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full); the firmware discarded every byte waiting in the receive ring (and the byte it had just taken, when it found the loss with one in hand), and the first line end that arrives after the discard is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
+| `CONFIRM` | `BOOTLOADER` without `CONFIRM` while payload power is on (PWR_EN asserted; the reset releases it): `payload power is on and drops at the reset; send BOOTLOADER CONFIRM`; no restart is asked |
+| `LINE_DAMAGED` | `<n> bytes lost or damaged on the port; the line was dropped`: the UART lost bytes (overrun or receive ring full) or received a byte with a framing, noise or parity error; the firmware discarded every byte waiting in the receive ring (and the byte it had just taken, when it found the loss with one in hand), and the first line end that arrives after the discard is answered with this error, without a tag, and does not run. Lines after it run normally. A line that was complete inside the discarded bytes gets no answer: the payload CPU's answer timeout covers it, and it asks again |
 | `IPMI_FAILED` | the request did not run: the request or its response does not fit one IPMB frame, or the dispatcher gave no response (a NetFn that is odd or above 3Eh) |
 | `LOG_OFF` | `FRU SAVE` with the flash log off (`IPMC_FRU_PERSIST` false or the store did not start) |
 | `ANSWER_TOO_LONG` | `the answer does not fit <n> bytes`: the answer did not fit the answer buffer (`ANSWER_MAX`, 1280 bytes by default); the engine goes back to the start of the answer and writes this error line, with the tag, in place of the data lines. A buffer too small even for that line holds nothing of the answer, never half a line |
@@ -1584,7 +1585,7 @@ APP> HELP
   FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
   FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
   IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
-  BOOTLOADER                     - Restart into the bootloader; payload power drops at the reset
+  BOOTLOADER {CONFIRM}           - Restart into the bootloader; CONFIRM needed while payload power is on
 OK
 APP> STATUS
 IPMB_ADDRESS: 82h
@@ -1851,9 +1852,15 @@ IPMB bus (no service, no answer from 82h) and does not drive PWR_EN or PAYLOAD_R
 blinks at `IPMC_FWU_LED_WAIT_CHZ` in command mode and shows the activity pattern while records
 load.
 
-Two commands of the runtime enter the bootloader. The console command `DEBUG BOOTLOADER` prints
-`Restarting into the bootloader` and, while PWR_EN is asserted, `Payload power drops at the
-reset`. The application port command `BOOTLOADER` answers `BOOTLOADER: restarting`. Both call
+Two commands of the runtime enter the bootloader, both with an optional `CONFIRM` (any letter case,
+no stored state). The reset releases PWR_EN, so while payload power is on the plain command only
+warns. The console command `DEBUG BOOTLOADER` then prints `Payload power is on and drops at the
+reset into the bootloader` and `Send DEBUG BOOTLOADER CONFIRM to restart` and does not restart;
+with power off, or with `CONFIRM`, it prints `Restarting into the bootloader` (and, with power on,
+`Payload power drops at the reset`) and restarts. The application port command `BOOTLOADER`
+answers `BOOTLOADER: restarting` with power off or with `CONFIRM`; with power on and no `CONFIRM`
+it answers `ERROR CONFIRM: payload power is on and drops at the reset; send BOOTLOADER CONFIRM`
+(`Status::payload_power`, the same PWR_EN test as the console's). Both call
 `IpmbLink::request_bootloader(interface)`, which asks for a Cold Reset on the one reset path
 (`service_reset`: the answer has left the port, an accepted FRU write is saved, or
 `IPMC_RESET_WAIT_MS` passed). Just before the processor restarts, the four request words at
@@ -2572,6 +2579,7 @@ sends at that moment is lost and recovered by the requester's retry.
 | PGOOD timeout or loss | `power_fsm` | console event line, `POWER STATUS`; FRU Health is bad only while PWR_EN is asserted without PGOOD, so it returns to good once the fault releases PWR_EN | latched until `POWER OFF` or `POWER CLEAR` |
 | Pin-claim conflict, UART failure | `ports::claim`, `uart::init` | console line naming both owners, or 5 Hz LED | fail-stop (park); an application port failure other than a pin conflict prints `APP UART not started` and the board runs without it |
 | UART receive ring full, overrun, transmit timeout | `uart.rs` `service`, `wait_for_room` | per-port counters in `SYS STATUS` | the byte is dropped (receive) or the bounded wait ends (transmit) |
+| UART byte with a framing, noise or parity error | `uart.rs` `service` (SR FE, NF, PE) | `line errors` in `SYS STATUS`, `Port errors:` in the bootloader `INFO` | the byte is queued as received; the line it belongs to fails its own check (an unknown command, a record checksum) |
 | Trace line without room in the console transmit ring | `print_line_or_drop` | `tx lines dropped` in `SYS STATUS` | the line is dropped whole and never stalls the IPMB; the capture log still holds it |
 | Application answer longer than the transmit ring has room for | `app_port.rs` `drain` | none (the answer is only late) | the output stays in its buffer and leaves as the ring has room; no new request is taken meanwhile, and the main loop never waits |
 | Capture log full | `CaptureLog::add` | `overwritten` in `DEBUG STATUS` and in the dump header | the oldest whole records are dropped |
@@ -2637,7 +2645,7 @@ The DEBUG group (help text as in `console.rs`):
 | `DEBUG IPMI [NETFN] [CMD] {DATA...}` | Run one IPMI request locally, as from 20h; nothing goes on the bus |
 | `DEBUG INJECT [BUS] {BYTES...}` | Hand a whole IPMB frame to the link as if received on bus A or B |
 | `DEBUG CACHE {ACTION}` | Duplicate cache: no argument shows the entries, CLEAR empties it |
-| `DEBUG BOOTLOADER` | Restart into the bootloader; payload power drops at the reset |
+| `DEBUG BOOTLOADER {CONFIRM}` | Restart into the bootloader; CONFIRM needed while payload power is on |
 
 A local request (`DEBUG IPMI`, the application port `IPMI`, the start-up events-off request) reads the live NVMRO pin first, as the main loop does, so it decides like a bus request.
 

@@ -312,7 +312,7 @@ class TagTests(unittest.TestCase):
 
     def test_an_untagged_error_for_a_lost_request_ends_this_requests_answer(self):
         for code, sentence in [
-            ("LINE_DAMAGED", "3 bytes lost on the port; the line was dropped"),
+            ("LINE_DAMAGED", "3 bytes lost or damaged on the port; the line was dropped"),
             ("BAD_CHAR", "the line holds a byte that is not printable ASCII; it was dropped"),
             ("LINE_TOO_LONG", "the line is longer than 128 bytes; it was dropped"),
         ]:

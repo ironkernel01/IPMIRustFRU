@@ -328,8 +328,8 @@ static DEBUG_COMMANDS: [ConsoleCommand; 10] = [
         handler: debug_cmds::cmd_debug_cache,
     },
     Command {
-        syntax: "BOOTLOADER",
-        help: "Restart into the bootloader; payload power drops at the reset",
+        syntax: "BOOTLOADER {CONFIRM}",
+        help: "Restart into the bootloader; CONFIRM needed while payload power is on",
         handler: debug_cmds::cmd_debug_bootloader,
     },
 ];
@@ -557,7 +557,8 @@ impl Console {
     /// service_app -- one main-loop pass of the application port (`AppPort::poll`): takes the
     /// received bytes and answers at most one request line.
     pub fn service_app(&mut self) {
-        self.ctx.app.poll(self.ctx.ipmb);
+        let power = self.ctx.sensing.payload_power_on();
+        self.ctx.app.poll(self.ctx.ipmb, power);
     }
 
     /// service_link -- runs the IPMB link layer's main-loop step.
@@ -780,10 +781,11 @@ fn print_uart(port: Port) {
     let e = uart::counters(port);
     print_uart_label(port);
     out!(
-        "rx overflow={} tx timeout={} overrun={} tx lines dropped={} tx free={}\n",
+        "rx overflow={} tx timeout={} overrun={} line errors={} tx lines dropped={} tx free={}\n",
         e.rx_overflow,
         e.tx_timeout,
         e.overrun,
+        e.line_errors,
         e.tx_lines_dropped,
         uart::tx_free(port)
     );

@@ -46,6 +46,8 @@ struct FakeHost {
     long_text: bool,
     /// How often `request_bootloader` was called.
     bootloader_requests: u32,
+    /// PWR_EN asserted (`Status::payload_power`).
+    payload_power: bool,
 }
 
 impl FakeHost {
@@ -63,6 +65,7 @@ impl FakeHost {
             name: Some("App Get Device ID"),
             long_text: false,
             bootloader_requests: 0,
+            payload_power: false,
         }
     }
 }
@@ -80,6 +83,7 @@ impl AppHost for FakeHost {
             health: self.health,
             nvmro: self.nvmro,
             uptime_s: 1068,
+            payload_power: self.payload_power,
         }
     }
 
@@ -182,7 +186,7 @@ const HELP_TABLE: &str = "  HELP {COMMAND...}              - List the commands, 
   FRU SET [FIELD] {VALUE...}     - Write a FRU field; no value clears it; MFG_DATE as YYYY-MM-DD HH:MM
   FRU SAVE                       - Whether the FRU image is in flash (a change saves itself after the save delay)
   IPMI [NETFN] [CMD] {DATA...}   - Run one IPMI request locally (hex bytes); nothing goes on the IPMB
-  BOOTLOADER                     - Restart into the bootloader; payload power drops at the reset
+  BOOTLOADER {CONFIRM}           - Restart into the bootloader; CONFIRM needed while payload power is on
 ";
 
 /// REQUEST_TABLE -- (request line, answer) on a fresh `FakeHost`: FRU state M4, power on, the
@@ -291,7 +295,15 @@ const REQUEST_TABLE: &[(&str, &str)] = &[
     ("BOOTLOADER", "BOOTLOADER: restarting
 OK
 "),
-    ("bootloader now", "ERROR ARGS: usage: BOOTLOADER
+    ("BOOTLOADER CONFIRM", "BOOTLOADER: restarting
+OK
+"),
+    ("bootloader confirm", "BOOTLOADER: restarting
+OK
+"),
+    ("bootloader now", "ERROR ARGS: usage: BOOTLOADER {CONFIRM}
+"),
+    ("BOOTLOADER CONFIRM now", "ERROR ARGS: usage: BOOTLOADER {CONFIRM}
 "),
     // IPMI
     (
@@ -416,12 +428,59 @@ fn every_request_row_gets_its_answer() {
     }
 }
 
+/// BOOTLOADER_POWER_ON_TABLE -- (request line, answer, restarts asked) with payload power on.
+const BOOTLOADER_POWER_ON_TABLE: &[(&str, &str, u32)] = &[
+    (
+        "BOOTLOADER",
+        "ERROR CONFIRM: payload power is on and drops at the reset; send BOOTLOADER CONFIRM
+",
+        0,
+    ),
+    (
+        "BOOTLOADER CONFIRM",
+        "BOOTLOADER: restarting
+OK
+",
+        1,
+    ),
+    (
+        "bootloader confirm",
+        "BOOTLOADER: restarting
+OK
+",
+        1,
+    ),
+    (
+        "BOOTLOADER now",
+        "ERROR ARGS: usage: BOOTLOADER {CONFIRM}
+",
+        0,
+    ),
+];
+
+#[test]
+fn bootloader_with_payload_power_on_asks_for_confirm() {
+    for (request, want, asked) in BOOTLOADER_POWER_ON_TABLE {
+        let mut host = FakeHost::new();
+        host.payload_power = true;
+        assert_eq!(
+            reply(&mut host, request),
+            expected(want),
+            "request {request:?}"
+        );
+        assert_eq!(host.bootloader_requests, *asked, "request {request:?}");
+    }
+}
+
 #[test]
 fn bootloader_asks_the_host_once_and_a_refused_line_asks_nothing() {
     let mut host = FakeHost::new();
     reply(&mut host, "BOOTLOADER");
     assert_eq!(host.bootloader_requests, 1);
     reply(&mut host, "BOOTLOADER now");
+    assert_eq!(host.bootloader_requests, 1);
+    host.payload_power = true;
+    reply(&mut host, "BOOTLOADER");
     assert_eq!(host.bootloader_requests, 1);
 }
 
@@ -1198,7 +1257,7 @@ fn a_damaged_line_is_answered_without_a_tag_and_not_run() {
     let answers = feed_all(&mut editor, &mut host, b"TAG abc\r\n");
     assert_eq!(
         answers,
-        ["ERROR LINE_DAMAGED: 3 bytes lost on the port; the line was dropped"]
+        ["ERROR LINE_DAMAGED: 3 bytes lost or damaged on the port; the line was dropped"]
     );
     assert_eq!(reply(&mut host, "FRU GET ASSET_TAG"), "ASSET_TAG: \nOK\n");
     // The line after it runs normally.
@@ -1209,7 +1268,7 @@ fn a_damaged_line_is_answered_without_a_tag_and_not_run() {
     let answers = feed_all(&mut editor, &mut host, b"\n");
     assert_eq!(
         answers,
-        ["ERROR LINE_DAMAGED: 7 bytes lost on the port; the line was dropped"]
+        ["ERROR LINE_DAMAGED: 7 bytes lost or damaged on the port; the line was dropped"]
     );
 }
 
@@ -1237,7 +1296,7 @@ fn feed_lossy<const N: usize>(
 fn a_loss_found_with_a_byte_in_hand_drops_that_byte_and_the_next_line_end_answers_damaged() {
     let mut host = FakeHost::new();
     let mut editor = LineEditor::<64>::new();
-    let damaged = "ERROR LINE_DAMAGED: 2 bytes lost on the port; the line was dropped";
+    let damaged = "ERROR LINE_DAMAGED: 2 bytes lost or damaged on the port; the line was dropped";
     // The loss is found at the start of a pass: the first line end answers damaged, the INFO
     // line after it runs.
     editor.damage(2);
@@ -1276,7 +1335,7 @@ fn many_requests_then_a_damaged_set_never_runs_the_set() {
     let answers = feed_all(&mut editor, &mut host, b"ASSET_TAG ABCD\r\n");
     assert_eq!(
         answers,
-        ["ERROR LINE_DAMAGED: 40 bytes lost on the port; the line was dropped"]
+        ["ERROR LINE_DAMAGED: 40 bytes lost or damaged on the port; the line was dropped"]
     );
     let answers = feed_all(
         &mut editor,

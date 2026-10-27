@@ -2,11 +2,13 @@
 //! behaves like the part (program clears bits only, erase sets a sector to FFh) with injectable
 //! faults, a settable clock, and the Intel HEX image builders.
 
+use crate::decision::PortId;
 use crate::geometry::{APP_START, SECTORS};
 use crate::header::{patch, placeholder, ImageSource};
 use crate::hex::tests::record_line;
 use crate::load::FlashOps;
 use crate::session::BootHw;
+use crate::trace::PortCounts;
 use ipmc_fru::persist::FlashError;
 use std::cell::Cell;
 use std::string::String;
@@ -94,6 +96,10 @@ impl BootHw for Ram {
         let now = self.now.get();
         self.now.set(now.wrapping_add(self.step));
         now
+    }
+
+    fn port_counts(&self, _port: PortId) -> PortCounts {
+        PortCounts::default()
     }
 
     fn activity(&self) {

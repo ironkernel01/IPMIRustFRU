@@ -161,6 +161,7 @@ fn main() -> ! {
         pin_high,
         request,
         decision,
+        port: chosen,
         port_name: match chosen {
             PortId::Cli => ipmc_defs::IPMC_CONSOLE_UART_NAME,
             PortId::App => ipmc_defs::IPMC_APP_UART_NAME,

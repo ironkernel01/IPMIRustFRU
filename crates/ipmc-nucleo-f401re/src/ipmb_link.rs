@@ -1032,7 +1032,12 @@ impl IpmbLink {
         }
         match request {
             Some(ResetRequest::Cold) => {
-                self.status(format_args!("Cold Reset: restarting"));
+                let target = if self.boot_request.is_some() {
+                    " into the bootloader"
+                } else {
+                    ""
+                };
+                self.status(format_args!("Cold Reset: restarting{target}"));
                 uart::flush(uart::Port::Console);
                 // The gate waited for the application port output to leave (`app_output_pending`,
                 // bounded by IPMC_RESET_WAIT_MS); this flush only covers the last byte in the

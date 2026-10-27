@@ -4,7 +4,7 @@
 //! sequence are the firmware's.
 
 use crate::commands::{find, put_help, words, Cmd};
-use crate::decision::Decision;
+use crate::decision::{Decision, PortId};
 use crate::error::{put_err, put_err_head, put_err_word, BootError};
 use crate::geometry::Target;
 use crate::header::{check, ImageError, Report};
@@ -27,6 +27,8 @@ pub trait BootHw: FlashOps {
     fn now_ms(&self) -> u32;
     /// activity -- one record was accepted in `LOAD` (the firmware retriggers the LED).
     fn activity(&self);
+    /// port_counts -- the failure counts of the UART `port` since reset (`INFO`).
+    fn port_counts(&self, port: PortId) -> trace::PortCounts;
 }
 
 /// StartRecord -- what `INFO` prints of this reset; the firmware fills it at start-up.
@@ -37,7 +39,8 @@ pub struct StartRecord<'a> {
     pub pin_high: bool,
     pub request: Option<Interface>,
     pub decision: Decision,
-    /// The session port: its name (`CLI` or `APP`), baud rate and RTS/CTS use.
+    /// The session port: which one, its name (`CLI` or `APP`), baud rate and RTS/CTS use.
+    pub port: PortId,
     pub port_name: &'static str,
     pub baud: u32,
     pub flow: bool,
@@ -355,6 +358,7 @@ impl Session {
         trace::bootloader(out, start.version);
         trace::build(out, FIELD_BUILD);
         trace::port(out, start.port_name, start.baud, start.flow);
+        trace::port_errors(out, &hw.port_counts(start.port));
         trace::erased(out, self.erased_fru, self.erased_app);
         ok(out);
     }
@@ -379,6 +383,7 @@ mod tests {
             pin_high: false,
             request: None,
             decision: Decision::Stay(crate::decision::Reason::NoImage),
+            port: PortId::Cli,
             port_name: "CLI",
             baud: 115_200,
             flow: false,
@@ -771,6 +776,7 @@ mod tests {
             "Bootloader:     ipmc-boot v0.1.0",
             "Build:          bench",
             "Port:           CLI 115200 8N1 RTS/CTS off",
+            "Port errors:    overrun 0, line 0, rx overflow 0, tx timeout 0",
             "Erased:         FRU",
             "OK",
         ]);
@@ -800,6 +806,7 @@ mod tests {
             "Bootloader:     ipmc-boot v0.1.0",
             "Build:          bench",
             "Port:           CLI 115200 8N1 RTS/CTS off",
+            "Port errors:    overrun 0, line 0, rx overflow 0, tx timeout 0",
             "Erased:         none",
             "OK",
         ]);
