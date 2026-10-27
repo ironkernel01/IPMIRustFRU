@@ -1,4 +1,4 @@
-// Drawing set: ipmc-software (4 sheets) for Documentation/ipmc_software_spec.md.
+// Drawing set: ipmc-software (7 sheets) for Documentation/ipmc_software_spec.md.
 // Build: node diagrams/src/ipmc-software.js  ->  diagrams/out/ipmc-software.pptx
 // Fills: white = no_std code shared by firmware and host build, gray = firmware only (STM32),
 // blue = host only (PC), yellow = configuration or data file.
@@ -15,59 +15,56 @@ const cy = (y, h) => y + h / 2;
 // ---------------------------------------------------------------- Sheet 1
 {
   const s = pres.addSlide();
-  container(s, 0.6, 1.3, 3.15, 2.55, "Firmware workspace");
-  container(s, 4.2, 0.5, 8.55, 5.1, "Root cargo workspace");
-  const c1 = 4.5, c2 = 9.1, w = 3.3;
-  // application port path: payload CPU -> APP_UART -> bsp/uart.rs -> app_port.rs -> ipmc-app
-  box(s, 0.9, 0.5, 2.55, 0.38, "Payload CPU");
-  wire(s, 2.175, 0.88, 2.175, 1.6);
-  label(s, 2.275, 0.92, 1.4, "APP_UART, USART1");
-  label(s, 2.275, 1.08, 1.4, "PB6 TX / PB7 RX");
-  box(s, 0.9, 1.6, 2.55, 0.55, "bsp/uart.rs", ["one UART driver, RX/TX rings", "APP_UART and console (USART2)"], G);
-  wire(s, 2.175, 2.15, 2.175, 2.35, { start: true });
-  box(s, 0.9, 2.35, 2.55, 0.55, "app_port.rs", ["AppPort::poll, LinkHost", "implements AppHost, IPMB link"], G);
-  box(s, 0.9, 3.1, 2.55, 0.55, "ipmc-nucleo-f401re", ["STM32F401RE firmware", "main loop, BSP drivers, console"], G);
+  container(s, 0.6, 0.5, 3.3, 3.3, "ipmc-nucleo-f401re (own workspace)");
+  container(s, 4.2, 0.5, 8.55, 6.2, "Root cargo workspace");
+  // the one F401 crate: two binaries over one library
+  box(s, 1.0, 0.95, 2.7, 0.8, "Bootloader binary", ["src/boot/, sectors 0-1", "start sequence, session glue"], G);
+  box(s, 1.0, 1.95, 2.7, 0.8, "Runtime binary", ["src/main.rs, src/drivers/", "ipmb_link, console, app_port"], G);
+  box(s, 1.0, 3.0, 2.7, 0.6, "Library src/lib.rs, src/bsp/", ["board support of both images"], G);
+  wire(s, 1.0, 1.35, 0.8, 1.35, { end: false });
+  wire(s, 0.8, 1.35, 0.8, 3.3, { end: false });
+  wire(s, 0.8, 3.3, 1.0, 3.3);
+  wire(s, 1.0, 2.35, 0.8, 2.35, { end: false });
+  const c1 = 4.5, c2 = 9.1, w = 3.3, n = 2.2;
+  box(s, c1, 0.95, w, 0.8, "ipmc-boot", ["bootloader logic, no_std, host-tested", "header check, session, Intel HEX, trace", "bin fwimage: patch, check, combine"], W);
+  box(s, c1, 2.0, n, 0.55, "ipmc-app", ["application port protocol"], W);
+  box(s, c1, 2.8, n, 0.55, "ipmc-menu", ["console menu engine"], W);
+  box(s, c1, 3.6, n, 0.65, "ipmc-log", ["capture log and", "DEBUG logging code"], W);
+  box(s, 6.9, 2.8, 1.6, 0.75, "ipmc-ext", ["bridge crate: Active is", "NoExtension or the", "extension"], W);
   box(s, c2, 0.85, w, 0.6, "ipmc-emu", ["x86 emulator", "replay, serve, sdr"], B);
-  box(s, c2, 1.75, w, 0.6, "ipmc-sensors", ["sensor and board I/O HAL", "hal, eval, drivers, board table"], W);
-  box(s, c1, 0.85, w, 0.6, "ipmc-app", ["application port protocol, no_std", "one request line, one OK/ERR line"], W);
-  box(s, c1, 1.75, w, 0.6, "ipmc-menu", ["console menu engine", "MenuBuilder rules"], W);
-  box(s, 4.5, 3.05, 1.55, 0.7, "ipmc-log", ["capture log and", "DEBUG logging code"], W);
-  box(s, c2, 2.65, w, 0.85, "ipmc-core", ["all IPMI logic", "codec, link layer, commands, SDR,", "sensors, FRU state, self test"], W);
-  box(s, c2, 3.8, w, 0.6, "ipmc-fru", ["FRU records and scratchpad", "image, store, flash log"], W);
-  box(s, c2, 4.7, w, 0.6, "ipmc-wire", ["IPMI byte primitives", "checksum, builder, type/length, CRC-32"], W);
-  box(s, c1, 4.7, w, 0.6, "ipmc-defs", ["typed constants (defs.rs)", "and compile-time guards"], W);
-  box(s, c1, 6.1, w, 0.6, "defs.rs", ["build configuration", "Rust pub const items"], Y);
-  box(s, 6.5, 2.95, 2.2, 0.75, "ipmc-ext", ["bridge crate: Active is", "NoExtension or the", "extension, by ipmc-defs"], W);
-  box(s, 8.2, 6.1, 4.2, 0.6, "Tier-2/3 extension", ["(commercial release build, private)", "sibling folder, mounted by ipmc-ext"], W);
-  const x2 = cx(c2, w), x1 = cx(c1, w);
-  wire(s, x2, 1.45, x2, 1.75);
-  wire(s, x2, 2.35, x2, 2.65);
-  wire(s, x2, 3.5, x2, 3.8);
-  wire(s, x2, 4.4, x2, 4.7);
-  // app_port.rs <-> ipmc-app (L route, two-way); firmware -> ipmc-menu (L route)
-  wire(s, 3.45, 2.625, 3.95, 2.625, { start: true, end: false });
-  wire(s, 3.95, 2.625, 3.95, 1.15, { end: false });
-  wire(s, 3.95, 1.15, c1, 1.15);
-  wire(s, 3.45, 3.375, 4.1, 3.375, { end: false });
-  wire(s, 4.1, 3.375, 4.1, 2.05, { end: false });
-  wire(s, 4.1, 2.05, c1, 2.05);
+  box(s, c2, 1.7, w, 0.6, "ipmc-sensors", ["sensor and board I/O HAL", "hal, eval, drivers, board table"], W);
+  box(s, c2, 2.6, w, 0.85, "ipmc-core", ["all IPMI logic", "codec, link layer, commands, SDR,", "sensors, FRU state, self test"], W);
+  box(s, c2, 3.75, w, 0.6, "ipmc-fru", ["FRU records, scratchpad, image,", "flash store log"], W);
+  box(s, c2, 4.65, w, 0.6, "ipmc-wire", ["IPMI byte primitives", "checksum, builder, CRC-32, SHA-256"], W);
+  box(s, c1, 4.7, n, 0.6, "ipmc-defs", ["typed constants (defs.rs)", "and compile-time guards"], W);
+  box(s, c1, 5.9, n, 0.55, "defs.rs", ["build configuration"], Y);
+  box(s, 7.0, 5.9, 5.4, 0.55, "Tier-2/3 extension", ["(commercial release build, private sibling folder)"], W);
+  const x2 = cx(c2, w);
+  wire(s, x2, 1.45, x2, 1.7);
+  wire(s, x2, 2.3, x2, 2.6);
+  wire(s, x2, 3.45, x2, 3.75);
+  wire(s, x2, 4.35, x2, 4.65);
+  // firmware crate to ipmc-boot (bootloader binary) and ipmc-app (runtime binary)
+  wire(s, 3.7, 1.35, c1, 1.35);
+  wire(s, 3.7, 2.275, c1, 2.275);
   // ipmc-app uses ipmc-core
-  wire(s, c1 + w, 1.15, 8.45, 1.15, { end: false });
-  wire(s, 8.45, 1.15, 8.45, 2.8, { end: false });
-  wire(s, 8.45, 2.8, c2, 2.8);
-  wire(s, x1, 2.35, x1, 4.7);
-  wire(s, x1, 6.1, x1, 5.3, { dash: "dash" });
-  label(s, x1 + 0.1, 5.75, 1.5, "lib.rs: mod defs");
-  wire(s, 8.7, 3.3, c2, 3.3);
-  wire(s, 7.2, 3.7, 7.2, 4.7);
-  wire(s, 8.4, 3.7, 8.4, 6.1, { dash: "dash" });
-  label(s, 8.5, 5.75, 1.6, "#[path] mount, when found");
+  wire(s, c1 + n, 2.275, 8.75, 2.275, { end: false });
+  wire(s, 8.75, 2.275, 8.75, 2.9, { end: false });
+  wire(s, 8.75, 2.9, c2, 2.9);
+  // ipmc-ext uses ipmc-core
+  wire(s, 8.5, 3.175, c2, 3.175);
+  // defs.rs to ipmc-defs, extension folder to ipmc-ext
+  wire(s, 5.6, 5.9, 5.6, 5.3, { dash: "dash" });
+  label(s, 5.7, 5.55, 1.3, "lib.rs: mod defs");
+  wire(s, 7.7, 3.55, 7.7, 5.9, { dash: "dash" });
+  label(s, 7.8, 4.9, 1.2, "#[path] mount,");
+  label(s, 7.8, 5.08, 1.2, "when found");
   notes(s, 0.6, 3.95, 3.5, 2.8, [
     "Every crate reads defs.rs values as ipmc_defs::NAME; those arrows are not drawn.",
-    "ipmc-ext uses ipmc-core and ipmc-defs; ipmc-nucleo-f401re and ipmc-emu use ipmc-ext (arrows not drawn). The ipmc-defs build.rs finds the extension folder; without it ipmc-ext holds NoExtension and the build is Tier-1.",
-    "ipmc-nucleo-f401re uses ipmc-core, -fru, -app, -menu, -log, -sensors (feature stm32f401) and -defs. ipmc-log uses ipmc-core and -defs; the core never uses it. ipmc-emu uses core, fru, sensors, wire and defs. ipmc-app uses core, fru, wire and defs. ipmc-sensors uses core and defs. ipmc-core uses fru, wire and defs. ipmc-fru uses wire and defs. ipmc-menu uses defs. Arrows that would cross are not drawn.",
-    "The firmware crate (a library and the runtime binary) builds on its own (thumbv7em-none-eabihf). ipmc-core, ipmc-fru, ipmc-wire, ipmc-defs, ipmc-menu, ipmc-log and ipmc-app are no_std with forbid(unsafe_code); ipmc-sensors allows unsafe only in drivers/stm32f401.",
-    "ipmc-app touches no hardware; app_port.rs implements its AppHost trait over the IPMB link, which reaches the ipmc-core dispatcher and the ipmc-fru store. The console and APP_UART share bsp/uart.rs. The payload CPU is board hardware. ipmc-emu does not build ipmc-app.",
+    "The runtime binary also uses ipmc-core, -fru, -menu, -log, -sensors (feature stm32f401), -ext, -wire and -defs. The bootloader binary uses ipmc-boot and the library only.",
+    "ipmc-boot uses ipmc-fru (store sector), -wire (SHA-256, checksum), -menu (line editor) and -defs. ipmc-log uses ipmc-core and -defs. ipmc-emu uses core, fru, sensors, wire, ext and defs. ipmc-app uses core, fru, wire and defs.",
+    "ipmc-ext uses ipmc-core and -wire. ipmc-defs build.rs finds the extension folder; without it the build is Tier-1.",
+    "The firmware crate builds on its own (thumbv7em-none-eabihf). Every other crate forbids unsafe code except ipmc-sensors, which allows it only in drivers/stm32f401; ipmc-emu is a host std binary.",
   ]);
   legend(s, 0.6, 6.85, LEG, 3.0);
   frame(s);
@@ -178,7 +175,7 @@ const cy = (y, h) => y + h / 2;
   box(s, 3.0, L, 1.8, h, "FruStore", ["RAM scratchpad,", "dirty mark"]);
   box(s, 5.4, L, 1.8, h, "Persist::poll", ["quiet time, NVMRO,", "erase gate"]);
   box(s, 7.8, L, 1.8, h, "PausedErase", ["IPMB slaves off", "during an erase"], G);
-  box(s, 10.2, L, 2.2, h, "Flash log", ["drivers/flash.rs, sectors 6 and 7", "0x0804_0000 and 0x0806_0000"], G);
+  box(s, 10.2, L, 2.2, h, "Flash log", ["drivers/flash.rs, sector 2 only", "0x0800_8000..0x0800_BFFF"], G);
   wire(s, 2.4, ly, 3.0, ly);
   wire(s, 4.8, ly, 5.4, ly);
   wire(s, 7.2, ly, 7.8, ly);
@@ -244,8 +241,133 @@ const cy = (y, h) => y + h / 2;
     "The conformance tests are written from the specification texts only and reach the IPMC through adapter.py.",
     "vectors/sbc_ab.vec is local only and not in the repository.",
     "White blocks on this sheet are bench hardware, not code from this repository.",
+    "The firmware update tool (fwupdate.py) and the application port client (app_cli.py) are on sheets 6 and 7.",
   ]);
   legend(s, 0.6, 6.85, LEG.slice(1, 3), 3.0);
+  frame(s);
+}
+
+// ---------------------------------------------------------------- Sheet 5
+{
+  const s = pres.addSlide();
+  // flash map, column A
+  box(s, 0.7, 0.7, 3.7, 0.8, "BOOT, sectors 0-1", ["0x0800_0000 .. 0x0800_7FFF, 32 KB", "the bootloader ipmc-boot"], G);
+  box(s, 0.7, 1.75, 3.7, 0.8, "STORE, sector 2", ["0x0800_8000 .. 0x0800_BFFF, 16 KB", "the FRU flash store, nothing else"], Y);
+  container(s, 0.7, 2.8, 3.7, 3.75, "APP, sectors 3-7, 0x0800_C000 .. 0x0807_FFFF");
+  box(s, 0.95, 3.15, 3.2, 0.6, "Vector table", ["0x0800_C000, 512-byte aligned"], G);
+  box(s, 0.95, 3.95, 3.2, 0.6, "Image header, 64 bytes", ["0x0800_C200: length, version, digest"], Y);
+  box(s, 0.95, 4.75, 3.2, 0.6, "Program", ["text, rodata, .data load image", "ends at 0x0800_C000 + length"], G);
+  box(s, 0.95, 5.55, 3.2, 0.7, "Unused flash", ["reads FFh after ERASE APP"], W);
+  // writers, column B
+  box(s, 5.0, 0.7, 3.2, 0.8, "Writers of BOOT", ["SWD of ipmc-boot.elf (bench only)", "drive copy of ipmc-board.bin"], B);
+  box(s, 5.0, 1.75, 3.2, 0.8, "Writers of STORE", ["runtime drivers/flash.rs", "bootloader ERASE FRU, drive copy (FFh)"], G);
+  box(s, 5.0, 3.55, 3.2, 1.0, "Writers of APP", ["bootloader LOAD (Intel HEX records)", "SWD of the patched runtime ELF", "drive copy of ipmc-board.bin"], G);
+  wire(s, 5.0, 1.1, 4.4, 1.1);
+  wire(s, 5.0, 2.15, 4.4, 2.15);
+  wire(s, 5.0, 4.05, 4.4, 4.05);
+  // RAM and the boot request, column C
+  box(s, 9.0, 0.7, 3.6, 0.6, "Runtime firmware", ["DEBUG BOOTLOADER, app BOOTLOADER"], G);
+  box(s, 9.0, 1.7, 3.6, 0.8, "NOINIT, 0x2000_0000, 256 B", ["offset 0: boot request, four words", "offset 0x10: runtime kept words"], Y);
+  box(s, 9.0, 2.9, 3.6, 0.6, "Bootloader", ["reads the words after a software reset"], G);
+  box(s, 9.0, 3.9, 3.6, 1.0, "RAM, 0x2000_0100 .. 0x2001_7FFF", ["95.75 KB: statics and stack of the", "image that runs; stack reserve 35 KB", "runtime, 8 KB bootloader"], W);
+  wire(s, 10.8, 1.3, 10.8, 1.7);
+  label(s, 10.9, 1.4, 1.7, "write 4 words, reset");
+  wire(s, 10.8, 2.5, 10.8, 2.9);
+  label(s, 10.9, 2.6, 1.7, "read, clear check word");
+  notes(s, 5.0, 5.0, 7.7, 1.75, [
+    "bsp/flash_regs.rs refuses sectors 0 and 1 and every address below 0x0800_8000 for every caller; ipmc_boot::geometry::load_allowed lets LOAD write inside APP only. Two checks stand between any command and the bootloader sectors.",
+    "Sector 3 is 16 KB (0x0800_C000), sector 4 is 64 KB (0x0801_0000), sectors 5, 6 and 7 are 128 KB each (0x0802_0000, 0x0804_0000, 0x0806_0000). ERASE APP erases sector 3 first, so a power cut leaves an image that fails its check.",
+    "ipmc-board.bin holds the bootloader at offset 0, FFh up to 0xC000 and the runtime from 0xC000; the drive copy therefore erases the stored FRU image.",
+  ]);
+  legend(s, 0.6, 6.85, [["Firmware code", G], ["Data", Y], ["Host tool", B], ["Region without content", W]], 3.0);
+  frame(s);
+}
+
+// ---------------------------------------------------------------- Sheet 6
+{
+  const s = pres.addSlide();
+  container(s, 0.6, 0.5, 3.0, 4.7, "PC (host)");
+  box(s, 0.85, 1.0, 2.5, 0.7, "gen.ps1 build", ["fwimage patch and check,", "objcopy"], B);
+  box(s, 0.85, 2.1, 2.5, 0.7, "ipmc-nucleo-f401re.hex", ["patched runtime, SHA-256", "in the image header"], Y);
+  box(s, 0.85, 3.2, 2.5, 1.2, "tools/fwupdate/fwupdate.py", ["pre-check: header, vectors, digest", "ERASE APP, LOAD, 32-byte records", "resend, resume, VERIFY, RUN"], B);
+  wire(s, 2.1, 1.7, 2.1, 2.1);
+  wire(s, 2.1, 2.8, 2.1, 3.2);
+  // board
+  container(s, 4.2, 0.5, 8.55, 5.0, "NUCLEO-F401RE, bootloader ipmc-boot (sectors 0-1)");
+  const col = [4.5, 6.2, 7.9, 9.6, 11.3], bw = 1.4, bh = 0.9;
+  const r1 = 1.1, r2 = 3.25;
+  // band 1: the image check at every reset
+  box(s, col[0], r1, bw, bh, "Reset", ["bootloader starts", "first, clock, console"], G);
+  box(s, col[1], r1, bw, bh, "main.rs", ["pin PC10, boot", "request words"], G);
+  box(s, col[2], r1, bw, bh, "header::check", ["header, vectors,", "SHA-256"], W);
+  box(s, col[3], r1, bw, bh, "decide", ["start, countdown", "or stay"], W);
+  box(s, col[4], r1, bw, bh, "start.rs", ["start_runtime:", "VTOR, MSP, jump"], G);
+  for (let i = 0; i < 4; i++) wire(s, col[i] + bw, r1 + bh / 2, col[i + 1], r1 + bh / 2);
+  // band 2: the update session
+  box(s, col[0], r2, bw, bh, "bsp/uart.rs", ["USART2 (CLI) or USART1", "(APP), 115200 8N1"], G);
+  box(s, col[1], r2, bw, bh, "serve.rs", ["line editor per port,", "WAKEUP rule"], G);
+  box(s, col[2], r2, bw, bh, "Session", ["commands.rs table,", "ERASE, LOAD, VERIFY"], W);
+  box(s, col[3], r2, bw, bh, "Loader::record", ["parse, range, erased", "check, program, compare"], W);
+  box(s, col[4], r2, bw, bh, "FlashImage", ["FlashRegs: erase", "sector, program"], G);
+  for (let i = 0; i < 4; i++) wire(s, col[i] + bw, r2 + bh / 2, col[i + 1], r2 + bh / 2, { start: true });
+  // check and session
+  wire(s, col[2] + bw / 2, r2, col[2] + bw / 2, r1 + bh, { start: true });
+  label(s, col[2] + bw / 2 + 0.08, 2.3, 1.1, "VERIFY, RUN");
+  label(s, col[2] + bw / 2 + 0.08, 2.48, 1.1, "end of LOAD");
+  // host to board and flash
+  wire(s, 3.35, r2 + bh / 2, col[0], r2 + bh / 2, { start: true });
+  box(s, col[4], 4.5, bw, 0.7, "Flash APP", ["sectors 3-7"], G);
+  wire(s, col[4] + bw / 2, r2 + bh, col[4] + bw / 2, 4.5, { start: true });
+  notes(s, 0.6, 5.55, 12.0, 1.2, [
+    "Start-up (upper row): every reset runs the check; a valid image with no pin, no request and no countdown starts at once. A countdown or a stay listens on both ports through serve.rs; WAKEUP on one port opens the session there and stops the other UART.",
+    "Update (lower row): stop-and-wait, one record in flight, answered OK or ERR before the next. A record that fails FORMAT, CHECKSUM, LINE_TOO_LONG or LINE_DAMAGED is sent again; ERR ABORTED resumes with LOAD. VERIFY returns the computed SHA-256, which fwupdate.py compares with the file.",
+    "header::check reads the flash through ImageSource (FlashImage). No IPMB service runs while the bootloader runs. The host PC reaches CLI through the ST-LINK virtual COM port and APP through a USB-serial adapter.",
+  ]);
+  legend(s, 0.6, 6.85, [["Firmware code", G], ["ipmc-boot library", W], ["Host tool", B], ["Data file", Y]], 3.0);
+  frame(s);
+}
+
+// ---------------------------------------------------------------- Sheet 7
+{
+  const s = pres.addSlide();
+  const y = 1.3, h = 0.9, cy1 = y + h / 2;
+  box(s, 0.6, y, 1.4, h, "Payload processor", ["board hardware"], W);
+  box(s, 2.7, y, 1.4, h, "bsp/uart.rs", ["USART1 PB6 TX,", "PB7 RX", "RX 256, TX 1024"], G);
+  box(s, 4.6, y, 1.5, h, "app_port.rs", ["AppPort::poll", "echo, answer,", "prompt, drain"], G);
+  container(s, 6.65, 0.8, 5.85, 1.7, "ipmc-app (reference crate, no_std)");
+  box(s, 6.85, y, 1.15, h, "LineEditor", ["line.rs", "echo, line", "end, damage"], W);
+  box(s, 8.25, y, 1.15, h, "engine::run", ["engine.rs", "tag, row,", "final line"], W);
+  box(s, 9.65, y, 1.15, h, "COMMANDS", ["commands.rs", "handlers"], W);
+  box(s, 11.05, y, 1.15, h, "AppHost", ["host.rs", "the trait"], W);
+  wire(s, 2.0, cy1, 2.7, cy1, { start: true });
+  label(s, 2.05, cy1 - 0.2, 0.65, "8N1", 7.5, "center");
+  wire(s, 4.1, cy1, 4.6, cy1, { start: true });
+  wire(s, 6.1, cy1, 6.85, cy1, { start: true });
+  wire(s, 8.0, cy1, 8.25, cy1, { start: true });
+  wire(s, 9.4, cy1, 9.65, cy1, { start: true });
+  wire(s, 10.8, cy1, 11.05, cy1, { start: true });
+  // LinkHost implements AppHost
+  box(s, 10.625, 3.3, 2.0, 0.8, "LinkHost", ["app_port.rs: implements", "AppHost over the link layer"], G);
+  wire(s, 11.625, 2.2, 11.625, 3.3, { start: true });
+  label(s, 11.7, 2.65, 0.8, "impl AppHost");
+  wire(s, 5.35, y + h, 5.35, 3.7, { end: false });
+  wire(s, 5.35, 3.7, 10.625, 3.7);
+  label(s, 5.45, 3.5, 2.5, "AppPort::poll builds one LinkHost");
+  // targets
+  box(s, 2.55, 4.6, 2.3, 1.0, "IPMI dispatch", ["ipmc-core Context and", "run_request: one local", "request (IPMI)"], W);
+  box(s, 5.2, 4.6, 2.3, 1.0, "FRU store", ["ipmc-fru set_unit_field,", "dirty mark, flash log", "(FRU SET, FRU SAVE)"], W);
+  box(s, 7.85, 4.6, 2.3, 1.0, "Status and sensors", ["Monitor snapshot, power", "state, NVMRO, uptime", "(INFO, STATUS)"], W);
+  box(s, 10.5, 4.6, 2.25, 1.0, "Bootloader request", ["request_bootloader,", "ResetGate, boot request", "words, then reset"], G);
+  wire(s, 11.625, 4.1, 11.625, 4.6);
+  wire(s, 11.625, 4.35, 3.7, 4.35, { end: false });
+  wire(s, 3.7, 4.35, 3.7, 4.6);
+  wire(s, 6.35, 4.35, 6.35, 4.6);
+  wire(s, 9.0, 4.35, 9.0, 4.6);
+  notes(s, 0.6, 5.85, 12.1, 0.95, [
+    "One request line at a time: the port takes no new byte while an answer drains. The answer is KEY: value lines and one final line, OK or ERROR <CODE>: <sentence>, with the #tag of the request. The handlers never touch hardware; every board value comes through AppHost.",
+    "A custom application adds a row to COMMANDS and, for a board value the trait does not offer, one method of AppHost, implemented in LinkHost and in the test host. tools/app-port/app_cli.py is the host-side reference client.",
+  ]);
+  legend(s, 0.6, 6.85, [["Firmware code", G], ["ipmc-app and ipmc-core code", W]], 3.0);
   frame(s);
 }
 

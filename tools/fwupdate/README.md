@@ -66,7 +66,7 @@ input or the end of input stops the run (`refused: entry not confirmed`, exit 1)
 3. `ERASE APP` and `CONFIRM`, `LOAD`.
 4. Records, one at a time, each answered before the next. By default the image is re-chunked into aligned
    32-byte records with an 04 record at each 64 KB boundary; an all-FFh chunk is skipped (the flash is
-   erased). `--as-is` sends the file's own records. An `ERR FORMAT`, `ERR CHECKSUM` or `ERR LINE_TOO_LONG`
+   erased). `--as-is` sends the file's own records. An `ERR FORMAT`, `ERR CHECKSUM`, `ERR LINE_TOO_LONG` or `ERR LINE_DAMAGED`
    answer is sent again up to 3 times; any other `ERR` stops the run and names the record number and the
    answer. One progress line shows records, bytes and rate. An `ERR ABORTED` answer (a damaged leading `:`
    ended record mode; the erase stays in force and every earlier record is programmed) is resumed: the
