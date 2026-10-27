@@ -366,29 +366,28 @@ mod tests {
     }
 
     #[test]
-    fn critical_rail_makes_voltage_and_health_bad() {
-        let mut bench = Bench::new();
-        bench
-            .analog
-            .set_rail_mv(RAILS[RAIL_5V].channel, 4400)
-            .unwrap();
-        let s = bench.snapshot(PowerState::On, true);
-        assert_eq!(s.rails[RAIL_5V].status, RailStatus::Critical);
-        assert_eq!(bytes(SENSOR_FRU_VOLTAGE, &s), [0x00, 0x40, 0x02]);
-        assert_eq!(bytes(SENSOR_FRU_HEALTH, &s), [0x00, 0x40, 0x02]);
-    }
-
-    #[test]
-    fn non_critical_rail_makes_voltage_bad_but_not_health() {
-        let mut bench = Bench::new();
-        bench
-            .analog
-            .set_rail_mv(RAILS[RAIL_5V].channel, 5300)
-            .unwrap();
-        let s = bench.snapshot(PowerState::On, true);
-        assert_eq!(s.rails[RAIL_5V].status, RailStatus::NonCritical);
-        assert_eq!(s.voltage, Summary::Bad);
-        assert_eq!(s.health, Summary::Good);
+    fn a_rail_past_a_threshold_sets_the_voltage_and_health_summaries() {
+        // (5V rail in mV, its status, voltage summary, health summary): a critical rail makes
+        // both bad, a non-critical one only the voltage. The sensor state byte is 01h good,
+        // 02h bad.
+        for (mv, status, voltage, health) in [
+            (4400, RailStatus::Critical, Summary::Bad, Summary::Bad),
+            (5300, RailStatus::NonCritical, Summary::Bad, Summary::Good),
+        ] {
+            let mut bench = Bench::new();
+            bench
+                .analog
+                .set_rail_mv(RAILS[RAIL_5V].channel, mv)
+                .unwrap();
+            let s = bench.snapshot(PowerState::On, true);
+            assert_eq!(s.rails[RAIL_5V].status, status, "{mv} mV");
+            assert_eq!(s.voltage, voltage, "{mv} mV");
+            assert_eq!(s.health, health, "{mv} mV");
+            for (sensor, summary) in [(SENSOR_FRU_VOLTAGE, voltage), (SENSOR_FRU_HEALTH, health)] {
+                let state = if summary == Summary::Bad { 0x02 } else { 0x01 };
+                assert_eq!(bytes(sensor, &s), [0x00, 0x40, state], "{mv} mV");
+            }
+        }
     }
 
     #[test]

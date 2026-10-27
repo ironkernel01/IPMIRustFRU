@@ -8,7 +8,7 @@ use ipmc_core::fru_state::State;
 use ipmc_core::ipmb::{self, Header, NETFN_GROUP_EXT};
 use ipmc_core::queue::Bus;
 use ipmc_core::sensor::PowerState;
-use ipmc_core::trace::Trace;
+use ipmc_core::trace::NoTrace;
 use ipmc_emu::emulator::{EmuConfig, Emulator};
 
 const OWN: u8 = 0x82;
@@ -19,12 +19,6 @@ const SET_FRU_STATE_POLICY_BITS: u8 = 0x0A;
 const SET_FRU_ACTIVATION: u8 = 0x0C;
 const POLICY_AL: u8 = 1;
 const ACTIVATE: u8 = 1;
-
-struct Lines;
-
-impl Trace for Lines {
-    fn line(&mut self, _args: core::fmt::Arguments) {}
-}
 
 fn exchange(emu: &mut Emulator, cmd: u8, seq: u8, data: &[u8], now_ms: u32) -> u8 {
     let header = Header {
@@ -39,9 +33,9 @@ fn exchange(emu: &mut Emulator, cmd: u8, seq: u8, data: &[u8], now_ms: u32) -> u
     let mut frame = vec![0u8; ipmb::IPMB_MAX_LEN];
     let len = ipmb::encode_request(&header, data, &mut frame).unwrap();
     emu.rx(Bus::A, &frame[..len], now_ms).unwrap();
-    assert_eq!(emu.poll(now_ms, &mut Lines), 1);
+    assert_eq!(emu.poll(now_ms, &mut NoTrace), 1);
     let (bus, bytes) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, now_ms + 1, &mut Lines).unwrap();
+    emu.tx_done(bus, true, now_ms + 1, &mut NoTrace).unwrap();
     let parsed = ipmb::parse(&bytes).unwrap();
     parsed.completion_code.unwrap()
 }
@@ -59,7 +53,7 @@ fn a_power_on_in_progress_does_not_reach_m4_with_al_set() {
     let mut now = 0u32;
     // M0 to M1 on the first samples; the payload is off.
     for _ in 0..5 {
-        emu.poll(now, &mut Lines);
+        emu.poll(now, &mut NoTrace);
         now += 1;
     }
     assert_eq!(emu.context().fru_state.state(), State::M1);
@@ -79,7 +73,7 @@ fn a_power_on_in_progress_does_not_reach_m4_with_al_set() {
     // PGOOD follows PWR_EN in the emulator; let several sample periods pass.
     for _ in 0..200 {
         now += 10;
-        emu.poll(now, &mut Lines);
+        emu.poll(now, &mut NoTrace);
         assert_ne!(emu.context().fru_state.state(), State::M4, "at {now} ms");
     }
     assert_eq!(emu.context().fru_state.state(), State::M1);

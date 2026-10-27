@@ -112,6 +112,16 @@ def read(path=None, tier=1):
     return values
 
 
+def get(name, default, path=None):
+    """The value of `pub const name` in the defs file at `path` (default: the repository's
+    defs.rs), or `default` when the file cannot be opened or the name is absent. The tools use it
+    for the values they must agree on with the IPMC and still run away from the repository."""
+    try:
+        return read(path).get(name, default)
+    except OSError:
+        return default
+
+
 def main(argv):
     values = read()
     for name in argv:

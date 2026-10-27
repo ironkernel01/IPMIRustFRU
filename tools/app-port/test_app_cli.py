@@ -536,10 +536,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(app_settings.prompt(), defs.read()["IPMC_APP_PROMPT"])
         self.assertEqual(app_cli.DEVICE_PROMPT, app_settings.prompt())
         self.assertTrue(app_settings.prompt().endswith(" "))
-        self.assertEqual(app_settings.define_from_header("IPMC_APP_PROMPT", "p> ", "no/such"), "p> ")
+        self.assertEqual(app_settings.prompt("no/such"), app_settings.PROMPT_FALLBACK)
 
     def test_a_missing_header_gives_the_default(self):
-        self.assertEqual(app_settings.define_from_header("X", 7, "no/such/file.h"), 7)
+        self.assertEqual(app_settings.line_max("no/such/file.h"), app_settings.LINE_MAX_FALLBACK)
 
 
 if __name__ == "__main__":

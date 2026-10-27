@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-wire = { path = "../ipmc-wire" }
+
+[features]
+# host: the in-RAM flash log (`RamFlash`) for the emulator; the firmware does not enable it.
+host = []

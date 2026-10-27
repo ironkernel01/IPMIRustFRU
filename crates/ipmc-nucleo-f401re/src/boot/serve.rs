@@ -117,19 +117,11 @@ impl Loss {
     /// watching -- a watch that starts from the current count of `port`.
     fn watching(port: Port) -> Self {
         Loss {
-            seen: lost_bytes(port),
+            seen: uart::counters(port).lost(),
             damaged: false,
             watch: true,
         }
     }
-}
-
-/// lost_bytes -- overrun + RX ring overflow + line errors of `port` (wrapping).
-fn lost_bytes(port: Port) -> u32 {
-    let c = uart::counters(port);
-    c.overrun
-        .wrapping_add(c.rx_overflow)
-        .wrapping_add(c.line_errors)
 }
 
 /// drain -- pushes the bytes waiting on `port` into `editor` and hands each event to `on` (with the
@@ -144,7 +136,7 @@ fn drain(
 ) -> bool {
     while let Some(byte) = uart::getc(port) {
         if loss.watch {
-            let now = lost_bytes(port);
+            let now = uart::counters(port).lost();
             if now != loss.seen {
                 uart::discard_rx(port);
                 loss.seen = now;

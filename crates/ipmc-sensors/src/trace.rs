@@ -253,17 +253,7 @@ pub fn change_lines<T: Trace + ?Sized>(old: &SensorSnapshot, new: &SensorSnapsho
 pub(crate) mod tests {
     use super::*;
     use ipmc_core::sensor::{PowerState, TemperatureReading};
-    use std::fmt::Arguments;
-
-    /// Collects trace lines for assertions.
-    #[derive(Default)]
-    pub struct Lines(pub Vec<String>);
-
-    impl Trace for Lines {
-        fn line(&mut self, args: Arguments) {
-            self.0.push(std::fmt::format(args));
-        }
-    }
+    use ipmc_core::trace::RecordingTrace;
 
     fn nominal() -> SensorSnapshot {
         let mut s = SensorSnapshot::EMPTY;
@@ -295,10 +285,10 @@ pub(crate) mod tests {
 
     #[test]
     fn sample_line_lists_rails_temperature_inputs_and_summaries() {
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         sample_line(&nominal(), &mut lines);
         assert_eq!(
-            lines.0,
+            lines.lines,
             [
                 "sample: VDDA=3300mV in range, 12V payload=12000mV in range, 5V=5000mV in range, \
               3V3 payload=3300mV in range, +3.3V_AUX=3300mV in range; temp 34.8 C flags 00h; \
@@ -315,10 +305,10 @@ pub(crate) mod tests {
         new.rails[2].status = RailStatus::Critical;
         new.voltage = Summary::Bad;
         new.health = Summary::Bad;
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&old, &new, &mut lines);
         assert_eq!(
-            lines.0,
+            lines.lines,
             [
                 "event: rail 5V in range -> critical (4400 mV)",
                 "event: FRU Health good -> bad",
@@ -334,18 +324,18 @@ pub(crate) mod tests {
         new.inputs_asserted = 0b0011; // FAULT_N asserted too
         new.temperature.flags = 0x18;
         new.temperature.dc = 900;
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&old, &new, &mut lines);
         assert_eq!(
-            lines.0,
+            lines.lines,
             [
                 "event: temperature 34.8 C flags 00h -> 90.0 C flags 18h",
                 "event: FAULT_N asserted",
             ]
         );
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&new, &old, &mut lines);
-        assert!(lines.0.iter().any(|l| l == "event: FAULT_N cleared"));
+        assert!(lines.lines.iter().any(|l| l == "event: FAULT_N cleared"));
     }
 
     #[test]
@@ -353,29 +343,29 @@ pub(crate) mod tests {
         let old = nominal();
         let mut new = nominal();
         new.inputs_unreadable = 0b0010; // FAULT_N could not be read
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&old, &new, &mut lines);
-        assert_eq!(lines.0, ["event: FAULT_N unreadable"]);
+        assert_eq!(lines.lines, ["event: FAULT_N unreadable"]);
         // Back to a measured clear input.
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&new, &old, &mut lines);
-        assert_eq!(lines.0, ["event: FAULT_N cleared"]);
+        assert_eq!(lines.lines, ["event: FAULT_N cleared"]);
         // An asserted input that becomes unreadable is not reported as cleared either.
         let mut asserted = nominal();
         asserted.inputs_asserted = 0b0011;
         let mut unreadable = asserted;
         unreadable.inputs_asserted = 0b0001;
         unreadable.inputs_unreadable = 0b0010;
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&asserted, &unreadable, &mut lines);
-        assert_eq!(lines.0, ["event: FAULT_N unreadable"]);
+        assert_eq!(lines.lines, ["event: FAULT_N unreadable"]);
         // The sample line names the unreadable inputs.
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         sample_line(&unreadable, &mut lines);
         assert!(
-            lines.0[0].contains("asserted PGOOD; unreadable FAULT_N; power"),
+            lines.lines[0].contains("asserted PGOOD; unreadable FAULT_N; power"),
             "{}",
-            lines.0[0]
+            lines.lines[0]
         );
     }
 
@@ -397,8 +387,8 @@ pub(crate) mod tests {
     #[test]
     fn identical_snapshots_print_nothing() {
         let s = nominal();
-        let mut lines = Lines::default();
+        let mut lines = RecordingTrace::default();
         change_lines(&s, &s, &mut lines);
-        assert!(lines.0.is_empty());
+        assert!(lines.lines.is_empty());
     }
 }

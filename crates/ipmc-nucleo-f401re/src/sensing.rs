@@ -20,7 +20,7 @@ use ipmc_core::sensor::{
     SENSOR_FRU_VOLTAGE, SENSOR_PAYLOAD_TEST_RESULTS, SENSOR_PAYLOAD_TEST_STATUS,
     SENSOR_SYSTEM_IPMB_LINK,
 };
-use ipmc_menu::{optional, Args, CmdError, CmdResult};
+use ipmc_menu::{on_off_text, optional, Args, CmdError, CmdResult};
 use ipmc_sensors::analog::SPECS;
 use ipmc_sensors::board_sensors::{sim_analog, INPUTS, RAILS};
 use ipmc_sensors::drivers::sim::{SimAnalog, SimInputs, SimPower};
@@ -36,7 +36,7 @@ use ipmc_sensors::trace::{Asserted, Level, Tenths};
 
 use crate::bsp::systick;
 use crate::console::{ConsoleTrace, Context};
-use crate::ipmb_link::HandOffs;
+use ipmc_core::dispatch::HandOffs;
 
 // No bus is assigned to external sensor parts (the STM32's I2C1 and I2C3 are the IPMB buses), so
 // the I2C and SPI source values are not accepted in a firmware build.
@@ -236,15 +236,6 @@ impl fmt::Display for SourceName {
     }
 }
 
-/// on_off -- "on" or "off".
-fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
-    }
-}
-
 /// print_reading -- the Get Sensor Reading data bytes `Context::read_sensor` returns for sensor
 /// `number` (the function Get Sensor Reading uses), with a one-line meaning.
 fn print_reading(
@@ -349,7 +340,7 @@ pub fn cmd_sensors_show(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     out!(
         "Power:        {} (PWR_EN {})\n",
         snapshot.power.name(),
-        on_off(snapshot.power_enabled)
+        on_off_text(snapshot.power_enabled)
     );
     let dispatch = ctx.ipmb.dispatch();
     let fru_state = &dispatch.fru_state;
@@ -430,7 +421,7 @@ fn report_power(sensing: &Sensing) {
     out!(
         "Power: {}, PWR_EN {}",
         power.state().name(),
-        on_off(sensing.io.is_enabled())
+        on_off_text(sensing.io.is_enabled())
     );
     match power.fault() {
         Some(fault) => out!(", latched fault: {}\n", fault),
@@ -503,7 +494,7 @@ pub fn cmd_power_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     out!(
         "PGOOD timeout: {} ms, power at boot: {}, enable source: {}\n",
         ipmc_defs::IPMC_PGOOD_TIMEOUT_MS,
-        on_off(ipmc_defs::IPMC_POWER_AT_BOOT),
+        on_off_text(ipmc_defs::IPMC_POWER_AT_BOOT),
         SourceName(ctx.sensing.io.power_source())
     );
     Ok(())

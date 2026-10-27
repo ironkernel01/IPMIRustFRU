@@ -6,9 +6,9 @@
 // NOINIT region). No start-up code of either image clears NOINIT, so the words keep their value
 // through SYSRESETREQ and through the bootloader.
 
-use core::ptr::{addr_of_mut, write_volatile};
+use core::ptr::addr_of_mut;
 
-use crate::bsp::raw::read_raw_word;
+use crate::bsp::kept_words;
 
 /// WORDS -- words of the boot request.
 pub const WORDS: usize = 4;
@@ -29,24 +29,22 @@ fn words() -> *mut u32 {
 
 /// read -- the four words as integers, however the RAM got its value (the raw word read).
 pub fn read() -> [u32; WORDS] {
-    core::array::from_fn(|index| read_raw_word(words().wrapping_add(index)))
+    // SAFETY: `__boot_request` is the `WORDS` words at the start of NOINIT (flash_map.x), owned by
+    // this module; the main loop is the only caller and no interrupt handler writes it.
+    unsafe { kept_words::read::<WORDS>(words()) }
 }
 
 /// write -- volatile writes of the four words (the runtime, before `system_reset`).
 pub fn write(request: [u32; WORDS]) {
-    let base = words();
-    for (index, word) in request.into_iter().enumerate() {
-        // SAFETY: `__boot_request` is declared as the `WORDS` words at the start of NOINIT
-        // (flash_map.x), which both link scripts leave to these words (the runtime's `.uninit`
-        // starts 16 bytes later, the bootloader has no section there) and which no start-up code
-        // clears; `index < WORDS`; the main loop is the only caller and no interrupt handler
-        // touches it. Volatile writes keep the compiler from dropping them before the reset.
-        unsafe { write_volatile(base.add(index), word) };
-    }
+    // SAFETY: `__boot_request` is declared as the `WORDS` words at the start of NOINIT
+    // (flash_map.x), which both link scripts leave to these words (the runtime's `.uninit` starts
+    // 16 bytes later, the bootloader has no section there) and which no start-up code clears; the
+    // main loop is the only caller and no interrupt handler touches it.
+    unsafe { kept_words::write::<WORDS>(words(), request) };
 }
 
 /// clear -- zeroes the check word (word 3), so a later reset reads no request.
 pub fn clear() {
     // SAFETY: as in `write`; `CHECK < WORDS`.
-    unsafe { write_volatile(words().add(CHECK), 0) };
+    unsafe { kept_words::clear(words(), CHECK) };
 }

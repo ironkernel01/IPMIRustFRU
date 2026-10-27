@@ -221,23 +221,22 @@ mod tests {
     }
 
     #[test]
-    fn slot1_decodes_to_82() {
-        // GA0 grounded, GA1..GA4 and GAP high, NVMRO low.
-        let a = decode(0x3E);
-        assert_eq!(a.ga, 1);
-        assert_eq!(a.hw_address, 0x41);
-        assert_eq!(a.ipmb_address, 0x82);
-        assert!(a.parity_ok && a.valid && !a.nvmro_asserted);
-    }
-
-    #[test]
-    fn slot31_decodes_to_be() {
-        // GA = 0x1F (five ones) with GAP high (logic 0): odd parity.
-        let a = decode(0x20);
-        assert_eq!(a.ga, 0x1F);
-        assert_eq!(a.hw_address, 0x5F);
-        assert_eq!(a.ipmb_address, 0xBE);
-        assert!(a.parity_ok);
+    fn slots_decode_to_their_ipmb_address() {
+        // (pins, comment, GA, hardware address, IPMB address).
+        // Slot 1: GA0 grounded, GA1..GA4 and GAP high, NVMRO low.
+        // Slot 31: GA = 0x1F (five ones) with GAP high (logic 0): odd parity.
+        for (pins, ga, hw_address, ipmb_address) in
+            [(0x3E, 1, 0x41, 0x82), (0x20, 0x1F, 0x5F, 0xBE)]
+        {
+            let a = decode(pins);
+            assert_eq!(a.ga, ga, "pins {pins:02X}");
+            assert_eq!(a.hw_address, hw_address, "pins {pins:02X}");
+            assert_eq!(a.ipmb_address, ipmb_address, "pins {pins:02X}");
+            assert!(
+                a.parity_ok && a.valid && !a.nvmro_asserted,
+                "pins {pins:02X}"
+            );
+        }
     }
 
     #[test]

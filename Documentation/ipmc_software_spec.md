@@ -24,7 +24,7 @@
 
 ## Quick Start
 
-1. Host tests and the emulator, from the repository root (Rust stable, GNU host):
+1. Host tests and the emulator, from the repository root (Rust 1.99.1 from `rust-toolchain.toml`, GNU host):
    `cargo test --workspace`, then
    `cargo run -p ipmc-emu -- replay vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet`
    (the capture file is local only; on a fresh clone the capture tests skip with a message).
@@ -161,7 +161,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 - **Host build:** `x86_64-pc-windows-gnu` (the same sources build for
   `x86_64-unknown-linux-gnu`); the emulator is a `std` binary.
 - **Dependencies:** `cortex-m 0.7.10`, `cortex-m-rt 0.7.7`, `stm32f4 0.16.0` (PAC, feature
-  `stm32f401`), `heapless 0.8.0` (SPSC queues), `panic-halt 1.0.0`, `embedded-hal 1.0.0`
+  `stm32f401`), `heapless 0.8.0` (SPSC queues), `embedded-hal 1.0.0`
   (bus traits of the example external sensor drivers). Every version is an exact `=` requirement.
 - **Peers on the IPMB:** a Chassis Manager at 8-bit address 20h (`IPMB_CM_ADDR8`; the captured
   live Chassis Manager uses 10h). The IPMC answers at (40h + GA[4:0]) x 2: slot 1 is 82h.
@@ -281,7 +281,7 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
 |---|---|---|
 | `ipmc-defs` | `no_std` library | the build configuration as Rust (`src/defs.rs`, and the extension's `defs_tier23.rs` when the extension is built in): one typed `pub const` per define, no parser, compile-time guards on every value, the IPMB timing arithmetic (`i2c_timing.rs`) and the one detection of the Tier-2/3 extension (`build.rs`, `tier23_detect.rs`, `dep_cfg.rs`) |
 | `ipmc-wire` | `no_std` library | IPMI byte primitives: zero checksum, const record builder, type/length ASCII field, CRC-32, SHA-256 (`Sha256`), the boot request check word, hex-byte parser |
-| `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the FRU field editor (`unit.rs`) and the manufacturing date (`date.rs`), the RAM scratchpad (`FruStore`) and the flash store (`persist`) |
+| `ipmc-fru` | `no_std` library | every FRU 0 record (image build, decoder, `verify`), the FRU field editor (`unit.rs`) and the manufacturing date (`date.rs`), the RAM scratchpad (`FruStore`), the flash store (`persist`) and, behind the `host` feature, the in-RAM flash `RamFlash` of the tests and the emulator |
 | `ipmc-core` | `no_std` library, `forbid(unsafe_code)`, no allocator | every IPMI decision: frame codec, address decode, link layer with the IPMB requester, duplicate cache, queues, byte ring, shared names (`names.rs`), command table, dispatcher, extension hook interface, handlers, SDR repository, Tier rules, event enables, sensor encoders, FRU state machine, self test, reset gate, trace hook |
 | `ipmc-log` | `no_std` library, `forbid(unsafe_code)`, no allocator | the capture log and the logging logic of the DEBUG menu: record ring (`record.rs`), CSV and trace printers (`print.rs`), the paced dump (`dump.rs`), the trace tee (`tee.rs`) and the log switches with their status lines (`switches.rs`); depends on `ipmc-core` and `ipmc-defs` |
 | `ipmc-boot` | `no_std` library with a host binary, `forbid(unsafe_code)`, no allocator | every bootloader decision with no F401 code: the image header and its one check, the SHA-256 digest use, the start decision and the countdown, the boot request words, the region policy of erase and `LOAD`, the command table and the session state machine, the Intel HEX parser, the trace text, and the `fwimage` host tool (section 15); depends on `ipmc-defs`, `ipmc-wire`, `ipmc-fru` and `ipmc-menu` |
@@ -591,6 +591,8 @@ decision 24).
 | `IPMC_FW_NAME`, `IPMC_CONSOLE_PROMPT` | `ipmc-nucleo-f401re`, `CLI` | firmware name of the banner, `SYS VERSION`, the application port banner and its `INFO` answer; root prompt text (1..=16 printable ASCII bytes, no space; the menu appends the group path and `> `) |
 | `IPMC_HSE_HZ`, `IPMC_SYSCLK_HZ` | 8000000, 84000000 | clock input and system clock (PLL values checked at compile time) |
 | `IPMC_LED_*`, `IPMC_FAULT_BLINK_CHZ` | 1 Hz heartbeat, 10 Hz activity, 5 Hz fault | LD2 patterns (centihertz) |
+| `IPMC_WATCHDOG_ENABLE` | `true` | the independent watchdog runs; the main loop feeds it once per pass, and a hang, a panic or a processor fault resets the processor within `IPMC_WATCHDOG_MS` |
+| `IPMC_WATCHDOG_MS` | 4000 | watchdog period in ms at the nominal 32 kHz LSI (1000..=16000); the F401 guard requires the shortest real period (LSI at 47 kHz) to exceed twice the 500 ms FRU sector erase |
 | `IPMC_ADC_INTERNAL_SOURCE` | `Source::Hw` | VDDA and die temperature from ADC1 |
 | `IPMC_ADC_EXTERNAL_SOURCE` | `Source::Sim` | rails A0..A3 simulated (unwired on the bench) |
 | `IPMC_FAULT_SOURCE`, `IPMC_POWER_SOURCE` | `IPMC_SRC_HW` | fault inputs and PWR_EN on the pins |
@@ -893,7 +895,12 @@ oldest is evicted and counted. Time is a wrapping millisecond counter.
 `crates/ipmc-core/src/queue.rs` - `Fifo<T, N>`, a fixed-capacity FIFO that rejects and counts on
 full and never overwrites, and `EgressQueue`, the response frames with their arrival bus,
 arrival time, assigned bus and resend count. The ingress FIFO and the drop log use `Fifo` too.
-`Bus` (A or B) with `other()` lives here.
+`Bus` (A or B) with `other()` and `index()` (A is 0, B is 1, the index of the per-bus arrays) lives here.
+
+`crates/ipmc-core/src/clock.rs` - `at_or_after(now_ms, at_ms)` and `earlier(a_ms, b_ms)`, the one
+wrap-safe comparison of the 32-bit millisecond clock (a difference below 2^31 ms counts as
+"after"); the emulator's serve loop, the payload reset pulse, the Tier-2 event timers and the
+firmware's receive-queue merge all use it.
 
 `crates/ipmc-core/src/commands.rs` - the command table `COMMANDS`, one row per command:
 `cmd(netfn, cmd, name, spec, handler)`. Adding a command is adding one row (section 12.3);
@@ -908,6 +915,9 @@ hands the handler the data after the VSO byte. `build_response_with` checks the 
 before any handler runs; `dispatch_with` reserves an egress slot first, so a response that
 cannot be queued never causes a handler side effect. `run_command` looks the command up in the
 table; a (netFn, cmd) with no row goes to `Extension::command`, and only a miss there answers C1h.
+`Context::take_hand_offs(ext)` returns `HandOffs` (the payload power request, the payload reset
+request and the power-on check they meet) and clears them; the firmware main loop and the emulator
+both consume it.
 `Context` carries the Tier-2/3 hand-offs and state, each written by one owner (section 11.2):
 `pending_reset` (`Some(ResetRequest::Cold)` or `Some(ResetRequest::Warm)`, set by a handler and
 applied by the owner of the processor, section 8.2; `Context::warm_reset` clears the Context
@@ -1051,7 +1061,7 @@ with the simulators and forbids `unsafe`.
 | `Menu::process_line` | matches a line against the group tables, runs the handler, prints help or the usage text; returns an `Outcome` |
 | `Menu::write_prompt`, `current_group` | the prompt with the group path |
 | `Menu::validate_tables`, `syntax::validate_syntax`, `validate_table` | `const fn` table checks, run in compile-time assertions |
-| `Args` (`len`, `get`, `text_at`, `u32_at`, `i32_at`, `on_off_at`), `optional` | the parameters of a command as typed values, with an `ArgError` for a bad one |
+| `Args` (`len`, `get`, `text_at`, `u32_at`, `i32_at`, `on_off_at`), `optional`, `on_off_text` | the parameters of a command as typed values, with an `ArgError` for a bad one |
 | `report_line_error`, `MenuError` | the text of a line that could not run |
 | `eq_ignore_case` | the one case-insensitive keyword compare; the bootloader command table uses it too |
 
@@ -1088,7 +1098,8 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/drivers/flash.rs` | the FRU store driver (`Flash`, the `FlashLog` implementation): sector 2 only, the range `map`, at start-up compares the linker symbols with the sector (`store_region_ok`) and refuses to start the store unless the region is exactly sector 2, the bootloader ends before it and the runtime starts after it; built over `FlashRegs` |
 | `src/bsp/flash_regs.rs` | `FlashRegs`, the FLASH peripheral's owner: `erase_sector` (sectors 2 to 7), `program_words` (PSIZE x32), `program_bytes` (PSIZE x8), `read`; refuses sectors 0 and 1 and every address below `0x0800_8000` (`Err(Range)`) so no caller can reach the bootloader sectors; refuses erase and program while NVMRO is asserted; bounded BSY polls per sector size |
 | `src/bsp/cycles.rs` | the DWT cycle counter: `now`, `start_cycle_counter` |
-| `src/bsp/boot_request.rs` | the four boot request words at `__boot_request` (the start of NOINIT), raw `read`, `write` and `clear` (their meaning is `ipmc_boot::request`) |
+| `src/bsp/boot_request.rs` | the four boot request words at `__boot_request` (the start of NOINIT), `read`, `write` and `clear` over `kept_words` (their meaning is `ipmc_boot::request`) |
+| `src/bsp/kept_words.rs` | the one raw access to the NOINIT words that survive a reset: `read`, `write`, `clear`, and `store_checked` and `take_checked` for a record of three data words and a check word (`ipmc_wire::check_word`); the callers own the words and the magic |
 | `flash_map.x`, `memory.x`, `link.x`, `boot.x` | the one flash and RAM map (BOOT, STORE, APP, NOINIT, RAM), the runtime region file and stack reservation, the runtime section placement and image asserts, and the bootloader script (section 9.1) |
 | `src/app_header.rs` | the runtime image header static (`.app_header`, 64 bytes at `0x0800_C200`) and `image_line`, the banner text read back from flash |
 | `src/boot/` | the bootloader binary `ipmc-boot` (sectors 0-1): `main.rs` (start-up order), `start.rs` (the start sequence and the one `asm!` jump), `countdown.rs`, `serve.rs` (line editors, the WAKEUP rule, the session loop, the `BootHw` implementation), `flash_image.rs` (`ImageSource` and `FlashOps` over `FlashRegs`), `console.rs` (text to both ports); section 15.7 lists the functions |
@@ -1098,7 +1109,9 @@ compile-time assertion, so a bad syntax string in the firmware tables fails the 
 | `src/bsp/led.rs` | LD2 on PA5: heartbeat, 10 Hz activity window after each IPMB frame, manual modes, fault blink |
 | `src/drivers/board_pins.rs` | ADC channels and GPIO pins of the sensor signals, the payload reset output (PA9) and the PAYLOAD_RESET_N input (PA6) |
 | `src/bsp/reset_cause.rs` | reset-cause decode; `system_reset` (AIRCR SYSRESETREQ, so the next banner reads "software reset"); `keep_sequence` and `kept_sequence`: four `.uninit` words, untouched by start-up code, that carry the next request sequence number and the mask of the sequence numbers sent inside T9 across a software reset, with a check word, read back only after a software reset |
-| `src/bsp/fault.rs`, `static_slot.rs` | fail-stop handlers that record and park; the one `Mutex<RefCell<Option<T>>>` access pattern |
+| `src/bsp/fault.rs`, `static_slot.rs` | fail-stop handlers (HardFault, unhandled interrupt, panic) that record, print one line and park; the one `Mutex<RefCell<Option<T>>>` access pattern |
+| `src/bsp/fault_record.rs` | the four kept fault words (kind, value, aux, check) at `__fault_record`, the last 16 bytes of NOINIT: `write`, and `take` (once at start-up) |
+| `src/bsp/watchdog.rs` | the IWDG registers and the DBGMCU freeze bit `DBG_IWDG_STOP`: `setting` (prescaler and reload for a period, const), `Watchdog::start`, `feed`, `period_ms` |
 | `src/drivers/eval_timer.rs`, `src/eval.rs` | evaluation image only (`cfg(ipmc_eval)`): the TIM2 run-time counter and the evaluation period check (section 8.4) |
 
 Main functions of the runtime binary and the library:
@@ -1158,26 +1171,31 @@ line protocol); `vectors` (the vector reader); `main` (`replay`, `serve`, `sdr`)
 
 The emulator holds one `ipmc_ext::Active` extension (`Emulator::with_extension` replaces it for a
 test) and calls `ext::feed_sensors` for each sample. A pending Cold or Warm Reset runs through the
-same `ResetGate` as the firmware. Both rebuild the link with `restart_link` (`Link::restarted`
-plus IPMB-B enabled when configured), so the request sequence counter continues from the old
-link. A Cold Reset also rebuilds the `Context`, extension, sensor board and payload power as at a
-boot and restores the FRU store from the flash copy; a Warm Reset calls `Context::warm_reset` and
-`Extension::warm_reset` and keeps everything else, payload power included. The flash copy
-(`FlashCopy`: the FRU image and the settings byte) is a RAM image the emulator updates where the
-firmware saves (at once while a reset is pending), so an accepted Write FRU Data or a settings
-change survives the reset. `Emulator::flash` returns it (completing a pending save first, as a
+same `ResetGate` as the firmware. A Cold Reset rebuilds the link with `restart_link`
+(`Link::restarted` plus IPMB-B enabled when configured), so the request sequence counter continues
+from the old link; a Warm Reset calls `Link::warm_reset`, the one order the firmware uses too
+(section 8.2). A Cold Reset also rebuilds the `Context`, extension, sensor board and payload power
+as at a boot and restores the FRU store from the flash (`Persist::boot`); a Warm Reset keeps
+everything else, payload power included. The flash is an `ipmc_fru::RamFlash` (the in-RAM
+`FlashLog` of the `host` feature, the one `persist/tests.rs` uses) under a `Persist`, the same
+log and save rule as the firmware: `service_fru_save` calls `Persist::poll` with the arguments
+`IpmbLink::service_fru_log` passes (delay 0 while a reset is pending, otherwise
+`IPMC_FRU_PERSIST_DELAY_MS`), so an accepted Write FRU Data or a settings change survives the
+reset. `Emulator::flash` returns it (completing a pending save first, as a
 clean power cycle does) and `Emulator::new_with_flash` starts a board from it, so a power cycle
 of the emulator keeps the flash log; the boot power-on asks the power-on check with the stored
 settings, so a stored default activation lock keeps the payload off. `follow_payload_supply`
 makes PGOOD follow PWR_EN while `IPMC_SIM_PGOOD_HIGH` is 1 (with 0 PGOOD stays low, so the PGOOD
 timeout path stays reachable), so a deactivation ends in the complete shutdown that takes the FRU from
 M6 to M1 (the simulated inputs alone hold PGOOD at its configured level for ever);
-`service_hand_offs` applies `pending_power` through `apply_power_request` and models the payload
+`service_hand_offs` takes the requests with `Context::take_hand_offs` (the struct
+`dispatch::HandOffs` the firmware's `Sensing::serve_hand_offs` consumes too), applies the power
+request through `apply_power_request` and models the payload
 reset pulse by one trace line `payload reset pulse <ms> ms`. `replay` also plays the Event Receiver role of the captured Chassis Manager: a request the
 IPMC sends to 20h is answered one step later, 00h for a Platform Event and C1h for anything else,
 and counted in the summary line (`ipmc_requests`, `events`). Without the extension no request is
-sent and the counts are 0. The emulator otherwise keeps the FRU store in RAM only (no flash log
-driver) and simulates every sensor group.
+sent and the counts are 0. The emulator keeps its flash log in RAM (no flash driver) and simulates
+every sensor group.
 
 ### 6.8 `ipmc-app`: application port protocol
 
@@ -1550,7 +1568,9 @@ count above 9999-12-31 23:59 (a record a Chassis Manager wrote), as
 console does not invent one (`ipmc_fru::date::checked_text_of` returns `None` for it).
 
 The DEBUG group switches and reads the capture log, runs a request locally and injects a frame
-(section 10.11); `DEBUG BOOTLOADER {CONFIRM}` restarts into the bootloader (section 16.4). `DEBUG DUMP` is a job: it prints a header line, then rows on the following
+(section 10.11); `DEBUG BOOTLOADER {CONFIRM}` restarts into the bootloader (section 16.4); `DEBUG WATCHDOG` prints the
+`Watchdog:` line, and `HANG CONFIRM` or `PANIC CONFIRM` runs the reset test (a watchdog that is not
+running refuses both; without `CONFIRM` the command prints what it does). `DEBUG DUMP` is a job: it prints a header line, then rows on the following
 main-loop passes while the console transmit ring has room for the longest row, then
 `# end of capture`; any received byte except a line feed stops it with `# dump stopped`, and a
 new command line waits until it ends.
@@ -1974,14 +1994,23 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 ### 8.2 Reset
 
 The firmware has one reset domain: the MCU reset (power-on, pin, software from `SYS RESET`, from a
-pending Cold Reset or from a bootloader request, watchdog flags reported but no watchdog is enabled). A
+pending Cold Reset or from a bootloader request, or the independent watchdog). A
 pending Warm Reset and a pending payload reset are not processor resets; they use the same reset gate. The
 commands that set these hand-offs belong to the commercial build (section 7.2: Cold Reset, Warm Reset,
 FRU Control). `bsp/reset_cause.rs` reads RCC_CSR once at
-start-up, reports the most specific cause in the banner and clears the flags. A HardFault or an
-unhandled interrupt records its state in a static, prints one line when the UART is up and parks
-in `wfi`; it does not reset, so the fault stays visible on the bench. The panic handler is
-`panic-halt`. RAM state starts from its Rust initialisers; the state kept across a reset is the FRU log in
+start-up, reports the most specific cause in the banner and clears the flags. A HardFault, an
+unhandled interrupt or a panic (the handler of `bsp/fault.rs`, both images) stores its kind, value
+and check word in the kept fault record (`bsp/fault_record.rs`, NOINIT, readable with a debugger),
+prints one line when the UART is up and parks in `wfi`. The independent watchdog
+(`bsp/watchdog.rs`, PLAN decision 42) is the only reset after that park: the runtime starts it
+just before the main loop with `IPMC_WATCHDOG_MS` and feeds it once per loop pass, nowhere else, so
+a parked, hung or panicked runtime resets within the period. The next start prints
+`Last reset:   independent watchdog` and, from the record, `Last fault:` (`HARDFAULT pc=0x...`,
+`UNHANDLED IRQ n` or `PANIC line n column m`). The bootloader starts no watchdog, and before the
+runtime starts it the processor stays parked. The watchdog freezes while a debugger halts the core
+(`DBG_IWDG_STOP`). The period guard in `watchdog.rs` requires the shortest real period to exceed
+twice the 500 ms FRU sector erase; `DEBUG WATCHDOG HANG CONFIRM` and `DEBUG WATCHDOG PANIC CONFIRM`
+test the reset. RAM state starts from its Rust initialisers; the state kept across a reset is the FRU log in
 flash and, after a software reset, the request sequence words described below.
 
 <div style="page-break-after: always;"></div>
@@ -2018,7 +2047,7 @@ performs the reset.
    `reset_cause::keep_sequence` stores the next request sequence number and the mask of the
    sequence numbers sent inside T9 (`Link::recent_request_seqs`) in four `.uninit` words, which
    start-up code does not touch, the last a check word over the other three. `reset_cause::system_reset` then requests SYSRESETREQ, so the banner after the
-   restart reads "software reset".
+   restart reads "software reset". `IpmbLink::restart` owns this step (flush both ports, keep the sequence, write the boot request words when a bootloader request rode on the reset, `system_reset`) and `SYS RESET` calls it as well: a console reset keeps the request sequence like a Cold Reset and writes no boot request.
 4. At the next start-up `reset_cause::kept_sequence` returns the stored values after a software
    reset, and zero after any other reset or when the check word does not match. `IpmbLink::take`
    hands them to `Link::with_first_request_seq`, which books the recent numbers as sent at
@@ -2070,17 +2099,19 @@ handler sets `Context::pending_reset` to `Some(ResetRequest::Warm)` and queues i
 a pending Cold Reset wins over a Warm Reset request. The same `ResetGate` decides when it runs
 (the response has left and an accepted FRU write is saved, or `IPMC_RESET_WAIT_MS`), and the
 FRU save runs at once while it is pending. The owner (`IpmbLink::warm_reset`, or the emulator's
-`service_reset`) then:
+`service_reset`) calls `Link::warm_reset`, which does, in this order:
 
 1. builds a new Link with `Link::restarted`: the same configuration and address, the power-up bus
    state (IPMB-A Local Control, IPMB-B isolated until the next Set IPMB State (with `NonStrict`, IPMB-B fitted and a usable address the IPMB-B power-up window is armed again), both buses back at
    100 kHz, Rule 4.1.1-4), empty queues and duplicate cache, and the request sequence state
    carried over so no sequence number is reused inside T9 (the requester is rebuilt with it);
-2. keeps a start-up fault of a bus, so a bus that failed at start-up stays disabled;
+2. runs the owner's `reapply(old, new)`: the firmware keeps a start-up fault of a bus, so a bus
+   that failed at start-up stays disabled; the emulator enables IPMB-B when configured;
 3. calls `Context::warm_reset`, which installs the new link view and clears every `pending_*`
    hand-off, the Warm Reset request included;
-4. calls `Extension::warm_reset`, which forgets the event in flight;
-5. prints `Warm Reset: link state re-initialised`; `apply_bus_speeds` returns the drivers to
+4. calls `Extension::warm_reset`, which forgets the event in flight, and gives the owner's
+   `ResetGate` a fresh state;
+5. the owner prints `Warm Reset: link state re-initialised`; `apply_bus_speeds` returns the drivers to
    100 kHz on the next pass.
 
 Kept: payload power and PWR_EN, the FRU state, the FRU store and its settings byte, the SDR
@@ -2124,8 +2155,8 @@ starts first, checks the runtime image and starts it with the sequence of sectio
 the session and the entry paths are sections 15 and 16). The steps below then run as from a reset; the
 runtime clears and reports the reset cause itself.
 
-1. Reset cause (first, before anything can reset again); after a software reset the kept request
-   sequence numbers (`kept_sequence`).
+1. Reset cause (first, before anything can reset again); the kept fault record (`fault_record::take`);
+   after a software reset the kept request sequence numbers (`kept_sequence`).
 2. Clock to 84 MHz; a clock fault is reported later in the banner.
 3. `ports::init` takes GPIOA..GPIOC; LED claim; SysTick start; USART2 console (a UART failure
    blinks LD2 at 5 Hz and parks; a pin-claim conflict prints both owners and parks); then, when
@@ -2153,7 +2184,9 @@ runtime clears and reports the reset cause itself.
     build without event messages answers C1h and prints nothing), sensor start (payload power
     requested when `IPMC_POWER_AT_BOOT` is 1 and the power-on check,
     `IpmbLink::power_on_check`, allows it; a refusal prints `Power at boot refused: ...`),
-    prompt, main loop. Each pass runs `console.poll` (one console line, or a step of a running
+    prompt, watchdog start (`Watchdog::start`, when `IPMC_WATCHDOG_ENABLE`; a failure prints
+    `Watchdog not started: <reason>` and the board runs without it), main loop. Each pass runs
+    `watchdog.feed` first, then `console.poll` (one console line, or a step of a running
     `DEBUG DUMP`), `console.service_app` (at most one application request line),
     `console.service_sensors`, `console.service_link` and `wfi`.
 
@@ -2222,7 +2255,7 @@ difference):
 
 | Region | Base | Size | Contents |
 |---|---:|---:|---|
-| `NOINIT` | `0x2000_0000` | 256 B | offset 0: the four words of the boot request (`__boot_request`, `bsp/boot_request.rs`); offset 0x10: the runtime `.uninit` (`KEPT`); no start-up code of either image clears it |
+| `NOINIT` | `0x2000_0000` | 256 B | offset 0: the four words of the boot request (`__boot_request`, `bsp/boot_request.rs`); offset 0x10: the runtime `.uninit` (`KEPT`); offset 0xF0: the four kept fault words (`__fault_record`, `bsp/fault_record.rs`); no start-up code of either image clears it |
 | `RAM` | `0x2000_0100` | 95.75 KB | statics and stack of whichever image runs; `_stack_reserve` (35 KB for the runtime, `memory.x`; 8 KB for the bootloader, `boot.x`) must stay free above the statics |
 | System memory | `0x1FFF_7A2A`..`0x1FFF_7A2F` | 6 bytes | factory VREFIN_CAL, TS_CAL1, TS_CAL2 (read by `adc.rs`) |
 
@@ -2232,7 +2265,7 @@ Image header. The runtime links a 64-byte header at `0x0800_C200` (`src/app_head
 
 `link.x` is the script of cortex-m-rt 0.7.7 with these differences: the whole image sits in
 `APP` (`.vector_table` at `ORIGIN(APP)`, the 64-byte `.app_header` at `__app_header`, `.text`
-after it), `.uninit` sits in `NOINIT` at offset 0x10, `BOOT` and `STORE` receive no output
+after it), `.uninit` sits in `NOINIT` at offset 0x10 and ends at or below `__fault_record` (offset 0xF0), `BOOT` and `STORE` receive no output
 section, and asserts fail the build when the vector table or the header is not at its address,
 the header is not 64 bytes, the vector table reaches into the header, the program starts inside
 the header, a section lies below `APP`, the image does not end inside `APP`, or `.uninit` does
@@ -2892,6 +2925,7 @@ sends at that moment is lost and recovered by the requester's retry.
 | Runtime image fails its check at a reset | `header::check` in the bootloader | `Runtime image:` and `Image check:` lines, `Decision: staying in the bootloader: <reason>` | the bootloader waits for `WAKEUP`; an update or `ERASE FRU` and `RUN` recovers (section 16) |
 | PGOOD timeout or loss | `power_fsm` | console event line, `POWER STATUS`; FRU Health is bad only while PWR_EN is asserted without PGOOD, so it returns to good once the fault releases PWR_EN | latched until `POWER OFF` or `POWER CLEAR` |
 | Pin-claim conflict, UART failure | `ports::claim`, `uart::init` | console line naming both owners, or 5 Hz LED | fail-stop (park); an application port failure other than a pin conflict prints `APP UART not started` and the board runs without it |
+| HardFault, unhandled interrupt, panic, main-loop hang | `bsp/fault.rs` handlers, `bsp/watchdog.rs` | console line (`HARDFAULT pc=`, `UNHANDLED IRQ`, `PANIC <file>:<line>`), then after the reset `Last reset: independent watchdog` and `Last fault:`; `SYS STATUS` `Watchdog:` | the handler records and parks; the watchdog resets the processor within `IPMC_WATCHDOG_MS` (the bootloader has none) |
 | UART receive ring full, overrun, transmit timeout | `uart.rs` `service`, `wait_for_room` | per-port counters in `SYS STATUS` | the byte is dropped (receive) or the bounded wait ends (transmit) |
 | UART byte with a framing, noise or parity error | `uart.rs` `service` (SR FE, NF, PE) | `line errors` in `SYS STATUS`, `Port errors:` in the bootloader `INFO` | the byte is queued as received; the line it belongs to fails its own check (an unknown command, a record checksum) |
 | Trace line without room in the console transmit ring | `print_line_or_drop` | `tx lines dropped` in `SYS STATUS` | the line is dropped whole and never stalls the IPMB; the capture log still holds it |
@@ -2960,6 +2994,7 @@ The DEBUG group (help text as in `console.rs`):
 | `DEBUG INJECT [BUS] {BYTES...}` | Hand a whole IPMB frame to the link as if received on bus A or B |
 | `DEBUG CACHE {ACTION}` | Duplicate cache: no argument shows the entries, CLEAR empties it |
 | `DEBUG BOOTLOADER {CONFIRM}` | Restart into the bootloader; CONFIRM needed while payload power is on |
+| `DEBUG WATCHDOG {TEST} {CONFIRM}` | Watchdog state; HANG or PANIC with CONFIRM tests the reset |
 
 A local request (`DEBUG IPMI`, the application port `IPMI`, the start-up events-off request) reads the live NVMRO pin first, as the main loop does, so it decides like a bus request.
 
@@ -3044,7 +3079,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 
 | API | Inputs | Output | Notes |
 |---|---|---|---|
-| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy, b_power_up, requests_allowed }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses; `with_first_request_seq` sets the first rqSeq, `next_request_seq` reads it; `restarted(&addr, now_ms)` builds the Link of a Cold or Warm Reset |
+| `Link::new(config, &addr)` | `LinkConfig { b_fitted, tx_policy, b_power_up, requests_allowed }`, `AddrInfo` | `Link` | `const`; power-up bus state; unusable address isolates both buses; `with_first_request_seq` sets the first rqSeq, `next_request_seq` reads it; `restarted(&addr, now_ms)` builds the Link of a Cold or Warm Reset; `warm_reset(ctx, ext, gate, now_ms, reapply)` is the one order of a Warm Reset; `LinkConfig::bench(tx_policy, requests_allowed)` is the configuration of the tests |
 | `on_frame(bus, frame, now_ms)` | bus, whole frame (own address or 00h first), STOP time | `Result<(), FrameDrop>` | main loop only; copies at most `IPMB_MSG_MAX` bytes; never traces |
 | `poll(ctx, ext, now_ms, trace)` | dispatch `Context`, `&mut dyn Extension`, time, trace sink | requests taken | runs handlers (the extension for a command the table lacks); stops when the egress queue is full; steps the requester and calls `ext.poll` |
 | `next_tx()` | | `Option<(Bus, &[u8])>` | response first, else a due request; frame stays handed out until `on_tx_result` |
@@ -3141,8 +3176,9 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 
 ### 12.1 Toolchain
 
-Rust stable with the GNU host toolchain, targets `thumbv7em-none-eabihf` and
-`x86_64-pc-windows-gnu`; `gen.ps1` uses `arm-none-eabi-objcopy` for the images and
+Rust 1.99.1 with the GNU host toolchain, fixed by `rust-toolchain.toml` at the repository root
+(channel, the components rustfmt, clippy and llvm-tools, and the targets `thumbv7em-none-eabihf`
+and `x86_64-pc-windows-gnu`; rustup reads it in both workspaces and installs the toolchain on first use); `gen.ps1` uses `arm-none-eabi-objcopy` for the images and
 `arm-none-eabi-size` for the section sizes. cargo is not on PATH in every shell
 (Bash: `export PATH="$HOME/.cargo/bin:$PATH"`). The firmware release profile uses `opt-level = "s"`,
 `lto = true`, `codegen-units = 1` and keeps debug information; the bootloader uses the profile `boot`
@@ -3973,9 +4009,9 @@ sections 13.2 and 13.3):
 - **IPMB-B** is built and tested in the emulator only; the one-Aardvark bench drives IPMB-A.
 - **Duplicate window 3000 ms**, not the VITA 5 s sequence expiry: a Chassis Manager that reuses a
   sequence number with identical data inside 3 s gets the cached response.
-- **Emulator FRU store is RAM only.** Flash persistence is tested in `ipmc-fru` against a test
-  flash and on the board. The emulator keeps a RAM copy of the flash log (`FlashCopy`) across a
-  reset and a `#reset` power cycle.
+- **Emulator flash is RAM.** Flash persistence is tested in `ipmc-fru` against `RamFlash` and on
+  the board. The emulator runs the same `Persist` over a `RamFlash` and keeps it across a reset
+  and a `#reset` power cycle.
 - **No custom registers.** The firmware uses the STM32F401 peripherals through the `stm32f4` PAC;
   each driver names the RM0368 section of every register field it writes (I2C chapter 18, flash
   section 3.5, RCC chapter 6, ADC chapter 11, GPIO chapter 8).

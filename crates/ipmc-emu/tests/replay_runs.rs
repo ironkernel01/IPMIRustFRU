@@ -7,7 +7,7 @@ use ipmc_core::fru_state::State;
 use ipmc_core::ipmb;
 use ipmc_core::link::{IpmbBPowerUp, TxPolicy};
 use ipmc_core::queue::Bus;
-use ipmc_core::trace::{NoTrace, Trace};
+use ipmc_core::trace::{NoTrace, RecordingTrace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
 use ipmc_emu::replay::{is_request_frame, replay, ReplayOptions, ReplayReport};
 use ipmc_emu::trace::Hex;
@@ -37,20 +37,11 @@ fn run(config: EmuConfig, fail_every: u32) -> (ReplayReport, Vec<Vector>) {
     (report, vectors)
 }
 
-/// Lines -- collects the trace lines of a replay.
-struct Lines(Vec<String>);
-
-impl Trace for Lines {
-    fn line(&mut self, args: core::fmt::Arguments) {
-        self.0.push(std::fmt::format(args));
-    }
-}
-
 /// tx_frames -- (bus, succeeded, bytes) of every transmission of a traced replay, in order.
 fn tx_frames(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool, Vec<u8>)> {
     let vectors = load();
     let mut emu = Emulator::new(config).expect("emulator");
-    let mut lines = Lines(Vec::new());
+    let mut lines = RecordingTrace::default();
     replay(
         &mut emu,
         &vectors,
@@ -58,7 +49,7 @@ fn tx_frames(config: EmuConfig, fail_every: u32) -> Vec<(Bus, bool, Vec<u8>)> {
         &mut lines,
     );
     lines
-        .0
+        .lines
         .iter()
         .filter_map(|l| l.strip_prefix("tx IPMB-"))
         .map(|l| {

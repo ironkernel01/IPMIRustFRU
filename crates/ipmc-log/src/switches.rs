@@ -3,6 +3,8 @@
 
 use core::fmt::{self, Display};
 
+use ipmc_menu::on_off_text;
+
 use crate::record::DefaultLog;
 
 /// TraceWhat -- the two trace switches of DEBUG TRACE.
@@ -88,15 +90,6 @@ impl LogState {
     }
 }
 
-/// on_off -- the switch word.
-const fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
-    }
-}
-
 /// LogLine -- the capture log line of DEBUG STATUS and DEBUG LOG, with its line ending.
 pub struct LogLine<'a>(pub &'a LogState);
 
@@ -106,7 +99,7 @@ impl Display for LogLine<'_> {
         writeln!(
             f,
             "Capture log:     {}, {} bytes, used {}, {} records, {} overwritten",
-            on_off(s.enabled),
+            on_off_text(s.enabled),
             s.size,
             s.used,
             s.records,
@@ -121,8 +114,12 @@ pub struct SwitchLines<'a>(pub &'a LogState);
 
 impl Display for SwitchLines<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "IPMI console:    trace {}", on_off(self.0.ipmi_console))?;
-        writeln!(f, "I2C trace:       {}", on_off(self.0.i2c_trace))
+        writeln!(
+            f,
+            "IPMI console:    trace {}",
+            on_off_text(self.0.ipmi_console)
+        )?;
+        writeln!(f, "I2C trace:       {}", on_off_text(self.0.i2c_trace))
     }
 }
 

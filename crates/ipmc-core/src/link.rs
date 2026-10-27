@@ -36,6 +36,7 @@ use crate::ipmb::{self, IpmbError, IPMB_MAX_LEN, NETFN_APP};
 use crate::names::{CommandName, CoreNames, NetFnName, TxFault};
 use crate::queue::{Bus, EgressFrame, EgressQueue, Fifo};
 use crate::requester::Requester;
+use crate::reset_gate::ResetGate;
 use crate::sensor::{LinkBus, LinkSensor, LocalStatus};
 use crate::trace::Trace;
 
@@ -208,6 +209,20 @@ impl LinkConfig {
                 ipmc_defs::IpmbCompliance::NonStrict => IpmbBPowerUp::NonStrict,
             },
             requests_allowed: ipmc_defs::IPMC_TIER >= 2,
+        }
+    }
+}
+
+impl LinkConfig {
+    /// bench -- the configuration of the tests and tools: IPMB-B fitted, Strict power-up, the
+    /// given response bus policy and requester permission. A test that needs another field
+    /// changes it with `..LinkConfig::bench(..)`.
+    pub const fn bench(tx_policy: TxPolicy, requests_allowed: bool) -> LinkConfig {
+        LinkConfig {
+            b_fitted: true,
+            tx_policy,
+            b_power_up: IpmbBPowerUp::Strict,
+            requests_allowed,
         }
     }
 }
@@ -720,6 +735,31 @@ impl Link {
             self.recent_request_seqs(now_ms),
             now_ms,
         )
+    }
+
+    /// warm_reset -- the one order of a Warm Reset (`ResetRequest::Warm`) at `now_ms`; the
+    /// firmware and the emulator both call it.
+    /// 1. A new Link (`restarted`): power-up bus state, request sequence state carried over.
+    /// 2. `reapply(old, new)` puts back what the owner keeps across the reset (the firmware
+    ///    copies the start-up bus faults, the emulator enables IPMB-B when configured).
+    /// 3. `Context::warm_reset` with the new link's view clears the hand-offs.
+    /// 4. The new Link replaces this one.
+    /// 5. The extension's `warm_reset`.
+    /// 6. `gate` becomes a new `ResetGate`.
+    pub fn warm_reset(
+        &mut self,
+        ctx: &mut Context,
+        ext: &mut dyn Extension,
+        gate: &mut ResetGate,
+        now_ms: u32,
+        reapply: impl FnOnce(&Link, &mut Link),
+    ) {
+        let mut link = self.restarted(&ctx.addr, now_ms);
+        reapply(self, &mut link);
+        ctx.warm_reset(link.view());
+        *self = link;
+        ext.warm_reset();
+        *gate = ResetGate::new();
     }
 
     /// next_request_seq -- the rqSeq the next request gets, for the owner of the processor to
@@ -1588,9 +1628,8 @@ mod tests {
         Link::new(
             LinkConfig {
                 b_fitted,
-                tx_policy,
                 b_power_up,
-                requests_allowed: false,
+                ..LinkConfig::bench(tx_policy, false)
             },
             &addr,
         )
@@ -2268,10 +2307,8 @@ mod tests {
         assert!(!bad.parity_ok && bad.valid && !bad.usable());
         let mut link = Link::new(
             LinkConfig {
-                b_fitted: true,
-                tx_policy: TxPolicy::Alternate,
                 b_power_up: IpmbBPowerUp::NonStrict,
-                requests_allowed: false,
+                ..LinkConfig::bench(TxPolicy::Alternate, false)
             },
             &bad,
         );
@@ -2410,9 +2447,8 @@ mod tests {
         let mut link = Link::new(
             LinkConfig {
                 b_fitted,
-                tx_policy: TxPolicy::Alternate,
                 b_power_up,
-                requests_allowed: true,
+                ..LinkConfig::bench(TxPolicy::Alternate, true)
             },
             &addr,
         );

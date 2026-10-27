@@ -13,14 +13,14 @@
 //   DEBUG: STATUS, LOG {ON|OFF}, DUMP {CSV|TRACE}, CLEAR, TRACE {IPMI|I2C} {ON|OFF},
 //          EVENTS {ON|OFF}, IPMI [NETFN] [CMD] {DATA...}, INJECT [BUS] {BYTES...}, CACHE {CLEAR},
 //          BOOTLOADER
+//          WATCHDOG
 //   top level: STATUS (= SYS STATUS), RESET (= SYS RESET)
 // The SENSORS (SHOW, TRACE), POWER and SIM handlers live in sensing.rs, which owns the behaviour; the
 // IPMB STATS and IPMB STATE handlers live in ipmb_link.rs; the FRU handlers (SHOW, DUMP, STORE,
-// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs (STATUS, EVENTS, IPMI, INJECT, CACHE, BOOTLOADER) and log_cmds.rs (LOG, DUMP, CLEAR, TRACE).
+// FIELDS, GET, SET, RESTORE) and SENSORS SDR live in data_cmds.rs; the DEBUG handlers live in debug_cmds.rs (STATUS, EVENTS, IPMI, INJECT, CACHE, BOOTLOADER, WATCHDOG) and log_cmds.rs (LOG, DUMP, CLEAR, TRACE).
 
 use core::fmt;
 
-use cortex_m::peripheral::SCB;
 use ipmc_core::addr::{self, AddrInfo};
 use ipmc_core::trace::Trace;
 use ipmc_menu::{
@@ -30,6 +30,7 @@ use ipmc_menu::{
 
 use crate::app_port::{self, AppPort};
 use crate::bsp::clock::{ClockFault, ClockInfo};
+use crate::bsp::fault_record::Fault;
 use crate::bsp::led::{self, Shown};
 use crate::bsp::reset_cause::ResetCause;
 use crate::bsp::uart::{self, Port, PortText};
@@ -45,6 +46,10 @@ use ipmc_log::DumpJob;
 /// value every command handler receives.
 pub struct Context {
     reset_cause: ResetCause,
+    /// The fault the previous run kept (bsp/fault_record.rs), reported next to the reset cause.
+    last_fault: Option<Fault>,
+    /// The watchdog period set; None while the watchdog is not running (`print_watchdog`).
+    pub(crate) watchdog_ms: Option<u32>,
     clock: ClockInfo,
     clock_fault: Option<ClockFault>,
     /// Sensor monitor and its backends; the SENSORS, POWER and SIM handlers use it.
@@ -281,7 +286,7 @@ static FRU_TABLE: &[ConsoleCommand] = if ipmc_defs::IPMC_FRU_CONSOLE_WRITE {
     FRU_COMMANDS.split_at(FRU_READ_ROWS).0
 };
 
-static DEBUG_COMMANDS: [ConsoleCommand; 10] = [
+static DEBUG_COMMANDS: [ConsoleCommand; 11] = [
     Command {
         syntax: "STATUS",
         help: "Debug switches, capture log use, event receiver, duplicate cache",
@@ -331,6 +336,11 @@ static DEBUG_COMMANDS: [ConsoleCommand; 10] = [
         syntax: "BOOTLOADER {CONFIRM}",
         help: "Restart into the bootloader; CONFIRM needed while payload power is on",
         handler: debug_cmds::cmd_debug_bootloader,
+    },
+    Command {
+        syntax: "WATCHDOG {TEST} {CONFIRM}",
+        help: "Watchdog state; HANG or PANIC with CONFIRM tests the reset",
+        handler: debug_cmds::cmd_debug_watchdog,
     },
 ];
 
@@ -510,6 +520,7 @@ impl Console {
     /// new -- a console over the start-up values, the sensor backends and the IPMB link.
     pub fn new(
         reset_cause: ResetCause,
+        last_fault: Option<Fault>,
         clock: ClockInfo,
         clock_fault: Option<ClockFault>,
         sensing: Sensing,
@@ -518,6 +529,8 @@ impl Console {
         Console {
             ctx: Context {
                 reset_cause,
+                last_fault,
+                watchdog_ms: None,
                 clock,
                 clock_fault,
                 sensing,
@@ -528,6 +541,11 @@ impl Console {
             menu: Menu::new(ipmc_defs::IPMC_CONSOLE_PROMPT, &TOP_COMMANDS, &GROUPS),
             editor: LineEditor::new(),
         }
+    }
+
+    /// set_watchdog -- records the period the watchdog runs at (`SYS STATUS`, `DEBUG WATCHDOG`).
+    pub fn set_watchdog(&mut self, period_ms: Option<u32>) {
+        self.ctx.watchdog_ms = period_ms;
     }
 
     /// start_events -- applies the events-at-boot setting (defs.rs IPMC_EVENTS_AT_BOOT).
@@ -593,7 +611,7 @@ impl Console {
             "EVALUATION BUILD: the IPMB stops after {} minutes\n",
             ipmc_defs::IPMC_EVAL_MINUTES
         );
-        out!("Last reset:   {}\n", self.ctx.reset_cause.text());
+        print_reset(&self.ctx);
         print_clock(&self.ctx);
         print_ga(&self.ctx.ipmb.dispatch().addr);
         let [result, detail] = self.ctx.ipmb.dispatch().self_test.bytes();
@@ -803,7 +821,8 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     print_clock(ctx);
     print_ga(&ctx.ipmb.dispatch().addr);
     print_led();
-    out!("Last reset:   {}\n", ctx.reset_cause.text());
+    print_reset(ctx);
+    print_watchdog(ctx);
     print_uart(Port::Console);
     if ipmc_defs::IPMC_APP_UART_ENABLE {
         print_uart(Port::App);
@@ -814,10 +833,35 @@ fn cmd_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     Ok(())
 }
 
-fn cmd_reset(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
-    out!("Resetting\n");
-    uart::flush(Port::Console);
-    SCB::sys_reset()
+/// print_reset -- the `Last reset:` line and, when the previous run kept a fault, the
+/// `Last fault:` line (the words of the fault console lines).
+fn print_reset(ctx: &Context) {
+    out!("Last reset:   {}\n", ctx.reset_cause.text());
+    match ctx.last_fault {
+        None => {}
+        Some(Fault::HardFault { pc }) => out!("Last fault:   HARDFAULT pc=0x{pc:08X}\n"),
+        Some(Fault::UnhandledIrq { irq }) => out!("Last fault:   UNHANDLED IRQ {irq}\n"),
+        Some(Fault::Panic { line, column }) => {
+            out!("Last fault:   PANIC line {line} column {column}\n")
+        }
+    }
+}
+
+/// print_watchdog -- the `Watchdog:` line (`SYS STATUS` and `DEBUG WATCHDOG`).
+pub(crate) fn print_watchdog(ctx: &Context) {
+    match (ipmc_defs::IPMC_WATCHDOG_ENABLE, ctx.watchdog_ms) {
+        (false, _) => out!("Watchdog:     off (IPMC_WATCHDOG_ENABLE false)\n"),
+        (true, Some(ms)) => out!("Watchdog:     on, {ms} ms\n"),
+        (true, None) => out!("Watchdog:     not started\n"),
+    }
+}
+
+fn cmd_reset(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
+    out!(
+        "Resetting
+"
+    );
+    ctx.ipmb.restart(None)
 }
 
 fn cmd_version(_ctx: &mut Context, _args: &Args<'_>) -> CmdResult {

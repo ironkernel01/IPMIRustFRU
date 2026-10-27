@@ -13,6 +13,8 @@
 //! - `unit.rs`: the thirteen FRU fields (`FruField`: the text fields of both areas and the
 //!   manufacturing date) and the editor that rewrites one in place inside the room
 //!   `records.rs` reserves.
+//! - `ram_flash.rs`: `RamFlash`, the in-RAM flash log of the tests and the emulator (`host`
+//!   feature; the firmware does not link it).
 //! - `persist.rs`: the stored record, the one-sector flash log behind the `FlashLog` trait, the
 //!   boot load and the save after a Write FRU Data.
 #![cfg_attr(not(test), no_std)]
@@ -22,6 +24,9 @@
 pub mod date;
 /// persist -- the FRU scratchpad on flash: record format, log, load and save.
 pub mod persist;
+/// ram_flash -- the in-RAM `FlashLog` of the tests and the emulator (`host` feature).
+#[cfg(any(test, feature = "host"))]
+pub mod ram_flash;
 /// records -- FRU Information layouts, the built image, the decoder and `verify`.
 pub mod records;
 /// store -- the FRU scratchpad memory and the FRU error type.
@@ -29,6 +34,8 @@ pub mod store;
 /// unit -- the per-unit FRU fields and their editor.
 pub mod unit;
 
+#[cfg(any(test, feature = "host"))]
+pub use ram_flash::RamFlash;
 pub use records::{
     area, common_header, verify, Area, AreaKind, CommonHeader, Field, Fields, AREA_ALIGN,
     COMMON_HEADER_LEN, IMAGE_LEN, SIZE,

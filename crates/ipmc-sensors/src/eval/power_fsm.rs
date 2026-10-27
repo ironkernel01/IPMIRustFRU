@@ -262,30 +262,56 @@ mod tests {
     }
 
     #[test]
-    fn requested_to_on_when_pgood_seen() {
-        let mut p = requested_at(0);
-        assert_eq!(p.step(10, false), None);
-        let t = p.step(20, true).unwrap();
-        assert_eq!(
-            (t.from, t.to),
-            (PowerState::PowerOnRequested, PowerState::On)
+    fn a_step_moves_the_controller_and_sets_the_enable_and_the_fault() {
+        // (requested at, PGOOD steps before the move (time, level; the state is `from` after them), the step that moves it
+        // (time, level), from, to, fault of the move). The enable stays asserted unless a
+        // fault moved the controller.
+        type Case = (
+            u32,
+            &'static [(u32, bool)],
+            (u32, bool),
+            PowerState,
+            PowerState,
+            Option<PowerFault>,
         );
-        assert!(p.enable_requested());
-        assert_eq!(p.fault(), None);
-    }
-
-    #[test]
-    fn requested_to_fault_on_timeout_releases_enable() {
-        let mut p = requested_at(100);
-        assert_eq!(p.step(1099, false), None);
-        let t = p.step(1100, false).unwrap();
-        assert_eq!(
-            (t.from, t.to),
-            (PowerState::PowerOnRequested, PowerState::Fault)
-        );
-        assert_eq!(t.fault, Some(PowerFault::PgoodTimeout));
-        assert!(!p.enable_requested());
-        assert_eq!(p.fault(), Some(PowerFault::PgoodTimeout));
+        let cases: [Case; 3] = [
+            (
+                0,
+                &[(10, false)],
+                (20, true),
+                PowerState::PowerOnRequested,
+                PowerState::On,
+                None,
+            ),
+            (
+                100,
+                &[(1099, false)],
+                (1100, false),
+                PowerState::PowerOnRequested,
+                PowerState::Fault,
+                Some(PowerFault::PgoodTimeout),
+            ),
+            (
+                0,
+                &[(1, true), (2, true)],
+                (3, false),
+                PowerState::On,
+                PowerState::Fault,
+                Some(PowerFault::PgoodLost),
+            ),
+        ];
+        for (requested_ms, before, (at_ms, pgood), from, to, fault) in cases {
+            let mut p = requested_at(requested_ms);
+            for &(ms, level) in before {
+                p.step(ms, level);
+            }
+            assert_eq!(p.state(), from, "before the move to {to:?}");
+            let t = p.step(at_ms, pgood).unwrap();
+            assert_eq!((t.from, t.to), (from, to));
+            assert_eq!(t.fault, fault);
+            assert_eq!(p.fault(), fault);
+            assert_eq!(p.enable_requested(), fault.is_none());
+        }
     }
 
     #[test]
@@ -300,17 +326,6 @@ mod tests {
         let mut p = requested_at(u32::MAX - 99);
         assert_eq!(p.step(899, false), None); // 100 + 900 - 1 ms elapsed
         assert!(p.step(900, false).is_some()); // 1000 ms elapsed across the wrap
-    }
-
-    #[test]
-    fn on_to_fault_when_pgood_lost() {
-        let mut p = requested_at(0);
-        p.step(1, true);
-        assert_eq!(p.step(2, true), None);
-        let t = p.step(3, false).unwrap();
-        assert_eq!((t.from, t.to), (PowerState::On, PowerState::Fault));
-        assert_eq!(t.fault, Some(PowerFault::PgoodLost));
-        assert!(!p.enable_requested());
     }
 
     #[test]
@@ -344,12 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn power_off_clears_a_latched_fault() {
-        let mut p = requested_at(0);
-        p.step(TIMEOUT, false);
-        let t = p.power_off().unwrap();
-        assert_eq!((t.from, t.to), (PowerState::Fault, PowerState::Off));
-        assert_eq!(p.fault(), None);
+    fn power_off_and_power_clear_both_clear_a_latched_fault() {
+        type Clear = fn(&mut PowerController) -> Option<Transition>;
+        let clears: [Clear; 2] = [|p| p.power_off(), |p| p.power_clear().ok()];
+        for clear in clears {
+            let mut p = requested_at(0);
+            p.step(TIMEOUT, false);
+            let t = clear(&mut p).unwrap();
+            assert_eq!((t.from, t.to), (PowerState::Fault, PowerState::Off));
+            assert_eq!(p.fault(), None);
+        }
     }
 
     #[test]

@@ -14,7 +14,8 @@
      or by the drive copy. The runtime writes sector 2 only.
    - .uninit (NOLOAD) sits in NOINIT at ORIGIN(NOINIT) + 0x10; the boot request words are the
      first 16 bytes (__boot_request), written by src/bsp/boot_request.rs and read by the
-     bootloader, so no other section may use them.
+     bootloader, so no other section may use them. The last 16 bytes of NOINIT are the kept fault
+     record (__fault_record, src/bsp/fault_record.rs); .uninit ends at or below it.
    - Symbols: __program_start (start of .text) and __sidata/__sdata/__edata tell
      drivers/flash.rs where the program ends; flash_map.x exports __app_vectors, __app_header,
      __boot_end, __fru_store_start and __fru_store_end.
@@ -281,6 +282,9 @@ ERROR(ipmc): .uninit does not start at ORIGIN(NOINIT) + 0x10 (the boot request w
 
 ASSERT(ADDR(.uninit) + SIZEOF(.uninit) <= ORIGIN(NOINIT) + LENGTH(NOINIT), "
 ERROR(ipmc): .uninit does not end inside NOINIT (256 bytes)");
+
+ASSERT(__euninit <= __fault_record, "
+ERROR(ipmc): .uninit reaches the kept fault record (__fault_record, the last 16 bytes of NOINIT)");
 
 ASSERT(ORIGIN(RAM) % 4 == 0, "
 ERROR(cortex-m-rt): the start of the RAM region must be 4-byte aligned");

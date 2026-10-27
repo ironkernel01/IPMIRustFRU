@@ -45,6 +45,13 @@ class RealFileTests(unittest.TestCase):
             self.assertIsInstance(value, (int, bool, str), name)
 
 
+class GetTests(unittest.TestCase):
+    def test_get_gives_the_value_or_the_default(self):
+        self.assertEqual(defs.get("IPMC_APP_PROMPT", "p> "), defs.read()["IPMC_APP_PROMPT"])
+        self.assertEqual(defs.get("NO_SUCH_NAME", 7), 7)
+        self.assertEqual(defs.get("IPMC_APP_PROMPT", "p> ", "no/such/file.rs"), "p> ")
+
+
 class FixtureTests(unittest.TestCase):
     def test_forms(self):
         got = parse(

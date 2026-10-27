@@ -34,7 +34,6 @@ ipmc-log = { path = "../ipmc-log" }
 ipmc-menu = { path = "../ipmc-menu" }
 ipmc-sensors = { path = "../ipmc-sensors", features = ["stm32f401"] }
 ipmc-wire = { path = "../ipmc-wire" }
-panic-halt = "=1.0.0"
 stm32f4 = { version = "=0.16.0", features = ["stm32f401", "rt"] }
 
 [profile.release]

@@ -26,6 +26,14 @@ impl Bus {
     /// BOTH -- the two buses in index order.
     pub const BOTH: [Bus; 2] = [Bus::A, Bus::B];
 
+    /// index -- the bus as an array index: A is 0, B is 1 (the order of `BOTH`).
+    pub const fn index(self) -> usize {
+        match self {
+            Bus::A => 0,
+            Bus::B => 1,
+        }
+    }
+
     /// name -- log name of the bus.
     pub const fn name(self) -> &'static str {
         match self {

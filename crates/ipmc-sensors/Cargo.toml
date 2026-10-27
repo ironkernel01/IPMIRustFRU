@@ -17,3 +17,7 @@ ipmc-core = { path = "../ipmc-core" }
 embedded-hal = { version = "=1.0.0", default-features = false }
 cortex-m = { version = "=0.7.10", optional = true }
 stm32f4 = { version = "=0.16.0", features = ["stm32f401"], optional = true }
+
+[dev-dependencies]
+# RecordingTrace, the trace collector of the tests.
+ipmc-core = { path = "../ipmc-core", features = ["recording"] }

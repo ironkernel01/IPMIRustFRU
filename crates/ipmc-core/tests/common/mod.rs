@@ -5,7 +5,7 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::{dispatch, Context};
 use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb::{self, Header, NETFN_GROUP_EXT};
-use ipmc_core::link::{BusMode, IpmbBPowerUp, Link, LinkConfig, TxPolicy};
+use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::{Bus, EgressQueue};
 use ipmc_core::trace::NoTrace;
 
@@ -154,12 +154,7 @@ pub struct Answer {
 impl Rig {
     pub fn new() -> Rig {
         let resolved = addr::resolve(0x7F);
-        let config = LinkConfig {
-            b_fitted: true,
-            tx_policy: TxPolicy::Alternate,
-            b_power_up: IpmbBPowerUp::Strict,
-            requests_allowed: false,
-        };
+        let config = LinkConfig::bench(TxPolicy::Alternate, false);
         Rig {
             link: Link::new(config, &resolved),
             ctx: Context::new(resolved),

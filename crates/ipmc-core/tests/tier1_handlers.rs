@@ -8,7 +8,7 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::{Context, SensorReadError};
 use ipmc_core::fru_state::State;
 use ipmc_core::ipmb::{NETFN_APP, NETFN_SE, NETFN_STORAGE};
-use ipmc_core::link::{BusMode, IpmbBPowerUp, LinkConfig, LinkView, TxPolicy};
+use ipmc_core::link::{BusMode, LinkConfig, LinkView, TxPolicy};
 use ipmc_core::sensor::{PowerState, RailStatus, SensorSnapshot, Summary, TEMP_FLAG_UC};
 use ipmc_core::trace::NoTrace;
 use ipmc_fru as fru;
@@ -44,15 +44,7 @@ fn ctx() -> Context {
 /// A context whose link view says IPMB-B is fitted (power-up state: A enabled, B isolated).
 fn ctx_with_b() -> Context {
     let mut c = ctx();
-    c.link = LinkView::power_up(
-        LinkConfig {
-            b_fitted: true,
-            tx_policy: TxPolicy::Alternate,
-            b_power_up: IpmbBPowerUp::Strict,
-            requests_allowed: false,
-        },
-        true,
-    );
+    c.link = LinkView::power_up(LinkConfig::bench(TxPolicy::Alternate, false), true);
     c
 }
 

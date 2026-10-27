@@ -5,6 +5,7 @@
 //! so no handler and no loop pass is held for the pulse time.
 
 use crate::hal::{ResetOutput, SourceError};
+use ipmc_core::clock::at_or_after;
 
 /// PayloadResetPulse -- the state of the pulse: the time it ends while the output is asserted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,7 +49,7 @@ impl PayloadResetPulse {
         now_ms: u32,
     ) -> Option<Result<(), SourceError>> {
         let due = self.release_at_ms?;
-        if (now_ms.wrapping_sub(due) as i32) < 0 {
+        if !at_or_after(now_ms, due) {
             return None;
         }
         let result = out.set_reset(false);

@@ -19,19 +19,17 @@ fn capture() -> Option<String> {
     Some(capture_path().to_string_lossy().into_owned())
 }
 
+/// replay_both -- `replay` of the capture with IPMB-B fitted and enabled, then `extra` options.
+fn replay_both(file: &str, extra: &[&str]) -> Output {
+    let mut args = vec!["replay", file, "--b-fitted", "1", "--b-enabled", "1"];
+    args.extend_from_slice(extra);
+    emu(&args)
+}
+
 #[test]
 fn the_capture_run_with_both_buses_exits_0() {
     let Some(file) = capture() else { return };
-    let out = emu(&[
-        "replay",
-        &file,
-        "--b-fitted",
-        "1",
-        "--b-enabled",
-        "1",
-        "--policy",
-        "arrival",
-    ]);
+    let out = replay_both(&file, &["--policy", "arrival"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("Get Device ID"));
@@ -56,16 +54,7 @@ fn the_bench_build_run_exits_0_and_reports_the_unfitted_bus() {
 #[test]
 fn a_run_that_loses_responses_exits_1_and_names_the_reason() {
     let Some(file) = capture() else { return };
-    let out = emu(&[
-        "replay",
-        &file,
-        "--b-fitted",
-        "1",
-        "--b-enabled",
-        "1",
-        "--fail-every",
-        "1",
-    ]);
+    let out = replay_both(&file, &["--fail-every", "1"]);
     assert_eq!(out.status.code(), Some(1));
     let text = String::from_utf8_lossy(&out.stdout);
     let last = text.trim_end().lines().last().unwrap_or("");
@@ -78,16 +67,7 @@ fn a_run_that_loses_responses_exits_1_and_names_the_reason() {
 #[test]
 fn trace_prints_the_frames() {
     let Some(file) = capture() else { return };
-    let out = emu(&[
-        "replay",
-        &file,
-        "--b-fitted",
-        "1",
-        "--b-enabled",
-        "1",
-        "--trace",
-        "--quiet",
-    ]);
+    let out = replay_both(&file, &["--trace", "--quiet"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.lines().any(|l| l.starts_with("rx IPMB-A")));

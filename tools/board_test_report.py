@@ -33,6 +33,7 @@ IPMITOOL = VENV / "ipmitool.exe"
 VENV_PYTHON = VENV / "python.exe"
 README = ROOT / "tools" / "python-ipmi" / "README.md"
 sys.path.insert(0, str(ROOT / "tools"))
+import trace2vec  # noqa: E402  (the one IPMB zero checksum)
 import defs as defs_reader  # noqa: E402  (tools/defs.py, the one reader of the configuration)
 REPORT = ROOT / "Documentation" / "board_test_report.md"
 FIRMWARE_DIR = ROOT / "crates" / "ipmc-nucleo-f401re"
@@ -468,7 +469,7 @@ def section_f(report: Report, defs: dict):
     changed_char = ord("2") if chr(area[pos]) != "2" else ord("3")
     new_area = list(area)
     new_area[pos] = changed_char
-    new_area[csum] = (-sum(new_area[:csum])) & 255
+    new_area[csum] = trace2vec.checksum(new_area[:csum])
     offset = board_off + pos
     restored = False
     try:

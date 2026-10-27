@@ -29,8 +29,9 @@ use core::fmt;
 use cortex_m::peripheral::{DCB, DWT, NVIC};
 use ipmc_boot::request::{self, Interface};
 use ipmc_core::addr::{self, AddrInfo};
-use ipmc_core::dispatch::{Context as DispatchContext, PowerRequest, ResetRequest};
-use ipmc_core::ext::{self, Extension};
+use ipmc_core::clock;
+use ipmc_core::dispatch::{Context as DispatchContext, HandOffs, ResetRequest};
+use ipmc_core::ext;
 use ipmc_core::fru_state::PowerOnRefused;
 use ipmc_core::ipmb::IPMB_MAX_LEN;
 use ipmc_core::link::{BusSpeed, FrameDrop, Link, LinkConfig, LocalError, TxOutcome};
@@ -226,13 +227,6 @@ impl FaultTracker {
     const COUNT: usize = 2;
 }
 
-const fn tracker_index(bus: Bus) -> usize {
-    match bus {
-        Bus::A => 0,
-        Bus::B => 1,
-    }
-}
-
 /// BringUpFailure -- why `bring_up` failed. Compared by value: a restart that fails for the same
 /// reason is not reported again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,7 +335,7 @@ pub fn start_drivers(
                 fault_a = Some(failure);
             }
         }
-        periph[tracker_index(Bus::A)] = a;
+        periph[Bus::A.index()] = a;
         if B_FITTED {
             let mut b = Some(I2cPeripheral::I3(i2c3));
             match bring_up(Bus::B, &mut b, &mut ctx, &mut master) {
@@ -351,7 +345,7 @@ pub fn start_drivers(
                     fault_b = Some(failure);
                 }
             }
-            periph[tracker_index(Bus::B)] = b;
+            periph[Bus::B.index()] = b;
         }
     }
     IpmbIo {
@@ -363,16 +357,6 @@ pub fn start_drivers(
         bring_up: ctx,
         periph,
     }
-}
-
-/// HandOffs -- what `IpmbLink::take_hand_offs` returns.
-pub struct HandOffs {
-    /// A payload power request of a handler.
-    pub power: Option<PowerRequest>,
-    /// A handler asked for a payload reset pulse.
-    pub payload_reset: bool,
-    /// The power-on check at that moment (`IpmbLink::power_on_check`).
-    pub power_on_check: Result<(), PowerOnRefused>,
 }
 
 /// IpmbLink -- the link layer, the dispatch context it answers requests with, and the drivers it
@@ -476,7 +460,7 @@ impl PausedErase<'_> {
     fn suspend_all(&self) -> Result<[bool; FaultTracker::COUNT], FlashError> {
         let mut paused = [false; FaultTracker::COUNT];
         for bus in Bus::BOTH {
-            let index = tracker_index(bus);
+            let index = bus.index();
             match self.plan[index] {
                 BusPause::Absent => continue,
                 BusPause::Faulted => {
@@ -510,7 +494,7 @@ impl PausedErase<'_> {
     /// resume_all -- gives the suspended buses back to their slaves.
     fn resume_all(&self, paused: [bool; FaultTracker::COUNT]) {
         for bus in Bus::BOTH {
-            if paused[tracker_index(bus)] {
+            if paused[bus.index()] {
                 i2c_hw::resume(bus, self.master.pins(bus));
             }
         }
@@ -611,7 +595,7 @@ impl IpmbLink {
                 link.set_local_status(bus, failure.status());
                 // A start-up fault is tracked like a run-time one: the same evidence-gated
                 // clear, then `bring_up` again.
-                if let Some(t) = faults.get_mut(tracker_index(bus)) {
+                if let Some(t) = faults.get_mut(bus.index()) {
                     t.faulted = true;
                     t.startup = true;
                     t.failure = Some(failure);
@@ -874,14 +858,10 @@ impl IpmbLink {
     }
 
     /// take_hand_offs -- the requests a handler left for the owner of the payload power and of
-    /// the payload reset output (`Context::pending_power`, `Context::pending_payload_reset`),
-    /// cleared, with the power-on check the request meets (`Monitor::apply_power_request`).
+    /// the payload reset output (`Context::take_hand_offs`), cleared, with the power-on check the
+    /// request meets.
     pub fn take_hand_offs(&mut self) -> HandOffs {
-        HandOffs {
-            power: self.dispatch.pending_power.take(),
-            payload_reset: core::mem::take(&mut self.dispatch.pending_payload_reset),
-            power_on_check: self.power_on_check(),
-        }
+        self.dispatch.take_hand_offs(&self.ext)
     }
 
     /// service -- main-loop step.
@@ -939,7 +919,7 @@ impl IpmbLink {
     fn apply_bus_speeds(&mut self) {
         for bus in Bus::BOTH {
             let wanted = self.link.bus_state(bus).speed;
-            let index = tracker_index(bus);
+            let index = bus.index();
             let running = match bus {
                 Bus::A => self.rx_a.is_some(),
                 Bus::B => self.rx_b.is_some(),
@@ -968,7 +948,7 @@ impl IpmbLink {
     pub fn stop_for_eval(&mut self) {
         let plan = pause_plan([self.rx_a.is_some(), self.rx_b.is_some()], &self.faults);
         for bus in Bus::BOTH {
-            let off = match plan[tracker_index(bus)] {
+            let off = match plan[bus.index()] {
                 BusPause::Absent => continue,
                 BusPause::Faulted => false,
                 BusPause::Healthy => {
@@ -1039,20 +1019,7 @@ impl IpmbLink {
                     ""
                 };
                 self.status(format_args!("Cold Reset: restarting{target}"));
-                uart::flush(uart::Port::Console);
-                // The gate waited for the application port output to leave (`app_output_pending`,
-                // bounded by IPMC_RESET_WAIT_MS); this flush only covers the last byte in the
-                // shift register. It is bounded by `flush_polls`; with CTS held off the bound runs
-                // out (counted as a TX timeout) and the reset goes ahead.
-                uart::flush(uart::Port::App);
-                reset_cause::keep_sequence(
-                    self.link.next_request_seq(),
-                    self.link.recent_request_seqs(now_ms),
-                );
-                if let Some(interface) = self.boot_request {
-                    boot_request::write(request::encode(interface));
-                }
-                reset_cause::system_reset();
+                self.restart(self.boot_request);
             }
             Some(ResetRequest::Warm) => {
                 // A bootloader request never outlives the reset it rode on.
@@ -1061,6 +1028,28 @@ impl IpmbLink {
             }
             None => {}
         }
+    }
+
+    /// restart -- the one processor restart (Cold Reset, bootloader request and SYS RESET).
+    /// 1. Flush both ports. The gate waited for the application port output to leave
+    ///    (`app_output_pending`, bounded by IPMC_RESET_WAIT_MS); this flush only covers the last
+    ///    byte in the shift register. It is bounded by `flush_polls`; with CTS held off the bound
+    ///    runs out (counted as a TX timeout) and the reset goes ahead.
+    /// 2. Keep the requester's next sequence number and the recent mask
+    ///    (`reset_cause::keep_sequence`).
+    /// 3. Write the boot request words for `boot`, none for `None`.
+    /// 4. `reset_cause::system_reset`.
+    pub fn restart(&mut self, boot: Option<Interface>) -> ! {
+        uart::flush(uart::Port::Console);
+        uart::flush(uart::Port::App);
+        reset_cause::keep_sequence(
+            self.link.next_request_seq(),
+            self.link.recent_request_seqs(systick::millis()),
+        );
+        if let Some(interface) = boot {
+            boot_request::write(request::encode(interface));
+        }
+        reset_cause::system_reset()
     }
 
     /// warm_reset -- the Warm Reset (`ResetRequest::Warm`): a new Link in the power-up bus state
@@ -1072,23 +1061,26 @@ impl IpmbLink {
     /// state, the sensors and payload power, the settings byte, the payload mode and the event
     /// enables.
     fn warm_reset(&mut self, now_ms: u32) {
-        let mut link = self.link.restarted(&self.dispatch.addr, now_ms);
-        for bus in Bus::BOTH {
-            let status = self.link.bus_state(bus).status;
-            if status != LocalStatus::None {
-                link.set_local_status(bus, status);
-            }
-        }
-        self.dispatch.warm_reset(link.view());
-        self.link = link;
-        self.ext.warm_reset();
-        self.reset_gate = ResetGate::new();
+        self.link.warm_reset(
+            &mut self.dispatch,
+            &mut self.ext,
+            &mut self.reset_gate,
+            now_ms,
+            |old, new| {
+                for bus in Bus::BOTH {
+                    let status = old.bus_state(bus).status;
+                    if status != LocalStatus::None {
+                        new.set_local_status(bus, status);
+                    }
+                }
+            },
+        );
         self.status(format_args!("Warm Reset: link state re-initialised"));
     }
 
     /// tracker -- the fault tracker of `bus`.
     fn tracker(&mut self, bus: Bus) -> &mut FaultTracker {
-        &mut self.faults[tracker_index(bus)]
+        &mut self.faults[bus.index()]
     }
 
     /// note_faults -- adds `count` bus-fault errors of `status` and `name` to the streak of
@@ -1154,7 +1146,7 @@ impl IpmbLink {
     fn clear_faulted_buses(&mut self) {
         let now_ms = systick::millis();
         for bus in Bus::BOTH {
-            if !self.faults[tracker_index(bus)].faulted {
+            if !self.faults[bus.index()].faulted {
                 continue;
             }
             if !self.master.lines_high(bus) {
@@ -1165,7 +1157,7 @@ impl IpmbLink {
             if now_ms.wrapping_sub(since) < FAULT_CLEAR_MS {
                 continue;
             }
-            let cleared = if self.faults[tracker_index(bus)].startup {
+            let cleared = if self.faults[bus.index()].startup {
                 // `restart_bus` reports a new failure reason.
                 self.restart_bus(bus)
             } else {
@@ -1199,7 +1191,7 @@ impl IpmbLink {
     /// restart_bus -- runs `bring_up` again for a bus that failed at start-up; true when the I2C
     /// slave now runs (its frame queue joins the drain).
     fn restart_bus(&mut self, bus: Bus) -> bool {
-        let Some(periph) = self.periph.get_mut(tracker_index(bus)) else {
+        let Some(periph) = self.periph.get_mut(bus.index()) else {
             return false;
         };
         match bring_up(bus, periph, &mut self.bring_up, &mut self.master) {
@@ -1235,7 +1227,7 @@ impl IpmbLink {
                 (Some(_), None) => Bus::A,
                 (None, Some(_)) => Bus::B,
                 // Wrapping difference: B first only when its STOP is earlier.
-                (Some(a), Some(b)) if (b.wrapping_sub(a) as i32) < 0 => Bus::B,
+                (Some(a), Some(b)) if clock::earlier(b, a) => Bus::B,
                 (Some(_), Some(_)) => Bus::A,
             };
             let consumer = match bus {
@@ -1483,7 +1475,7 @@ pub fn cmd_ipmb_stats(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
     for bus in Bus::BOTH {
         print_bus_stats(link, bus);
         if link.bus_state(bus).fitted {
-            print_driver_stats(&ctx.ipmb.master, &ctx.ipmb.faults[tracker_index(bus)], bus);
+            print_driver_stats(&ctx.ipmb.master, &ctx.ipmb.faults[bus.index()], bus);
         }
     }
     match ctx.ipmb.master.stats().scl_period_ns() {

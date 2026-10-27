@@ -2,22 +2,23 @@
 // This is the runtime firmware, linked at 0x0800_C000 (link.x, flash_map.x). The bootloader in sectors 0-1 (src/boot/,
 // binary ipmc-boot) checks the image header and starts it with the state of a reset; with the
 // bootloader gone a debugger can still run it (cortex-m-rt features set-vtor and set-sp).
-// Start-up order: reset cause, clock, pin owner (`ports`), LED, SysTick (after the LED state it
+// Start-up order: reset cause and the kept fault record, clock, pin owner (`ports`), LED, SysTick (after the LED state it
 // services exists), console UART, application UART (when enabled), IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
 // defs.rs source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
 // before the I2C slaves exist), IPMB drivers (the own address is known; bus
-// recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, then the CLI loop
-// (console, application port, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
+// recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, watchdog start (the IWDG,
+// when IPMC_WATCHDOG_ENABLE), then the CLI loop
+// (watchdog feed, console, application port, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
 // TIM2 after the UART and stops the IPMB when the period is over (eval.rs).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
 // IPMC_FAULT_BLINK_CHZ (defs.rs) and the device parks (bsp::fault::park). A pin claim
-// conflict prints both owner names on the console and parks (bsp::fault::claim_failed). The panic handler is panic-halt.
+// conflict prints both owner names on the console and parks (bsp::fault::claim_failed). A panic
+// and the fault handlers (bsp::fault) keep a record in NOINIT, print one line and park; once the
+// watchdog runs (below) it resets the processor and the next start reports the kept fault.
 
 #![no_std]
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
-
-use panic_halt as _;
 
 // `out!` (formatted console output) and the shared board support come from the library.
 #[macro_use]
@@ -54,6 +55,7 @@ fn main() -> ! {
     };
 
     let reset_cause = bsp::reset_cause::take(&dp.RCC); // first, before anything can reset again
+    let last_fault = bsp::fault_record::take();
     let clock_fault = bsp::clock::init(&dp.RCC, &dp.PWR, &dp.FLASH).err();
     let clock = bsp::clock::decode_nominal(&dp.RCC);
     // Pin ownership: `ports` takes GPIOA..GPIOC; every other module claims its pins from it,
@@ -178,6 +180,7 @@ fn main() -> ! {
     };
     let mut console = console::Console::new(
         reset_cause,
+        last_fault,
         clock,
         clock_fault,
         sensing::Sensing::new(adc, board_io),
@@ -191,9 +194,19 @@ fn main() -> ! {
     console.start_events();
     console.start_sensors();
     console.prompt();
+    // The watchdog starts last, just before the loop. A start failure leaves the board running
+    // without it.
+    let mut watchdog = bsp::watchdog::Watchdog::new(dp.IWDG, &dp.DBGMCU);
+    if ipmc_defs::IPMC_WATCHDOG_ENABLE {
+        match watchdog.start(ipmc_defs::IPMC_WATCHDOG_MS) {
+            Ok(ms) => console.set_watchdog(Some(ms)),
+            Err(e) => out!("Watchdog not started: {}\n", e.name()),
+        }
+    }
     #[cfg(ipmc_eval)]
     let mut ipmb_ended = false;
     loop {
+        watchdog.feed(); // once per pass, first: the only place the watchdog is fed
         console.poll();
         console.service_app();
         console.service_sensors();

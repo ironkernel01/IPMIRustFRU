@@ -1,0 +1,9 @@
+# The one Rust toolchain of this repository (DAL-D gap G7, Documentation/dal-d.md): rustup reads
+# this file in every folder below the root, so the host workspace and the firmware workspace
+# (crates/ipmc-nucleo-f401re) build with the same compiler. Change the channel only together with
+# a full gate run; the test reports record `rustc -V`.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy", "llvm-tools"]
+targets = ["thumbv7em-none-eabihf", "x86_64-pc-windows-gnu"]
+profile = "minimal"

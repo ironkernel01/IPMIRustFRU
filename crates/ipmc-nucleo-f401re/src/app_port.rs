@@ -68,7 +68,7 @@ const BYTES_PER_POLL: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL;
 /// pass.
 pub struct AppPort {
     editor: LineEditor<LINE_MAX>,
-    /// `lost_bytes()` at the last poll that looked: a move means bytes were lost since.
+    /// `uart::counters(Port::App).lost()` at the last poll that looked: a move means bytes were lost since.
     lost_seen: u32,
     /// Output waiting for the TX ring: the echo, the answer, the prompt, or the banner.
     out: AnswerBuf<ANSWER_MAX>,
@@ -76,16 +76,6 @@ pub struct AppPort {
     sent: usize,
     /// The banner went out.
     started: bool,
-}
-
-/// lost_bytes -- bytes the application port has lost or received damaged since reset (overrun,
-/// RX overflow, and a framing, noise or parity error): a damaged byte cannot be trusted, so its
-/// line is refused like a line with a lost byte.
-fn lost_bytes() -> u32 {
-    let c = uart::counters(Port::App);
-    c.overrun
-        .wrapping_add(c.rx_overflow)
-        .wrapping_add(c.line_errors)
 }
 
 impl AppPort {
@@ -182,7 +172,7 @@ impl AppPort {
     /// resynchronises at the first line end that arrives afterwards. A caller that holds a byte
     /// taken before the loss was seen drops it too.
     fn check_loss(&mut self, link: &mut IpmbLink) -> bool {
-        let lost_now = lost_bytes();
+        let lost_now = uart::counters(Port::App).lost();
         let moved = lost_now.wrapping_sub(self.lost_seen);
         if moved > 0 {
             uart::discard_rx(Port::App);

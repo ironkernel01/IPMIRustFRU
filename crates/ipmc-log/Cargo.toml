@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ipmc-core = { path = "../ipmc-core" }
 ipmc-defs = { path = "../ipmc-defs" }
+ipmc-menu = { path = "../ipmc-menu" }
 
 [dev-dependencies]
 ipmc-core = { path = "../ipmc-core", features = ["recording"] }

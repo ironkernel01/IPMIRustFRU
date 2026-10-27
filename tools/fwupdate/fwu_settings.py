@@ -72,25 +72,17 @@ LINE_MAX_FALLBACK = 128
 DEFS_PATH = defs.DEFAULT_PATH
 
 
-def define_from_header(name, default, path=DEFS_PATH):
-    """The value of `pub const name` in defs.rs, or `default` when the file or the name is absent."""
-    try:
-        return defs.read(path).get(name, default)
-    except OSError:
-        return default
-
-
 def baud_for(uart, path=DEFS_PATH):
     """The baud rate of the port `uart` ("cli": IPMC_CONSOLE_BAUD, "app": IPMC_APP_UART_BAUD)."""
     name = "IPMC_CONSOLE_BAUD" if uart == "cli" else "IPMC_APP_UART_BAUD"
-    return define_from_header(name, BAUD_FALLBACK, path)
+    return defs.get(name, BAUD_FALLBACK, path)
 
 
 def prompt(path=DEFS_PATH):
     """IPMC_BOOT_PROMPT of defs.rs, else PROMPT_FALLBACK."""
-    return define_from_header("IPMC_BOOT_PROMPT", PROMPT_FALLBACK, path)
+    return defs.get("IPMC_BOOT_PROMPT", PROMPT_FALLBACK, path)
 
 
 def line_max(path=DEFS_PATH):
     """IPMC_MENU_LINE_MAX of defs.rs (a record line is at most this minus 1), else LINE_MAX_FALLBACK."""
-    return define_from_header("IPMC_MENU_LINE_MAX", LINE_MAX_FALLBACK, path)
+    return defs.get("IPMC_MENU_LINE_MAX", LINE_MAX_FALLBACK, path)

@@ -269,8 +269,8 @@ mod tests {
     use crate::board_sensors::{sim_analog, RAILS};
     use crate::drivers::sim::{SimAnalog, SimInputs, SimPower};
     use crate::hal::SourceError;
-    use crate::trace::tests::Lines;
     use ipmc_core::sensor::{PowerState, RailStatus, Summary};
+    use ipmc_core::trace::RecordingTrace;
 
     /// One struct that is both the inputs and the switch, as the firmware's router is.
     struct Io {
@@ -303,7 +303,7 @@ mod tests {
         }
     }
 
-    fn rig() -> (Monitor, SimAnalog, Io, Lines) {
+    fn rig() -> (Monitor, SimAnalog, Io, RecordingTrace) {
         (
             Monitor::new(1000, 1000, Level::All),
             sim_analog(),
@@ -313,7 +313,7 @@ mod tests {
                 dead_inputs: Vec::new(),
                 fail_writes: false,
             },
-            Lines::default(),
+            RecordingTrace::default(),
         )
     }
 
@@ -323,8 +323,8 @@ mod tests {
         assert!(m.service(5, &mut a, &mut io, &mut t));
         assert!(!m.service(1004, &mut a, &mut io, &mut t));
         assert!(m.service(1005, &mut a, &mut io, &mut t));
-        assert_eq!(t.0.len(), 2, "one sample line each, no change lines");
-        assert!(t.0.iter().all(|l| l.starts_with("sample: ")));
+        assert_eq!(t.lines.len(), 2, "one sample line each, no change lines");
+        assert!(t.lines.iter().all(|l| l.starts_with("sample: ")));
     }
 
     #[test]
@@ -337,27 +337,49 @@ mod tests {
         assert_eq!(m.power().state(), PowerState::On);
         assert_eq!(m.snapshot().power, PowerState::On);
         assert_eq!(m.snapshot().health, Summary::Good);
-        assert_eq!(t.0[0], "event: power Off -> PowerOnRequested");
-        assert_eq!(t.0[1], "event: power PowerOnRequested -> On");
+        assert_eq!(t.lines[0], "event: power Off -> PowerOnRequested");
+        assert_eq!(t.lines[1], "event: power PowerOnRequested -> On");
     }
 
     #[test]
-    fn missing_pgood_times_out_to_a_latched_fault_with_enable_released() {
-        let (mut m, mut a, mut io, mut t) = rig();
-        io.inputs.set_level(Input::Pgood, false);
-        m.power_on(0, &mut io, &mut t).unwrap();
-        m.sample(500, &mut a, &mut io, &mut t);
-        assert_eq!(m.snapshot().health, Summary::Bad, "PWR_EN on without PGOOD");
-        m.sample(1000, &mut a, &mut io, &mut t);
-        assert_eq!(m.power().state(), PowerState::Fault);
-        assert!(!io.power.is_enabled());
-        assert!(t
-            .0
-            .iter()
-            .any(|l| l == "event: power PowerOnRequested -> Fault (PGOOD timeout)"));
-        assert_eq!(m.power_on(1001, &mut io, &mut t), Err(PowerError::Faulted));
-        m.power_clear(&mut io, &mut t).unwrap();
-        assert_eq!(m.power().state(), PowerState::Off);
+    fn a_pgood_that_is_low_or_unreadable_times_out_to_the_latched_fault() {
+        // (name, makes PGOOD low or unreadable). PGOOD never comes up: the timeout latches a
+        // fault with the enable released; the latch holds when PGOOD later reads high.
+        type Break = fn(&mut Io);
+        let cases: [(&str, Break); 2] = [
+            ("low", |io| io.inputs.set_level(Input::Pgood, false)),
+            ("unreadable", |io| io.dead_inputs.push(Input::Pgood)),
+        ];
+        for (name, break_pgood) in cases {
+            let (mut m, mut a, mut io, mut t) = rig();
+            break_pgood(&mut io);
+            m.power_on(0, &mut io, &mut t).unwrap();
+            m.sample(500, &mut a, &mut io, &mut t);
+            assert_eq!(m.power().state(), PowerState::PowerOnRequested, "{name}");
+            assert_eq!(
+                m.snapshot().health,
+                Summary::Bad,
+                "{name}: PWR_EN on, PGOOD not good"
+            );
+            m.sample(1000, &mut a, &mut io, &mut t);
+            assert_eq!(m.power().state(), PowerState::Fault, "{name}");
+            assert!(!io.power.is_enabled(), "{name}");
+            assert!(t
+                .lines
+                .iter()
+                .any(|l| l == "event: power PowerOnRequested -> Fault (PGOOD timeout)"));
+            assert_eq!(m.power_on(1001, &mut io, &mut t), Err(PowerError::Faulted));
+            io.dead_inputs.clear();
+            io.inputs.set_level(Input::Pgood, true);
+            m.sample(2000, &mut a, &mut io, &mut t);
+            assert_eq!(
+                m.power().state(),
+                PowerState::Fault,
+                "{name}: the latch holds"
+            );
+            m.power_clear(&mut io, &mut t).unwrap();
+            assert_eq!(m.power().state(), PowerState::Off, "{name}");
+        }
     }
 
     #[test]
@@ -369,23 +391,26 @@ mod tests {
         m.sample(2, &mut a, &mut io, &mut t);
         assert_eq!(m.power().state(), PowerState::Fault);
         assert!(!io.power.is_enabled());
-        assert!(t.0.iter().any(|l| l.contains("On -> Fault (PGOOD lost)")));
+        assert!(t
+            .lines
+            .iter()
+            .any(|l| l.contains("On -> Fault (PGOOD lost)")));
     }
 
     #[test]
     fn rail_crossing_prints_a_change_line_and_updates_the_snapshot() {
         let (mut m, mut a, mut io, mut t) = rig();
         m.sample(0, &mut a, &mut io, &mut t);
-        t.0.clear();
+        t.lines.clear();
         a.set_rail_mv(RAILS[2].channel, 4400).unwrap();
         m.sample(1, &mut a, &mut io, &mut t);
         assert_eq!(m.snapshot().rails[2].status, RailStatus::Critical);
-        assert_eq!(t.0[0], "event: rail 5V in range -> critical (4400 mV)");
-        assert!(t.0.last().unwrap().starts_with("sample: "));
+        assert_eq!(t.lines[0], "event: rail 5V in range -> critical (4400 mV)");
+        assert!(t.lines.last().unwrap().starts_with("sample: "));
         a.set_rail_mv(RAILS[2].channel, 5000).unwrap();
-        t.0.clear();
+        t.lines.clear();
         m.sample(2, &mut a, &mut io, &mut t);
-        assert_eq!(t.0[0], "event: rail 5V critical -> in range (5000 mV)");
+        assert_eq!(t.lines[0], "event: rail 5V critical -> in range (5000 mV)");
     }
 
     #[test]
@@ -394,14 +419,14 @@ mod tests {
         m.set_trace_level(Level::Events);
         m.sample(0, &mut a, &mut io, &mut t);
         m.sample(1000, &mut a, &mut io, &mut t);
-        assert!(t.0.is_empty(), "no change, no line: {:?}", t.0);
+        assert!(t.lines.is_empty(), "no change, no line: {:?}", t.lines);
         a.set_rail_mv(RAILS[2].channel, 4400).unwrap();
         m.sample(2000, &mut a, &mut io, &mut t);
-        assert_eq!(t.0[0], "event: rail 5V in range -> critical (4400 mV)");
-        assert!(t.0.iter().all(|l| l.starts_with("event: ")));
+        assert_eq!(t.lines[0], "event: rail 5V in range -> critical (4400 mV)");
+        assert!(t.lines.iter().all(|l| l.starts_with("event: ")));
         m.power_on(2001, &mut io, &mut t).unwrap();
         assert_eq!(
-            t.0.last().map(String::as_str),
+            t.lines.last().map(String::as_str),
             Some("event: power Off -> PowerOnRequested")
         );
     }
@@ -414,34 +439,9 @@ mod tests {
         m.sample(1, &mut a, &mut io, &mut t);
         assert_eq!(m.power_off(&mut io, &mut t), Ok(()));
         assert_eq!(m.power_off(&mut io, &mut t), Ok(()));
-        assert!(t.0.is_empty());
+        assert!(t.lines.is_empty());
         assert!(!io.power.is_enabled());
         assert_eq!(m.power_clear(&mut io, &mut t), Err(PowerError::NotFaulted));
-    }
-
-    #[test]
-    fn unreadable_pgood_is_not_good_so_power_on_times_out_to_the_latched_fault() {
-        let (mut m, mut a, mut io, mut t) = rig();
-        io.dead_inputs.push(Input::Pgood);
-        m.power_on(0, &mut io, &mut t).unwrap();
-        m.sample(500, &mut a, &mut io, &mut t);
-        assert_eq!(m.power().state(), PowerState::PowerOnRequested);
-        assert_eq!(
-            m.snapshot().health,
-            Summary::Bad,
-            "PWR_EN on, PGOOD not good"
-        );
-        m.sample(1000, &mut a, &mut io, &mut t);
-        assert_eq!(m.power().state(), PowerState::Fault);
-        assert!(!io.power.is_enabled());
-        assert!(t
-            .0
-            .iter()
-            .any(|l| l == "event: power PowerOnRequested -> Fault (PGOOD timeout)"));
-        // The latch holds even when PGOOD becomes readable and high.
-        io.dead_inputs.clear();
-        m.sample(2000, &mut a, &mut io, &mut t);
-        assert_eq!(m.power().state(), PowerState::Fault);
     }
 
     #[test]
@@ -464,8 +464,12 @@ mod tests {
         m.sample(1, &mut a, &mut io, &mut t);
         assert_eq!(m.snapshot().health, Summary::Bad);
         assert_eq!(m.snapshot().inputs_unreadable, 0b0010);
-        assert!(t.0.iter().any(|l| l == "event: FAULT_N unreadable"));
-        assert!(t.0.iter().all(|l| !l.contains("cleared")), "{:?}", t.0);
+        assert!(t.lines.iter().any(|l| l == "event: FAULT_N unreadable"));
+        assert!(
+            t.lines.iter().all(|l| !l.contains("cleared")),
+            "{:?}",
+            t.lines
+        );
     }
 
     #[test]
@@ -476,7 +480,7 @@ mod tests {
         assert_eq!(m.power_on(0, &mut io, &mut t), Err(error));
         assert_eq!(m.power().state(), PowerState::Fault);
         assert_eq!(
-            t.0,
+            t.lines,
             [
                 "event: power Off -> PowerOnRequested",
                 "event: power PowerOnRequested -> Fault (PWR_EN write failed: bus transfer failed)",
@@ -546,9 +550,9 @@ mod tests {
         assert!(m.snapshot().power_enabled);
         assert_eq!(m.snapshot().power, PowerState::Fault);
         // Retries that keep failing add no further transition lines.
-        let lines = t.0.len();
+        let lines = t.lines.len();
         m.sample(3, &mut a, &mut io, &mut t);
-        assert_eq!(t.0.len(), lines);
+        assert_eq!(t.lines.len(), lines);
         // The write works again: the next sample releases the output; the fault stays latched.
         io.fail_writes = false;
         m.sample(4, &mut a, &mut io, &mut t);
@@ -584,31 +588,35 @@ mod tests {
         assert!(!m.apply_power_request(PowerRequest::On, fru.check_power_on(), 0, &mut io, &mut t));
         assert!(!io.power.is_enabled());
         assert_eq!(
-            t.0,
+            t.lines,
             ["power on request refused: FRU deactivation in progress (M6), power on after the FRU reaches M1"]
         );
         // Off is never refused; On is carried out outside M6.
         assert!(m.apply_power_request(PowerRequest::Off, fru.check_power_on(), 0, &mut io, &mut t));
         let m1 = FruMachine::new();
-        t.0.clear();
+        t.lines.clear();
         let ok = m1.check_power_on();
         assert!(m.apply_power_request(PowerRequest::On, ok, 1, &mut io, &mut t));
         assert!(io.power.is_enabled());
         assert!(m.apply_power_request(PowerRequest::Off, ok, 2, &mut io, &mut t));
         assert!(!io.power.is_enabled());
         // An activation lock refuses On the same way and powers nothing.
-        t.0.clear();
+        t.lines.clear();
         let locked = Err(PowerOnRefused::ActivationLocked);
         assert!(!m.apply_power_request(PowerRequest::On, locked, 2, &mut io, &mut t));
         assert!(!io.power.is_enabled());
         assert_eq!(
-            t.0,
+            t.lines,
             ["power on request refused: FRU is activation-locked (AL), activate the FRU or clear the lock first"]
         );
         // A failed PWR_EN write is reported once, with the reason.
         io.fail_writes = true;
-        t.0.clear();
+        t.lines.clear();
         assert!(!m.apply_power_request(PowerRequest::On, ok, 3, &mut io, &mut t));
-        assert!(t.0.last().unwrap().starts_with("power request failed: "));
+        assert!(t
+            .lines
+            .last()
+            .unwrap()
+            .starts_with("power request failed: "));
     }
 }

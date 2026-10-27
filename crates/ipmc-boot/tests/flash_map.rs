@@ -83,4 +83,6 @@ fn the_header_and_request_symbols_equal_the_header_constants() {
     assert_eq!(symbol_offset("__app_header"), HEADER_OFFSET);
     assert_eq!(APP_START + symbol_offset("__app_header"), HEADER_ADDR);
     assert_eq!(symbol_offset("__boot_request"), 0);
+    // The kept fault record is the last 16 bytes of NOINIT.
+    assert_eq!(symbol_offset("__fault_record"), NOINIT_END - RAM_START - 16);
 }

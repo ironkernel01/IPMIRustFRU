@@ -12,7 +12,7 @@ use ipmc_core::ipmb::{self, Frame, Header, NETFN_APP, NETFN_SE, NETFN_STORAGE};
 use ipmc_core::queue::Bus;
 use ipmc_core::requester::{Request, Requester};
 use ipmc_core::sensor::{PayloadMode, PowerState, TransitionStatus};
-use ipmc_core::trace::Trace;
+use ipmc_core::trace::{RecordingTrace, Trace};
 use ipmc_emu::emulator::{EmuConfig, Emulator};
 use std::cell::Cell;
 
@@ -138,23 +138,16 @@ fn make_locked() -> Box<dyn Extension> {
 }
 
 /// Lines -- collects the trace lines.
-#[derive(Default)]
-struct Lines(Vec<String>);
+type Lines = RecordingTrace;
 
-impl Trace for Lines {
-    fn line(&mut self, args: core::fmt::Arguments) {
-        self.0.push(std::fmt::format(args));
-    }
+/// resets -- Cold Reset lines traced.
+fn resets(lines: &Lines) -> usize {
+    count(lines, "IPMC cold reset")
 }
 
-impl Lines {
-    fn resets(&self) -> usize {
-        self.count("IPMC cold reset")
-    }
-
-    fn count(&self, line: &str) -> usize {
-        self.0.iter().filter(|l| *l == line).count()
-    }
+/// count -- traced lines equal to `line`.
+fn count(lines: &Lines, line: &str) -> usize {
+    lines.lines.iter().filter(|l| *l == line).count()
 }
 
 fn board() -> Emulator {
@@ -218,7 +211,7 @@ fn the_reset_happens_after_the_response_left_and_the_board_answers_again() {
     assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
     emu.poll(11, &mut lines);
     assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
-    assert_eq!(lines.resets(), 0, "not before the response has left");
+    assert_eq!(resets(&lines), 0, "not before the response has left");
 
     // The response leaves; the next poll resets.
     let (bus, response) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
@@ -226,7 +219,7 @@ fn the_reset_happens_after_the_response_left_and_the_board_answers_again() {
     emu.tx_done(bus, true, 12, &mut lines).unwrap();
     assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
     emu.poll(13, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     assert_eq!(emu.context().pending_reset, None);
     assert_eq!(
         emu.link().counters(Bus::A).rx_ok,
@@ -253,10 +246,10 @@ fn the_reset_happens_after_the_wait_when_the_response_cannot_leave() {
     assert_eq!(emu.poll(100, &mut lines), 1);
     // No driver takes the response (no bus can send): the egress queue stays occupied.
     emu.poll(100 + wait - 1, &mut lines);
-    assert_eq!(lines.resets(), 0);
+    assert_eq!(resets(&lines), 0);
     assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
     emu.poll(100 + wait, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     assert_eq!(emu.context().pending_reset, None);
     assert!(
         emu.next_tx().is_none(),
@@ -301,7 +294,7 @@ fn an_accepted_fru_write_survives_a_cold_reset_at_once() {
     let (bus, _) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
     emu.tx_done(bus, true, 21, &mut lines).unwrap();
     emu.poll(22, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     assert_eq!(read_last_byte(&mut emu, 1, 30, &mut lines), marker);
 }
 
@@ -325,7 +318,7 @@ fn a_cold_reset_restores_the_fru_image_from_the_flash_copy() {
     emu.poll(10 + ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS, &mut lines);
     exchange(&mut emu, &request(FAKE_RESET_CMD, 3), 2000, &mut lines);
     emu.poll(2002, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     assert_eq!(read_last_byte(&mut emu, 1, 3000, &mut lines), marker);
 }
 
@@ -366,7 +359,7 @@ fn no_sequence_number_sent_inside_t9_is_used_again_after_a_cold_reset() {
     let reset_ms = events * spacing_ms + 200;
     exchange(&mut emu, &request(FAKE_RESET_CMD, 0), reset_ms, &mut lines);
     emu.poll(reset_ms + 2, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     // The fake extension asks again each poll until the requester takes the event.
     exchange(
         &mut emu,
@@ -405,7 +398,7 @@ fn a_cold_reset_restarts_the_payload_power_as_a_boot_does() {
     assert_eq!(emu.payload_power(), PowerState::On);
     exchange(&mut emu, &request(FAKE_RESET_CMD, 1), 3000, &mut lines);
     emu.poll(3002, &mut lines);
-    assert_eq!(lines.resets(), 1);
+    assert_eq!(resets(&lines), 1);
     assert_eq!(
         emu.payload_power(),
         PowerState::PowerOnRequested,
@@ -451,15 +444,15 @@ fn a_warm_reset_rebuilds_the_link_and_keeps_everything_else() {
     emu.poll(3011, &mut lines);
     assert_eq!(emu.context().pending_reset, Some(ResetRequest::Warm));
     assert_eq!(
-        lines.count("IPMC warm reset"),
+        count(&lines, "IPMC warm reset"),
         0,
         "not before the response left"
     );
     let (bus, _) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
     emu.tx_done(bus, true, 3012, &mut lines).unwrap();
     emu.poll(3013, &mut lines);
-    assert_eq!(lines.count("IPMC warm reset"), 1);
-    assert_eq!(lines.resets(), 0, "a Warm Reset is not a Cold Reset");
+    assert_eq!(count(&lines, "IPMC warm reset"), 1);
+    assert_eq!(resets(&lines), 0, "a Warm Reset is not a Cold Reset");
     assert_eq!(emu.context().pending_reset, None);
     assert_eq!(WARM_CALLS.with(Cell::get), 1, "the extension is told once");
     // The link restarted; the rest is kept: payload power (no new power-on), FRU state, FRU
@@ -493,7 +486,7 @@ fn the_request_sequence_continues_across_a_cold_and_a_warm_reset() {
         assert_eq!(event_round(&mut emu, 2, 100, &mut lines), 1);
         exchange(&mut emu, &request(command, 3), 200, &mut lines);
         emu.poll(202, &mut lines);
-        assert_eq!(lines.count(applied), 1, "{applied}");
+        assert_eq!(count(&lines, applied), 1, "{applied}");
         assert_eq!(
             event_round(&mut emu, 1, 300, &mut lines),
             2,
@@ -526,7 +519,7 @@ fn the_payload_power_and_reset_hand_offs_are_served_by_the_owner() {
         "payload reset pulse {} ms",
         ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS
     );
-    assert_eq!(lines.count(&pulse), 1);
+    assert_eq!(count(&lines, &pulse), 1);
     assert!(!emu.context().pending_payload_reset);
 }
 
@@ -550,7 +543,7 @@ fn a_locked_extension_keeps_the_power_on_request_from_the_payload() {
     assert_eq!(emu.payload_power(), PowerState::Off);
     assert_eq!(
         lines
-            .0
+            .lines
             .iter()
             .filter(|l| l.starts_with("power on request refused: FRU is activation-locked"))
             .count(),
@@ -588,11 +581,13 @@ fn a_power_cycle_keeps_the_flash_log_and_a_default_lock_holds_the_payload_off() 
     // The settings change is still inside the persist delay; the emulator's power cycle takes the
     // save with it, and the new board starts with the stored settings.
     let flash = emu.flash();
-    let fresh = Emulator::new_with_flash(config, flash).expect("emulator");
+    let fresh = Emulator::new_with_flash(config, flash.clone()).expect("emulator");
     assert_eq!(fresh.context().nv_settings(), 0b01);
     assert_eq!(
         flash,
-        Emulator::new_with_flash(config, flash).unwrap().flash()
+        Emulator::new_with_flash(config, flash.clone())
+            .unwrap()
+            .flash()
     );
     // At Tier-3 the stored default-activation lock keeps the boot power-on request away from the
     // payload (the power-on hook of the extension); below it the payload is requested as ever.

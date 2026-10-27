@@ -51,22 +51,14 @@ def tag_counter_start():
 DEFS_PATH = defs.DEFAULT_PATH
 
 
-def define_from_header(name, default, path=DEFS_PATH):
-    """The value of `pub const name` in defs.rs, or `default` when the file or the name is absent."""
-    try:
-        return defs.read(path).get(name, default)
-    except OSError:
-        return default
-
-
 def baud_default(path=DEFS_PATH):
     """IPMC_APP_UART_BAUD of defs.rs, else BAUD_FALLBACK."""
-    return define_from_header("IPMC_APP_UART_BAUD", BAUD_FALLBACK, path)
+    return defs.get("IPMC_APP_UART_BAUD", BAUD_FALLBACK, path)
 
 
 def line_max(path=DEFS_PATH):
     """IPMC_APP_LINE_MAX of defs.rs (the longest request line), else LINE_MAX_FALLBACK."""
-    return define_from_header("IPMC_APP_LINE_MAX", LINE_MAX_FALLBACK, path)
+    return defs.get("IPMC_APP_LINE_MAX", LINE_MAX_FALLBACK, path)
 
 
 # The prompt used when defs.rs is not found.
@@ -76,4 +68,4 @@ PROMPT_FALLBACK = "APP> "
 def prompt(path=DEFS_PATH):
     """IPMC_APP_PROMPT of defs.rs (the prompt the IPMC prints and starts its echo line with),
     else PROMPT_FALLBACK."""
-    return define_from_header("IPMC_APP_PROMPT", PROMPT_FALLBACK, path)
+    return defs.get("IPMC_APP_PROMPT", PROMPT_FALLBACK, path)

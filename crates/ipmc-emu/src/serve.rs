@@ -5,13 +5,15 @@
 //! `Board` for it (a power cycle), read lines, step the board every POLL_PERIOD and write the
 //! frames the IPMC transmits. The line protocol is documented in the crate documentation.
 
-use crate::emulator::{EmuConfig, EmuError, Emulator, FlashCopy};
+use crate::emulator::{EmuConfig, EmuError, Emulator};
 use crate::replay::is_request_frame;
 use crate::trace::Hex;
 use crate::vectors::{self, VectorErrorKind, LINE_MAX_CHARS};
 use core::fmt::Arguments;
+use ipmc_core::clock::at_or_after;
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::Trace;
+use ipmc_fru::RamFlash;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -138,11 +140,11 @@ pub struct Board {
 impl Board {
     /// new -- a board in its start-up state for `config`, both buses up, its flash erased.
     pub fn new(config: &ServeConfig) -> Result<Board, EmuError> {
-        Board::new_with_flash(config, FlashCopy::erased())
+        Board::new_with_flash(config, RamFlash::new())
     }
 
     /// new_with_flash -- `new` for a board whose flash log holds `flash`.
-    pub fn new_with_flash(config: &ServeConfig, flash: FlashCopy) -> Result<Board, EmuError> {
+    pub fn new_with_flash(config: &ServeConfig, flash: RamFlash) -> Result<Board, EmuError> {
         Ok(Board {
             emu: Emulator::new_with_flash(config.emu, flash)?,
             down: [false; 2],
@@ -160,12 +162,12 @@ impl Board {
     }
 
     /// flash -- the flash log a power cycle keeps (`Emulator::flash`).
-    pub fn flash(&mut self) -> FlashCopy {
+    pub fn flash(&mut self) -> RamFlash {
         self.emu.flash()
     }
 
     fn is_down(&self, bus: Bus) -> bool {
-        self.down[bus_index(bus)]
+        self.down[bus.index()]
     }
 
     /// handle -- applies one message at `now_ms`. Returns false after `#quit`. `Reset` needs a
@@ -184,7 +186,7 @@ impl Board {
                 }
             }
             ClientMsg::BusDown(bus, down) => {
-                self.down[bus_index(bus)] = down;
+                self.down[bus.index()] = down;
                 self.trace.line(format_args!(
                     "IPMB-{} {}",
                     bus.name(),
@@ -215,7 +217,7 @@ impl Board {
         if self
             .inflight
             .as_ref()
-            .is_some_and(|tx| deadline_passed(now_ms, tx.done_ms))
+            .is_some_and(|tx| at_or_after(now_ms, tx.done_ms))
         {
             if let Some(tx) = self.inflight.take() {
                 let ok = !self.is_down(tx.bus);
@@ -229,20 +231,6 @@ impl Board {
         }
         out.append(&mut self.trace.lines);
     }
-}
-
-/// bus_index -- A is 0, B is 1.
-fn bus_index(bus: Bus) -> usize {
-    match bus {
-        Bus::A => 0,
-        Bus::B => 1,
-    }
-}
-
-/// deadline_passed -- `now_ms` is at or after `deadline_ms` on the wrapping 32-bit millisecond
-/// clock (half the range counts as "after").
-fn deadline_passed(now_ms: u32, deadline_ms: u32) -> bool {
-    now_ms.wrapping_sub(deadline_ms) < u32::MAX / 2
 }
 
 /// bind -- listens on 127.0.0.1:`port` (0 picks a free port).
@@ -586,13 +574,5 @@ mod tests {
             &mut out,
         );
         assert_eq!(now_ms, 1234);
-    }
-
-    #[test]
-    fn the_deadline_compare_wraps() {
-        assert!(deadline_passed(10, 10));
-        assert!(!deadline_passed(9, 10));
-        assert!(deadline_passed(2, u32::MAX - 1));
-        assert!(!deadline_passed(u32::MAX - 1, 2));
     }
 }

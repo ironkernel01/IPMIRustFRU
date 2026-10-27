@@ -9,6 +9,8 @@
 pub mod addr;
 /// analog -- the hook for the analog sensors a build adds (Full Sensor Records and readings).
 pub mod analog;
+/// clock -- comparisons on the wrapping millisecond clock.
+pub mod clock;
 /// cmd -- command handlers, one module per NetFn group.
 pub mod cmd;
 /// commands -- the command table, one row per command.

@@ -12,7 +12,7 @@ mod line;
 mod menu;
 mod syntax;
 
-pub use args::{optional, ArgError, Args};
+pub use args::{on_off_text, optional, ArgError, Args};
 pub use line::{report_line_error, EditEvent, LineEditor, MenuError};
 pub use menu::{Group, Menu, Outcome};
 pub use syntax::{eq_ignore_case, Kind, SynToken, TableError};

@@ -272,6 +272,15 @@ impl<const RX: usize, const TX: usize> Uart<RX, TX> {
         // program, and this module is its only user.
         unsafe { &*(self.base.get() as *const RegisterBlock) }
     }
+
+    /// resume_rx -- when the receive interrupt stalled on a full ring and the ring has room again,
+    /// clears the flag and re-enables RXNEIE.
+    fn resume_rx(&mut self) {
+        if self.rx_stalled.get() && self.rx.free() > 0 {
+            self.rx_stalled.set(false);
+            self.regs().cr1().modify(|_, w| w.rxneie().enabled());
+        }
+    }
 }
 
 impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
@@ -324,19 +333,13 @@ impl<const RX: usize, const TX: usize> Ops for Uart<RX, TX> {
 
     fn getc(&mut self) -> Option<u8> {
         let byte = self.rx.pop();
-        if self.rx_stalled.get() && self.rx.free() > 0 {
-            self.rx_stalled.set(false);
-            self.regs().cr1().modify(|_, w| w.rxneie().enabled());
-        }
+        self.resume_rx();
         byte
     }
 
     fn discard_rx(&mut self) {
         while self.rx.pop().is_some() {}
-        if self.rx_stalled.get() {
-            self.rx_stalled.set(false);
-            self.regs().cr1().modify(|_, w| w.rxneie().enabled());
-        }
+        self.resume_rx();
     }
 
     fn put(&mut self, bytes: &[u8]) -> usize {
@@ -413,6 +416,17 @@ pub struct Counters {
     pub line_errors: u32,
     /// Trace lines dropped because the TX ring had no room for the whole line.
     pub tx_lines_dropped: u32,
+}
+
+impl Counters {
+    /// lost -- bytes the port has lost or received damaged since reset: overrun, RX ring overflow
+    /// and framing, noise or parity errors (wrapping sum). A damaged byte cannot be trusted, so a
+    /// move of this count means the line in progress is unreliable.
+    pub fn lost(&self) -> u32 {
+        self.overrun
+            .wrapping_add(self.rx_overflow)
+            .wrapping_add(self.line_errors)
+    }
 }
 
 /// counters -- returns the failure counts of `port` since reset.

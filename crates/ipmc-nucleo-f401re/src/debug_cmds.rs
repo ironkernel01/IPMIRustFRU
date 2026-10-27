@@ -1,5 +1,6 @@
-// debug_cmds.rs - the DEBUG console group: STATUS, EVENTS, IPMI, INJECT, CACHE and BOOTLOADER (local
-// IPMI requests, the duplicate cache and the restart into the bootloader).
+// debug_cmds.rs - the DEBUG console group: STATUS, EVENTS, IPMI, INJECT, CACHE, BOOTLOADER and
+// WATCHDOG (local IPMI requests, the duplicate cache, the restart into the bootloader and the
+// watchdog tests).
 //
 // The state lives in ipmb_link.rs (the link and the dispatch context); these handlers switch it,
 // print it and run requests through it. The logging handlers (LOG, DUMP, CLEAR, TRACE) are in
@@ -21,8 +22,8 @@ use ipmc_log::{LogLine, SwitchLines};
 use ipmc_menu::{eq_ignore_case, optional, Args, CmdError, CmdResult};
 
 use crate::bsp::systick;
-use crate::bsp::uart;
-use crate::console::Context;
+use crate::bsp::uart::{self, Port};
+use crate::console::{print_watchdog, Context};
 use crate::ipmb_link::IpmbLink;
 
 /// CMD_SET_EVENT_RECEIVER -- Set Event Receiver, S/E NetFn (IPMI v2.0 section 29.1).
@@ -410,4 +411,57 @@ Send DEBUG BOOTLOADER CONFIRM to restart
     }
     ctx.ipmb.request_bootloader(Interface::Console);
     Ok(())
+}
+
+// ---- WATCHDOG ----
+
+/// cmd_debug_watchdog -- `DEBUG WATCHDOG {HANG|PANIC} {CONFIRM}`. No argument prints the
+/// `Watchdog:` line (as `SYS STATUS`). `HANG CONFIRM` spins with interrupts on and feeds nothing,
+/// and `PANIC CONFIRM` panics; the watchdog resets the processor in both, and the next start
+/// prints the reset cause (and the kept fault for a panic). Without `CONFIRM` the command only
+/// says what it does. A watchdog that is not running refuses both tests (a hang would never end).
+/// Argument words are any letter case.
+pub fn cmd_debug_watchdog(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+    let Some(test) = optional(args.text_at(0))? else {
+        print_watchdog(ctx);
+        return Ok(());
+    };
+    let (hang, what) = if eq_ignore_case(test, "HANG") {
+        (true, "hangs the main loop")
+    } else if eq_ignore_case(test, "PANIC") {
+        (false, "panics")
+    } else {
+        return Err(reported(format_args!("test is HANG or PANIC")));
+    };
+    let confirmed = match optional(args.text_at(1))? {
+        None => false,
+        Some(word) if eq_ignore_case(word, "CONFIRM") => true,
+        Some(_) => return Err(reported(format_args!("argument is CONFIRM"))),
+    };
+    let Some(ms) = ctx.watchdog_ms else {
+        return Err(reported(format_args!("the watchdog is not running")));
+    };
+    let name = if hang { "HANG" } else { "PANIC" };
+    if !confirmed {
+        out!(
+            "DEBUG WATCHDOG {} {}, then the watchdog resets the board\n",
+            name,
+            what
+        );
+        out!("Send DEBUG WATCHDOG {} CONFIRM to run it\n", name);
+        return Ok(());
+    }
+    if hang {
+        out!("Hanging: the watchdog resets the board within {} ms\n", ms);
+        uart::flush(Port::Console);
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+    out!(
+        "Panicking: the watchdog resets the board within {} ms\n",
+        ms
+    );
+    uart::flush(Port::Console);
+    panic!("DEBUG WATCHDOG PANIC")
 }

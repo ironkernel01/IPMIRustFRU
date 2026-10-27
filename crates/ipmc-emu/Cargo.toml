@@ -7,6 +7,10 @@ edition = "2021"
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-core = { path = "../ipmc-core" }
 ipmc-ext = { path = "../ipmc-ext" }
-ipmc-fru = { path = "../ipmc-fru" }
+ipmc-fru = { path = "../ipmc-fru", features = ["host"] }
 ipmc-sensors = { path = "../ipmc-sensors" }
 ipmc-wire = { path = "../ipmc-wire" }
+
+[dev-dependencies]
+# RecordingTrace, the trace collector of the tests.
+ipmc-core = { path = "../ipmc-core", features = ["recording"] }

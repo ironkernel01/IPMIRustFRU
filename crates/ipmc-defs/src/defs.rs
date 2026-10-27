@@ -272,6 +272,12 @@ pub const IPMC_LED_RATE_MIN_CHZ: u32 = 1;
 pub const IPMC_LED_RATE_MAX_CHZ: u32 = 5000;
 /// LED rate that signals a start-up failure the console cannot report, centihertz (5 Hz)
 pub const IPMC_FAULT_BLINK_CHZ: u32 = 500;
+/// independent watchdog on (true) or off (false); on, the main loop feeds it once per pass, and a
+/// hang, a panic or a processor fault resets the processor within IPMC_WATCHDOG_MS
+pub const IPMC_WATCHDOG_ENABLE: bool = true;
+/// watchdog period in ms at the board's nominal watchdog clock (1000..=16000); the F401 guard
+/// requires the shortest real period (fastest LSI) to exceed twice the 500 ms FRU sector erase
+pub const IPMC_WATCHDOG_MS: u32 = 4000;
 /// LED heartbeat rate, centihertz (1 Hz): one pulse per period
 pub const IPMC_LED_HEARTBEAT_CHZ: u32 = 100;
 /// LED heartbeat pulse width, milliseconds on at the start of each period; must be shorter than the

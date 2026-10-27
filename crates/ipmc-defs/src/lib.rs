@@ -378,6 +378,13 @@ const _: () = assert!(
     IPMC_FAULT_BLINK_CHZ >= IPMC_LED_RATE_MIN_CHZ && IPMC_FAULT_BLINK_CHZ <= IPMC_LED_RATE_MAX_CHZ,
     "IPMC_FAULT_BLINK_CHZ must lie within IPMC_LED_RATE_MIN_CHZ..=IPMC_LED_RATE_MAX_CHZ"
 );
+// The independent watchdog counts a 12-bit reload at a prescaler of at most /256: 16 s at the
+// nominal 32 kHz is the longest period one setting reaches with margin; the F401 crate adds the
+// erase-stall guard (bsp/watchdog.rs).
+const _: () = assert!(
+    IPMC_WATCHDOG_MS >= 1_000 && IPMC_WATCHDOG_MS <= 16_000,
+    "IPMC_WATCHDOG_MS must be 1000..=16000"
+);
 // The heartbeat pulse is a fraction of the period 100 000 / IPMC_LED_HEARTBEAT_CHZ ms, so the
 // pulse is shorter than the period when on_ms x chz < 100 000 (u64 keeps the product exact).
 const _: () = assert!(

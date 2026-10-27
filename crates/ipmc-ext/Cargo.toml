@@ -12,3 +12,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tier23)"] }
 ipmc-core = { path = "../ipmc-core" }
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-wire = { path = "../ipmc-wire" }
+
+[dev-dependencies]
+# RecordingTrace, the trace collector of the Tier-2/3 tests (mounted in this crate).
+ipmc-core = { path = "../ipmc-core", features = ["recording"] }

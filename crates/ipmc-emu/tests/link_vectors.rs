@@ -7,7 +7,7 @@ use ipmc_core::addr;
 use ipmc_core::dispatch::Context;
 use ipmc_core::ext::NoExtension;
 use ipmc_core::ipmb;
-use ipmc_core::link::{BusMode, IpmbBPowerUp, Link, LinkConfig, TxPolicy};
+use ipmc_core::link::{BusMode, Link, LinkConfig, TxPolicy};
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::NoTrace;
 
@@ -21,15 +21,7 @@ fn ctx() -> Context {
 }
 
 fn link(policy: TxPolicy) -> Link {
-    let mut link = Link::new(
-        LinkConfig {
-            b_fitted: true,
-            tx_policy: policy,
-            b_power_up: IpmbBPowerUp::Strict,
-            requests_allowed: false,
-        },
-        &addr::resolve(0x7F),
-    );
+    let mut link = Link::new(LinkConfig::bench(policy, false), &addr::resolve(0x7F));
     link.set_ipmb_state(None, Some(BusMode::LocalControl))
         .expect("enable B");
     link

@@ -1,38 +1,27 @@
-// fault.rs - HardFault and DefaultHandler (unhandled interrupt) handlers.
+// fault.rs - HardFault, DefaultHandler (unhandled interrupt) and panic handlers.
 //
 // Fail-stop policy: a fault leaves the device in an unknown state, so each handler records what
-// happened in a static record (readable with a debugger), prints one line on the console when
-// the UART is up, then parks in `wfi` forever. There is no reset: a reset would hide the fault
-// from the bench and could restart a bus transaction mid-frame. The same park loop serves the
-// initialisation failures in main.rs.
+// happened in the kept fault record (bsp/fault_record.rs, NOINIT, readable with a debugger),
+// prints one line on the console when the UART is up, then parks in `wfi` forever. In the runtime
+// with the watchdog started (bsp/watchdog.rs) the watchdog then resets the processor and the next
+// start reports the kept record; in the bootloader (no watchdog) and before the runtime starts the
+// watchdog the processor stays parked. The same park loop serves the initialisation failures in
+// main.rs.
 // The console print is best effort and bounded by the UART's per-message transmit timeout. It
 // breaks the "no logging from an interrupt handler" rule on purpose: nothing else runs after it.
 // cortex-m-rt 0.7.7 requires `unsafe fn` for HardFault and accepts it for DefaultHandler; both
-// are defined as `unsafe fn` here.
+// are defined as `unsafe fn` here. The panic handler prints the source location only (no message
+// formatting: no `core::fmt` is reachable from this file).
 
-use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::{exception, ExceptionFrame};
 
 use ipmc_sensors::drivers::stm32f401::ports::PortError;
 
 use ipmc_boot::text::{self, TextOut};
 
+use crate::bsp::fault_record::{self, Fault};
 use crate::bsp::uart::{Port, PortText};
 use crate::bsp::{led, uart};
-
-/// Fault kind codes in `FAULT_KIND`.
-const KIND_NONE: u32 = 0;
-const KIND_HARDFAULT: u32 = 1;
-const KIND_UNHANDLED_IRQ: u32 = 2;
-
-// Written once by the fault handler (exception context), never read by firmware; a debugger reads
-// them. `#[used]` keeps them in the image.
-#[used]
-static FAULT_KIND: AtomicU32 = AtomicU32::new(KIND_NONE);
-/// Stacked PC for a HardFault, the IRQ number (sign-extended; negative = system exception) for
-/// an unhandled interrupt.
-#[used]
-static FAULT_VALUE: AtomicU32 = AtomicU32::new(0);
 
 /// park -- the terminal fail-stop loop.
 pub fn park() -> ! {
@@ -111,30 +100,52 @@ fn report_claim(error: PortError) {
     uart::flush(Port::Console);
 }
 
-/// record_print_park -- the shared body of both handlers: records `kind` and `value` in the
-/// static record, prints one console line when the UART is up, then parks. `value` is the
-/// stacked PC for KIND_HARDFAULT and the sign-extended IRQ number for KIND_UNHANDLED_IRQ.
-/// A fault that fires while the console state is borrowed (inside a UART call) prints nothing:
-/// the state cannot be taken inside the fault (`with_port` returns None).
-fn record_print_park(kind: u32, value: u32) -> ! {
-    FAULT_VALUE.store(value, Ordering::Relaxed);
-    FAULT_KIND.store(kind, Ordering::Relaxed);
+/// record_print_park -- the shared body of the handlers: stores `fault` in the kept record,
+/// prints one console line when the UART is up (`file` is the source file a panic names; the
+/// record keeps the line and column), then parks (the watchdog, when started, resets
+/// the processor). A fault that fires while the console state is borrowed (inside a UART call)
+/// prints nothing: the state cannot be taken inside the fault (`with_port` returns None).
+fn record_print_park(fault: Fault, file: &str) -> ! {
+    fault_record::write(fault);
     if uart::is_up(Port::Console) {
-        if kind == KIND_HARDFAULT {
-            say(&[
-                Piece::Text("\r\nHARDFAULT pc=0x"),
-                Piece::Hex8(value),
-                Piece::Text("\r\n"),
-            ]);
-        } else {
+        match fault {
+            Fault::HardFault { pc } => say(&[
+                Piece::Text(
+                    "
+HARDFAULT pc=0x",
+                ),
+                Piece::Hex8(pc),
+                Piece::Text(
+                    "
+",
+                ),
+            ]),
             // The IRQ number as a signed decimal: system exceptions are negative.
-            let irq = value as i32;
-            say(&[
-                Piece::Text("\r\nUNHANDLED IRQ "),
+            Fault::UnhandledIrq { irq } => say(&[
+                Piece::Text(
+                    "
+UNHANDLED IRQ ",
+                ),
                 Piece::Text(if irq < 0 { "-" } else { "" }),
                 Piece::Dec(irq.unsigned_abs()),
-                Piece::Text("\r\n"),
-            ]);
+                Piece::Text(
+                    "
+",
+                ),
+            ]),
+            Fault::Panic { line, .. } => say(&[
+                Piece::Text(
+                    "
+PANIC ",
+                ),
+                Piece::Text(file),
+                Piece::Char(':'),
+                Piece::Dec(line),
+                Piece::Text(
+                    "
+",
+                ),
+            ]),
         }
         // The UART interrupt cannot run here (this handler outranks it); `flush` polls the TX
         // ring out.
@@ -145,11 +156,26 @@ fn record_print_park(kind: u32, value: u32) -> ! {
 
 #[exception]
 unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
-    record_print_park(KIND_HARDFAULT, ef.pc())
+    record_print_park(Fault::HardFault { pc: ef.pc() }, "")
 }
 
 #[exception]
 unsafe fn DefaultHandler(irqn: i16) {
     // Sign-extension keeps negative system-exception numbers recognisable in the record.
-    record_print_park(KIND_UNHANDLED_IRQ, i32::from(irqn) as u32)
+    record_print_park(
+        Fault::UnhandledIrq {
+            irq: i32::from(irqn),
+        },
+        "",
+    )
+}
+
+/// panic -- the panic handler of both images: the same fail-stop path with the source file, line
+/// and column (empty and 0 when the location is unknown).
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    let (file, line, column) = info.location().map_or(("", 0, 0), |location| {
+        (location.file(), location.line(), location.column())
+    });
+    record_print_park(Fault::Panic { line, column }, file)
 }

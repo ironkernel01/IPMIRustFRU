@@ -16,8 +16,8 @@ use ipmc_core::link::{BusMode, FrameDrop, IpmbBPowerUp, Link, LinkConfig, LinkEr
 use ipmc_core::queue::Bus;
 use ipmc_core::reset_gate::ResetGate;
 use ipmc_core::trace::Trace;
-use ipmc_fru::records::SIZE as FRU_SIZE;
-use ipmc_fru::FruStore;
+use ipmc_fru::persist::Persist;
+use ipmc_fru::{FruStore, RamFlash};
 use ipmc_sensors::analog::BOARD_ANALOG;
 use ipmc_sensors::board_sensors::sim_analog;
 use ipmc_sensors::drivers::sim::{SimInputs, SimPower};
@@ -133,33 +133,6 @@ impl PowerSwitch for NoHardware {
 /// FRU_PERSIST -- Write FRU Data is saved to the flash log (defs.rs IPMC_FRU_PERSIST).
 const FRU_PERSIST: bool = ipmc_defs::IPMC_FRU_PERSIST;
 
-/// FlashCopy -- what the FRU flash log holds: the FRU image and the Tier-3 settings byte saved
-/// with it (`FruStore::nv_settings`). A reset restores the FRU store from it, and a power cycle
-/// of the emulator (`Emulator::flash`, `Emulator::new_with_flash`) carries it to the new board:
-/// flash keeps its content without power.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FlashCopy {
-    fru: [u8; FRU_SIZE],
-    nv_settings: u8,
-}
-
-impl FlashCopy {
-    /// erased -- the log of a board that never saved: the built FRU image and settings 00h.
-    pub fn erased() -> FlashCopy {
-        FlashCopy {
-            fru: *FruStore::new().image(),
-            nv_settings: 0,
-        }
-    }
-
-    /// stored_fru -- the FRU store a reset or start-up restores from this copy.
-    fn stored_fru(&self) -> FruStore {
-        let mut stored = FruStore::from_image(self.fru);
-        stored.load_nv_settings(self.nv_settings);
-        stored
-    }
-}
-
 /// Board -- the sensor and power side of the board, rebuilt by a processor reset as at a boot.
 struct Board {
     monitor: Monitor,
@@ -225,11 +198,12 @@ pub struct Emulator {
     make_ext: ExtensionFactory,
     /// The one decision when a pending cold reset runs (`ResetGate`, as in the firmware).
     reset_gate: ResetGate,
-    /// The flash log: what a reset restores. Updated where the firmware saves
-    /// (`service_fru_save`).
-    flash: FlashCopy,
-    /// Time an accepted Write FRU Data was last seen unsaved, None while the store is saved.
-    fru_unsaved_since: Option<u32>,
+    /// The flash log sector: what a reset restores, in RAM (`ipmc_fru::RamFlash`). It keeps its
+    /// content across a power cycle of the emulator (`Emulator::flash`, `new_with_flash`).
+    flash: RamFlash,
+    /// The log state and the save rule, the one the firmware runs (`Persist`, saved by
+    /// `service_fru_save` with the arguments `IpmbLink::service_fru_log` passes).
+    persist: Persist,
 }
 
 impl Emulator {
@@ -239,13 +213,14 @@ impl Emulator {
     /// Err(BusNotFitted) when IPMB-B is asked to start enabled but is not fitted;
     /// Err(PowerOnRefused) when the power controller refuses the request.
     pub fn new(config: EmuConfig) -> Result<Emulator, EmuError> {
-        Emulator::new_with_flash(config, FlashCopy::erased())
+        Emulator::new_with_flash(config, RamFlash::new())
     }
 
     /// new_with_flash -- `new` for a board whose flash log holds `flash`: the FRU store and the
-    /// non-volatile settings are restored from it before the payload power is decided, as at a
-    /// boot of the firmware (the power-on hook sees the stored default-activation lock).
-    pub fn new_with_flash(config: EmuConfig, flash: FlashCopy) -> Result<Emulator, EmuError> {
+    /// non-volatile settings are restored from it (`Persist::boot`) before the payload power is
+    /// decided, as at a boot of the firmware (the power-on hook sees the stored
+    /// default-activation lock).
+    pub fn new_with_flash(config: EmuConfig, mut flash: RamFlash) -> Result<Emulator, EmuError> {
         let resolved = addr::resolve(config.strap);
         let mut link = Link::new(
             LinkConfig {
@@ -258,7 +233,8 @@ impl Emulator {
         );
         Self::enable_b_if_configured(&config, &mut link)?;
         let mut ctx = Context::with_analog(resolved, &BOARD_ANALOG);
-        ctx.set_fru(flash.stored_fru());
+        let (persist, store) = boot_fru(&mut flash, ctx.addr.nvmro_asserted);
+        ctx.set_fru(store);
         let ext = build_active();
         let board = Board::boot(&config, 0, ext::check_power_on(&ctx, ext.as_ref()))?;
         Ok(Emulator {
@@ -271,31 +247,33 @@ impl Emulator {
             make_ext: build_active,
             reset_gate: ResetGate::new(),
             flash,
-            fru_unsaved_since: None,
+            persist,
         })
     }
 
     /// flash -- the flash log as a power cycle leaves it. A save that is pending (an accepted
     /// Write FRU Data or settings change inside IPMC_FRU_PERSIST_DELAY_MS) is completed first:
     /// the emulator's power cycle is a clean one, taken when the board is quiet.
-    pub fn flash(&mut self) -> FlashCopy {
-        if FRU_PERSIST
-            && (self.ctx.fru.take_dirty() || self.fru_unsaved_since.is_some())
-            && !self.ctx.addr.nvmro_asserted
-        {
-            self.save_to_flash();
+    pub fn flash(&mut self) -> RamFlash {
+        if FRU_PERSIST {
+            self.save_fru(self.flash.now, 0);
         }
-        self.flash
+        self.flash.clone()
     }
 
-    /// save_to_flash -- the flash log takes the FRU image and the settings byte; nothing is
-    /// unsaved afterwards.
-    fn save_to_flash(&mut self) {
-        self.flash = FlashCopy {
-            fru: *self.ctx.fru.image(),
-            nv_settings: self.ctx.fru.nv_settings(),
-        };
-        self.fru_unsaved_since = None;
+    /// save_fru -- the firmware's call of `Persist::poll` (`IpmbLink::service_fru_log`) on the
+    /// RAM flash at `now_ms` with `delay_ms`: the live NVMRO level, the bus always quiet for an
+    /// erase (`erase_ok`). The outcome is dropped: the RAM flash does not fail.
+    fn save_fru(&mut self, now_ms: u32, delay_ms: u32) {
+        self.flash.now = now_ms;
+        let _ = self.persist.poll(
+            &mut self.flash,
+            &mut self.ctx.fru,
+            now_ms,
+            self.ctx.addr.nvmro_asserted,
+            delay_ms,
+            true,
+        );
     }
 
     /// enable_b_if_configured -- IPMB-B enabled when `b_enabled_at_start` (what the Chassis
@@ -390,11 +368,11 @@ impl Emulator {
     /// power-on check, a refusal is traced; an applied request is followed by a sample fed at once), and a payload reset request is the pulse on
     /// PAYLOAD_RST_OUT_N, modelled by one trace line `payload reset pulse <ms> ms`.
     fn service_hand_offs(&mut self, now_ms: u32, trace: &mut dyn Trace) {
-        if let Some(request) = self.ctx.pending_power.take() {
-            let power_on_check = ext::check_power_on(&self.ctx, self.ext.as_ref());
+        let hand_offs = self.ctx.take_hand_offs(self.ext.as_ref());
+        if let Some(request) = hand_offs.power {
             let done = self.board.monitor.apply_power_request(
                 request,
-                power_on_check,
+                hand_offs.power_on_check,
                 now_ms,
                 &mut self.board.io,
                 trace,
@@ -411,7 +389,7 @@ impl Emulator {
                 self.feed_snapshot(now_ms, trace);
             }
         }
-        if core::mem::take(&mut self.ctx.pending_payload_reset) {
+        if hand_offs.payload_reset {
             trace.line(format_args!(
                 "payload reset pulse {} ms",
                 ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS
@@ -419,31 +397,27 @@ impl Emulator {
         }
     }
 
-    /// service_fru_save -- the firmware save step (`IpmbLink::service_fru_log`) on the flash
-    /// copy: an accepted Write FRU Data is saved IPMC_FRU_PERSIST_DELAY_MS after it was seen, and
-    /// at once while a cold reset is pending; nothing is saved while NVMRO is asserted or the
-    /// log is off (IPMC_FRU_PERSIST false).
+    /// service_fru_save -- the firmware save step (`IpmbLink::service_fru_log`) on the RAM flash:
+    /// `Persist::poll` with IPMC_FRU_PERSIST_DELAY_MS, or delay 0 while a cold reset is pending
+    /// (urgent); nothing is saved while NVMRO is asserted or the log is off (IPMC_FRU_PERSIST
+    /// false).
     fn service_fru_save(&mut self, now_ms: u32) {
         if !FRU_PERSIST {
             return;
         }
-        if self.ctx.fru.take_dirty() {
-            self.fru_unsaved_since = Some(now_ms);
-        }
-        let Some(since) = self.fru_unsaved_since else {
-            return;
-        };
         let urgent = self.ctx.pending_reset.is_some();
-        let due = now_ms.wrapping_sub(since) >= ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS;
-        if (urgent || due) && !self.ctx.addr.nvmro_asserted {
-            self.save_to_flash();
-        }
+        let delay_ms = if urgent {
+            0
+        } else {
+            ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS
+        };
+        self.save_fru(now_ms, delay_ms);
     }
 
-    /// fru_unsaved -- an accepted Write FRU Data is not in the flash copy yet; false while the log
-    /// is off.
+    /// fru_unsaved -- an accepted Write FRU Data is not in the flash yet (the log's pending save
+    /// or the store's dirty mark, as `IpmbLink::fru_unsaved`); false while the log is off.
     fn fru_unsaved(&self) -> bool {
-        FRU_PERSIST && (self.fru_unsaved_since.is_some() || self.ctx.fru.is_dirty())
+        FRU_PERSIST && (self.persist.pending() || self.ctx.fru.is_dirty())
     }
 
     /// service_reset -- the emulator's restart: when `ResetGate` (the one decision the firmware
@@ -467,20 +441,29 @@ impl Emulator {
         {
             return;
         }
-        let Ok(link) = self.restart_link(now_ms) else {
-            return; // `new` built the same state from the same config
-        };
-        self.reset_gate = ResetGate::new();
         match request {
             Some(ResetRequest::Warm) => {
-                self.ctx.warm_reset(link.view());
-                self.link = link;
-                self.ext.warm_reset();
+                let config = self.config;
+                self.link.warm_reset(
+                    &mut self.ctx,
+                    self.ext.as_mut(),
+                    &mut self.reset_gate,
+                    now_ms,
+                    // Cannot fail: `new` built the same state from the same config.
+                    |_old, new| {
+                        let _ = Self::enable_b_if_configured(&config, new);
+                    },
+                );
                 trace.line(format_args!("IPMC warm reset"));
             }
             Some(ResetRequest::Cold) => {
+                let Ok(link) = self.restart_link(now_ms) else {
+                    return; // `new` built the same state from the same config
+                };
+                self.reset_gate = ResetGate::new();
                 let mut ctx = Context::with_analog(addr::resolve(self.config.strap), &BOARD_ANALOG);
-                ctx.set_fru(self.flash.stored_fru());
+                let (persist, store) = boot_fru(&mut self.flash, ctx.addr.nvmro_asserted);
+                ctx.set_fru(store);
                 let ext = (self.make_ext)();
                 let power_on_check = ext::check_power_on(&ctx, ext.as_ref());
                 let Ok(board) = Board::boot(&self.config, now_ms, power_on_check) else {
@@ -490,7 +473,7 @@ impl Emulator {
                 self.ctx = ctx;
                 self.board = board;
                 self.ext = ext;
-                self.fru_unsaved_since = None;
+                self.persist = persist;
                 trace.line(format_args!("IPMC cold reset"));
             }
             None => {}
@@ -531,6 +514,18 @@ impl Emulator {
     pub fn context(&self) -> &Context {
         &self.ctx
     }
+}
+
+/// boot_fru -- the FRU store at a boot: `Persist::boot` over `flash` (the newest valid record,
+/// image and settings), the built store when the log is off, holds no record or fails.
+fn boot_fru(flash: &mut RamFlash, nvmro_asserted: bool) -> (Persist, FruStore) {
+    let mut persist = Persist::new();
+    if FRU_PERSIST {
+        if let Ok((Some(store), _)) = persist.boot(flash, nvmro_asserted) {
+            return (persist, store);
+        }
+    }
+    (persist, FruStore::new())
 }
 
 /// pgood_follows_pwr_en -- the level the emulated PGOOD input takes while PWR_EN is `pwr_en`:

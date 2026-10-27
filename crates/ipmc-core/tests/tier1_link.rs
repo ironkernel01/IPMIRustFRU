@@ -88,9 +88,7 @@ fn a_refused_set_ipmb_state_leaves_the_buses_alone() {
     bench.link = Link::new(
         LinkConfig {
             b_fitted: false,
-            tx_policy: TxPolicy::Alternate,
-            b_power_up: IpmbBPowerUp::Strict,
-            requests_allowed: false,
+            ..LinkConfig::bench(TxPolicy::Alternate, false)
         },
         &addr::resolve(0x7F),
     );
@@ -153,10 +151,8 @@ fn rig_with_power_up(b_power_up: IpmbBPowerUp) -> Rig {
     let mut rig = Rig::new();
     rig.link = Link::new(
         LinkConfig {
-            b_fitted: true,
-            tx_policy: TxPolicy::Alternate,
             b_power_up,
-            requests_allowed: false,
+            ..LinkConfig::bench(TxPolicy::Alternate, false)
         },
         &addr::resolve(0x7F),
     );

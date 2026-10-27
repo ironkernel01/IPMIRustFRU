@@ -16,8 +16,6 @@
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use panic_halt as _;
-
 mod console;
 mod countdown;
 mod flash_image;

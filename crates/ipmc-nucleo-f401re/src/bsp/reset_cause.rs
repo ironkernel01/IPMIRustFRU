@@ -5,11 +5,11 @@
 // specific cause is chosen first and the reset pin is reported last.
 
 use core::mem::MaybeUninit;
-use core::ptr::{addr_of_mut, write_volatile};
+use core::ptr::addr_of_mut;
 
 use stm32f4::stm32f401::RCC;
 
-use crate::bsp::raw::read_raw_word;
+use crate::bsp::kept_words;
 
 /// ResetCause -- why the MCU last reset.
 #[derive(Clone, Copy)]
@@ -56,11 +56,6 @@ const KEPT_MAGIC: u32 = 0x5EC0_5EC0;
 /// KEPT_WORDS -- words of `KEPT`: the next rqSeq, the low and high half of the mask of rqSeq
 /// values sent inside T9, and the check word.
 const KEPT_WORDS: usize = 4;
-/// Word positions in `KEPT`.
-const KEPT_SEQ: usize = 0;
-const KEPT_RECENT_LO: usize = 1;
-const KEPT_RECENT_HI: usize = 2;
-const KEPT_CHECK: usize = 3;
 
 /// KEPT -- the request sequence state across a software reset (layout in `KEPT_WORDS`). The
 /// `.uninit` section (cortex-m-rt) is not touched by start-up code, so the words keep their value
@@ -69,9 +64,9 @@ const KEPT_CHECK: usize = 3;
 #[link_section = ".uninit.KEPT_SEQUENCE"]
 static mut KEPT: MaybeUninit<[u32; KEPT_WORDS]> = MaybeUninit::uninit();
 
-/// kept_check -- the check word of the three data words of `KEPT` (`ipmc_wire::check_word`).
-fn kept_check(seq: u32, lo: u32, hi: u32) -> u32 {
-    ipmc_wire::check_word([seq, lo, hi], KEPT_MAGIC)
+/// kept_base -- the address of the first word of `KEPT`.
+fn kept_base() -> *mut u32 {
+    addr_of_mut!(KEPT).cast::<u32>()
 }
 
 /// keep_sequence -- stores the next request sequence number (6 bits) and the mask of the rqSeq
@@ -81,16 +76,9 @@ pub fn keep_sequence(next_seq: u8, recent: u64) {
     let seq = u32::from(next_seq);
     // Truncation intended: the two 32-bit halves of the mask.
     let (lo, hi) = (recent as u32, (recent >> 32) as u32);
-    let words = addr_of_mut!(KEPT).cast::<u32>();
     // SAFETY: `KEPT` is a static of `KEPT_WORDS` words owned by this module; the main loop is the
-    // only caller and no interrupt handler touches it. Volatile writes keep the compiler from
-    // dropping them before the reset.
-    unsafe {
-        write_volatile(words.add(KEPT_SEQ), seq);
-        write_volatile(words.add(KEPT_RECENT_LO), lo);
-        write_volatile(words.add(KEPT_RECENT_HI), hi);
-        write_volatile(words.add(KEPT_CHECK), kept_check(seq, lo, hi));
-    }
+    // only caller and no interrupt handler touches it.
+    unsafe { kept_words::store_checked(kept_base(), [seq, lo, hi], KEPT_MAGIC) };
 }
 
 /// kept_sequence -- the next request sequence number and the mask of recent rqSeq values that
@@ -98,22 +86,13 @@ pub fn keep_sequence(next_seq: u8, recent: u64) {
 /// check word does not match. Clears the check word, so a later reset that did not store a value
 /// reads (0, 0). Call it once at start-up with the cause `take` returned.
 pub fn kept_sequence(cause: ResetCause) -> (u8, u64) {
-    let words = addr_of_mut!(KEPT).cast::<u32>();
-    let word = |index: usize| read_raw_word(words.wrapping_add(index));
-    let (seq, lo, hi, check) = (
-        word(KEPT_SEQ),
-        word(KEPT_RECENT_LO),
-        word(KEPT_RECENT_HI),
-        word(KEPT_CHECK),
-    );
-    // SAFETY: as in `keep_sequence`; the write clears the check word.
-    unsafe { write_volatile(words.add(KEPT_CHECK), 0) };
-    match u8::try_from(seq) {
-        Ok(next_seq)
-            if matches!(cause, ResetCause::Software) && check == kept_check(seq, lo, hi) =>
-        {
-            (next_seq, u64::from(lo) | u64::from(hi) << 32)
-        }
+    // SAFETY: as in `keep_sequence`; `take_checked` clears the check word.
+    let kept = unsafe { kept_words::take_checked(kept_base(), KEPT_MAGIC) };
+    match kept {
+        Some([seq, lo, hi]) if matches!(cause, ResetCause::Software) => match u8::try_from(seq) {
+            Ok(next_seq) => (next_seq, u64::from(lo) | u64::from(hi) << 32),
+            Err(_) => (0, 0),
+        },
         _ => (0, 0),
     }
 }

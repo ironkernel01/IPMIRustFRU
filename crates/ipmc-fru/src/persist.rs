@@ -76,7 +76,7 @@ pub const NV_SETTINGS_MASK: u8 = 0b11;
 /// SEQ_MAX -- the highest sequence number a record carries; FFFFFFFFh reads as erased flash.
 const SEQ_MAX: u32 = u32::MAX - 1;
 /// ERASED -- the value of an erased flash byte.
-const ERASED: u8 = 0xFF;
+pub(crate) const ERASED: u8 = 0xFF;
 
 // Record field offsets (the table in the file header).
 const OFF_COMMIT: usize = 0;

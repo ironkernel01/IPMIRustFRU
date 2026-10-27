@@ -158,6 +158,15 @@ fn parse_i32(text: &str) -> Result<i32, ArgError> {
     }
 }
 
+/// on_off_text -- "on" or "off", the words `Args::on_off_at` parses.
+pub const fn on_off_text(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

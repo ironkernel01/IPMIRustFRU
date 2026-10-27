@@ -14,7 +14,7 @@ use crate::analog::{AnalogSensors, NO_ANALOG};
 use crate::commands::{self, Command, COMMANDS};
 use crate::event_enable::EventEnables;
 use crate::ext::{Extension, NoExtension};
-use crate::fru_state::{FruMachine, InitialChecks, Inputs, Transition};
+use crate::fru_state::{FruMachine, InitialChecks, Inputs, PowerOnRefused, Transition};
 use crate::ipmb::{self, Frame, IpmbError, NETFN_GROUP_EXT};
 use crate::link::{BusPair, LinkConfig, LinkView, PendingIpmbState};
 use crate::queue::{Bus, EgressQueue, QueueError};
@@ -92,6 +92,16 @@ pub enum ResetRequest {
     /// to 100 kHz (VITA 46.11 Rules 4.1.9-2 and 4.1.1-4.3). `Context::warm_reset` is the one function that clears
     /// the Context part.
     Warm,
+}
+
+/// HandOffs -- what `Context::take_hand_offs` returns.
+pub struct HandOffs {
+    /// A payload power request of a handler.
+    pub power: Option<PowerRequest>,
+    /// A handler asked for a payload reset pulse.
+    pub payload_reset: bool,
+    /// The power-on check at that moment (`ext::check_power_on`).
+    pub power_on_check: Result<(), PowerOnRefused>,
 }
 
 /// PowerRequest -- a payload power change a handler asks for through `Context::pending_power`
@@ -228,6 +238,18 @@ impl Context {
             deactivation_requested: false,
             pending_payload_reset: false,
             payload_mode: PayloadMode::POWER_UP,
+        }
+    }
+
+    /// take_hand_offs -- the requests a handler left for the owner of the payload power and of
+    /// the payload reset output (`pending_power`, `pending_payload_reset`), cleared, with the
+    /// power-on check the request meets (`ext::check_power_on` for `ext`, consumed by
+    /// `Monitor::apply_power_request`). The firmware main loop and the emulator both call it.
+    pub fn take_hand_offs(&mut self, ext: &dyn Extension) -> HandOffs {
+        HandOffs {
+            power: self.pending_power.take(),
+            payload_reset: core::mem::take(&mut self.pending_payload_reset),
+            power_on_check: crate::ext::check_power_on(self, ext),
         }
     }
 
