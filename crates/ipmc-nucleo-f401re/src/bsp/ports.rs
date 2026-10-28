@@ -5,10 +5,10 @@
 //! owner: a second claim fails with `PortError::AlreadyClaimed`, naming both owners (the
 //! firmware prints that at start-up and fail-stops).
 //!
-//! Why here and not in ipmc-nucleo-f401re: the sensor drivers (adc.rs, gpio.rs) in this crate claim pins
-//! too, and ipmc-nucleo-f401re already depends on ipmc-sensors, so the owner must live in this crate to
-//! avoid a dependency cycle. The ownership table and the mask arithmetic are in
-//! `pin_claims` (hardware-free, host-tested); this file applies them to the registers.
+//! Why here: the board support library (bsp) is the one place both images link, and the sensor
+//! drivers (drivers/adc.rs, drivers/gpio.rs) claim pins through it. The ownership table and the
+//! mask arithmetic are in `ipmc_sensors::pin_claims` (hardware-free, host-tested); this file
+//! applies them to the registers.
 //!
 //! Register discipline: every configuration write is a read-modify-write of only the claimed
 //! pins' bits, inside one critical section, so handles used from different contexts cannot
@@ -20,10 +20,10 @@ use core::cell::RefCell;
 use cortex_m::interrupt::{self, Mutex};
 use stm32f4::stm32f401::{GPIOA, GPIOB, GPIOC, RCC};
 
-use crate::pin_claims::{
+use ipmc_sensors::pin_claims::{
     af_mask, af_value, bsrr_word, field2_mask, field2_value, merge, ClaimTable,
 };
-pub use crate::pin_claims::{PinId, PortError, PortId};
+pub use ipmc_sensors::pin_claims::{PinId, PortError, PortId};
 
 /// MODER encodings (RM0368 8.4.1).
 const MODER_INPUT: u32 = 0b00;

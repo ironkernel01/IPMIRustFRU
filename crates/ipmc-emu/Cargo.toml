@@ -8,6 +8,8 @@ ipmc-defs = { path = "../ipmc-defs" }
 ipmc-core = { path = "../ipmc-core" }
 ipmc-ext = { path = "../ipmc-ext" }
 ipmc-fru = { path = "../ipmc-fru", features = ["host"] }
+ipmc-hal = { path = "../ipmc-hal" }
+ipmc-runtime = { path = "../ipmc-runtime", features = ["sim"] }
 ipmc-sensors = { path = "../ipmc-sensors" }
 ipmc-wire = { path = "../ipmc-wire" }
 

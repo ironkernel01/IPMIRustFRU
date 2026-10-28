@@ -653,13 +653,14 @@ mod tests {
     fn the_simulated_nominals_decode_as_volts_and_degrees() {
         // The bench build starts the external rails at nominal and the die at IPMC_SIM_TEMP_C. The
         // value a Chassis Manager shows is M x count x 10^R: (rail, volts x 100).
-        let mut analog = sim_analog();
+        let mut analog = sim_analog(&crate::drivers::sim::SIM_RAIL_WIRING);
         let eval = crate::eval::faults::evaluate(
             &crate::board_sensors::INPUTS,
             &mut crate::drivers::sim::SimInputs::new(),
         );
         let s = crate::board_sensors::build_snapshot(
             &mut analog,
+            &crate::drivers::sim::SIM_RAIL_WIRING,
             &eval,
             ipmc_core::sensor::PowerState::Off,
             false,

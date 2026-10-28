@@ -11,8 +11,6 @@ use cortex_m::peripheral::{NVIC, SCB, SYST};
 use ipmc_nucleo_f401re::bsp::{clock, cycles};
 use stm32f4::stm32f401;
 
-use crate::console;
-
 extern "C" {
     /// The runtime vector table: `__app_vectors` of flash_map.x, whose first two words are the
     /// initial stack pointer and the reset vector.
@@ -23,8 +21,8 @@ extern "C" {
 /// interrupts of the STM32F401 (RM0368 Table 38): ceil(85 / 32).
 const NVIC_WORDS: usize = 3;
 
-/// start_runtime -- steps 2 to 8 of design 6.4:
-/// 2. flush the console (and APP_UART when up);
+/// start_runtime -- steps 3 to 8 of design 6.4 (step 2, the flush of the console and of APP_UART
+/// when up, is `ipmc_boot::run`'s, done before this call):
 /// 3. mask interrupts, stop SysTick;
 /// 4. reset USART1, USART2, PWR and GPIOA..C through RCC (each pulsed set then clear), put
 ///    their clock enables back to the reset values, then clear every NVIC enable and pending
@@ -38,7 +36,6 @@ const NVIC_WORDS: usize = 3;
 /// The caller has checked the image (`ipmc_boot::header::check`), so the vector table holds a
 /// valid stack pointer and a Thumb reset vector inside the image.
 pub fn start_runtime() -> ! {
-    console::flush();
     cortex_m::interrupt::disable();
 
     // SAFETY: interrupts are masked and nothing runs after this function but the runtime: every

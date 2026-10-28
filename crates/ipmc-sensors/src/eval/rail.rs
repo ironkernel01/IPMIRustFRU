@@ -1,19 +1,17 @@
 //! rail.rs - the rail definition and the one evaluation of a rail voltage against its windows.
 //!
 //! Every threshold decision for a rail goes through `evaluate`; the board table in
-//! `board_sensors.rs` only supplies `RailDef` values.
+//! `board_sensors.rs` only supplies `RailDef` values. Which channel and divider serve a rail is a
+//! board fact (`hal::RailWiring`), not part of the definition.
 
-use crate::hal::{Channel, Divider, SourceError};
+use crate::hal::{Divider, SourceError};
 use ipmc_core::sensor::RailStatus;
 
 /// RailDef -- one monitored rail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RailDef {
     pub name: &'static str,
-    pub channel: Channel,
     pub nominal_mv: u32,
-    /// Rail mV = pin mV x num / den.
-    pub divider: Divider,
     /// Non-critical window, +/- percent of nominal.
     pub noncrit_pct: u32,
     /// Critical window, +/- percent of nominal; larger than `noncrit_pct`.
@@ -74,9 +72,7 @@ mod tests {
 
     const FIVE_VOLT: RailDef = RailDef {
         name: "5V",
-        channel: Channel::Adc(1),
         nominal_mv: 5000,
-        divider: Divider { num: 2, den: 1 },
         noncrit_pct: 5,
         crit_pct: 10,
     };

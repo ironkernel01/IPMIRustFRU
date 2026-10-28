@@ -8,9 +8,9 @@
 // Modes (PLAN.md 3.6b): Auto = heartbeat, or the activity rate for IPMC_LED_ACTIVITY_HOLD_MS
 // after each `activity()` call; Manual On, Off, Blink; the start-up Fault blink.
 
+use crate::bsp::ports::{self, Pins, PortError, PortId, Speed};
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::interrupt;
-use ipmc_sensors::drivers::stm32f401::ports::{self, Pins, PortError, PortId, Speed};
 use ipmc_sensors::eval::led::{self as pattern, Mode, NO_ACTIVITY_MS};
 
 pub use ipmc_sensors::eval::led::{rate_chz, Shown};
@@ -77,7 +77,7 @@ fn update(led: &mut Led, now_ms: u32) {
 }
 
 /// set_mode -- switches to `mode` and shows it at once. Does nothing before `init`.
-fn set_mode(mode: Mode) {
+pub fn set_mode(mode: Mode) {
     static_slot::with_mut(&LED, |led| {
         led.mode = mode;
         update(led, systick::millis());

@@ -1,0 +1,33 @@
+[package]
+name = "ipmc-runtime"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+description = "IPMC runtime generic over the board: console and commands, application port, FRU log, sensing, kept sequence, IPMB link, start-up and main loop"
+
+[features]
+# The simulated board (`sim`, std): the host tests of this crate and the emulator run the same
+# runtime on it. No firmware image enables it.
+sim = ["ipmc-hal/testing", "ipmc-fru/host", "dep:heapless"]
+
+[lints.rust]
+# ipmc_eval is set by build.rs for the evaluation build (IPMC_EVAL=1).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ipmc_eval)"] }
+
+[dependencies]
+ipmc-app = { path = "../ipmc-app" }
+ipmc-boot = { path = "../ipmc-boot" }
+ipmc-core = { path = "../ipmc-core" }
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-ext = { path = "../ipmc-ext" }
+ipmc-fru = { path = "../ipmc-fru" }
+ipmc-hal = { path = "../ipmc-hal" }
+ipmc-log = { path = "../ipmc-log" }
+ipmc-menu = { path = "../ipmc-menu" }
+ipmc-sensors = { path = "../ipmc-sensors" }
+ipmc-wire = { path = "../ipmc-wire" }
+heapless = { version = "=0.8.0", default-features = false, optional = true }
+
+[dev-dependencies]
+# The unit tests run on the simulated board.
+ipmc-runtime = { path = ".", features = ["sim"] }

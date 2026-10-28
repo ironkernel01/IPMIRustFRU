@@ -126,6 +126,7 @@ version = "0.1.0"
 dependencies = [
  "ipmc-defs",
  "ipmc-fru",
+ "ipmc-hal",
  "ipmc-menu",
  "ipmc-wire",
 ]
@@ -161,6 +162,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipmc-hal"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "ipmc-core",
+ "ipmc-defs",
+ "ipmc-fru",
+ "ipmc-sensors",
+ "ipmc-wire",
+]
+
+[[package]]
 name = "ipmc-log"
 version = "0.1.0"
 dependencies = [
@@ -189,22 +202,39 @@ dependencies = [
  "ipmc-defs",
  "ipmc-ext",
  "ipmc-fru",
+ "ipmc-hal",
  "ipmc-log",
  "ipmc-menu",
+ "ipmc-runtime",
  "ipmc-sensors",
  "ipmc-wire",
  "stm32f4",
 ]
 
 [[package]]
+name = "ipmc-runtime"
+version = "0.1.0"
+dependencies = [
+ "ipmc-app",
+ "ipmc-boot",
+ "ipmc-core",
+ "ipmc-defs",
+ "ipmc-ext",
+ "ipmc-fru",
+ "ipmc-hal",
+ "ipmc-log",
+ "ipmc-menu",
+ "ipmc-sensors",
+ "ipmc-wire",
+]
+
+[[package]]
 name = "ipmc-sensors"
 version = "0.1.0"
 dependencies = [
- "cortex-m",
  "embedded-hal 1.0.0",
  "ipmc-core",
  "ipmc-defs",
- "stm32f4",
 ]
 
 [[package]]

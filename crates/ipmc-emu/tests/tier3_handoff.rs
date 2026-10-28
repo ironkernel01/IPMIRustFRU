@@ -10,6 +10,7 @@ use ipmc_core::queue::Bus;
 use ipmc_core::sensor::PowerState;
 use ipmc_core::trace::NoTrace;
 use ipmc_emu::emulator::{EmuConfig, Emulator};
+use ipmc_emu::replay::is_request_frame;
 
 const OWN: u8 = 0x82;
 const CM: u8 = 0x20;
@@ -33,10 +34,15 @@ fn exchange(emu: &mut Emulator, cmd: u8, seq: u8, data: &[u8], now_ms: u32) -> u
     let mut frame = vec![0u8; ipmb::IPMB_MAX_LEN];
     let len = ipmb::encode_request(&header, data, &mut frame).unwrap();
     emu.rx(Bus::A, &frame[..len], now_ms).unwrap();
-    assert_eq!(emu.poll(now_ms, &mut NoTrace), 1);
-    let (bus, bytes) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, now_ms + 1, &mut NoTrace).unwrap();
-    let parsed = ipmb::parse(&bytes).unwrap();
+    emu.poll(now_ms, &mut NoTrace);
+    // The response, and perhaps an event request of the IPMC after it.
+    let sent = emu.take_sent();
+    let response = sent
+        .iter()
+        .find(|tx| !is_request_frame(&tx.bytes))
+        .expect("the response");
+    assert!(response.ok);
+    let parsed = ipmb::parse(&response.bytes).unwrap();
     parsed.completion_code.unwrap()
 }
 

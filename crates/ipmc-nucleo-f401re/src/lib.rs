@@ -9,11 +9,4 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-/// out -- formatted write to the console UART (`\n` becomes CR LF): the console print macro of
-/// the runtime (`#[macro_use] extern crate ipmc_nucleo_f401re;`).
-#[macro_export]
-macro_rules! out {
-    ($($arg:tt)*) => { $crate::bsp::uart::print(format_args!($($arg)*)) };
-}
-
 pub mod bsp;

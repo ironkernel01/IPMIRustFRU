@@ -12,7 +12,7 @@ use crate::drivers::sim::{SimAnalog, SimInputs, SimPower};
 use crate::hal::{AnalogSource, DigitalInputs, Divider, Input, PowerSwitch, SourceError};
 
 /// Source -- which driver answers a group (the `IPMC_*_SOURCE` switches of ipmc-defs): the
-/// on-chip driver (drivers/stm32f401) for `Hw`, the simulator (drivers/sim) for `Sim`, an external
+/// board crate's on-chip driver for `Hw`, the simulator (drivers/sim) for `Sim`, an external
 /// I2C part (drivers/i2c) for `I2c` and an external SPI part (drivers/spi) for `Spi`; no bus is
 /// assigned to the last two yet.
 pub use ipmc_defs::Source;
@@ -195,6 +195,7 @@ impl<H: DigitalInputs + PowerSwitch> PowerSwitch for RoutedIo<H> {
 mod tests {
     use super::*;
     use crate::board_sensors::{sim_analog, INPUTS, RAILS};
+    use crate::drivers::sim::SIM_RAIL_WIRING;
     use crate::hal::Channel;
 
     /// A hardware stand-in that answers fixed values, so routing is visible in the result.
@@ -229,22 +230,28 @@ mod tests {
 
     #[test]
     fn analog_groups_route_independently() {
-        let mut routed = RoutedAnalog::new(Some(Fixed), sim_analog(), Source::Hw, Source::Sim);
+        let mut routed = RoutedAnalog::new(
+            Some(Fixed),
+            sim_analog(&SIM_RAIL_WIRING),
+            Source::Hw,
+            Source::Sim,
+        );
         assert_eq!(routed.vdda_mv(), Ok(1));
         assert_eq!(routed.die_temperature_dc(), Ok(2));
         // The external rails come from the simulator: rail 1 of the board table at nominal.
         let rail = &RAILS[1];
-        let channel = match rail.channel {
+        let wire = &SIM_RAIL_WIRING[1];
+        let channel = match wire.channel {
             Channel::Adc(ch) => ch,
             Channel::Vdda => unreachable!("rail 1 is a pin rail"),
         };
-        assert_eq!(routed.rail_mv(channel, rail.divider), Ok(rail.nominal_mv));
+        assert_eq!(routed.rail_mv(channel, wire.divider), Ok(rail.nominal_mv));
     }
 
     #[test]
     fn hardware_selected_without_backend_is_unavailable() {
         let mut routed: RoutedAnalog<Fixed> =
-            RoutedAnalog::new(None, sim_analog(), Source::Hw, Source::Hw);
+            RoutedAnalog::new(None, sim_analog(&SIM_RAIL_WIRING), Source::Hw, Source::Hw);
         assert_eq!(routed.vdda_mv(), Err(SourceError::Unavailable));
         assert_eq!(routed.die_temperature_dc(), Err(SourceError::Unavailable));
         assert_eq!(
@@ -283,8 +290,12 @@ mod tests {
 
     #[test]
     fn external_sources_have_no_bus_and_answer_unavailable() {
-        let mut analog: RoutedAnalog<Fixed> =
-            RoutedAnalog::new(Some(Fixed), sim_analog(), Source::I2c, Source::Spi);
+        let mut analog: RoutedAnalog<Fixed> = RoutedAnalog::new(
+            Some(Fixed),
+            sim_analog(&SIM_RAIL_WIRING),
+            Source::I2c,
+            Source::Spi,
+        );
         assert_eq!(analog.vdda_mv(), Err(SourceError::Unavailable));
         assert_eq!(
             analog.rail_mv(0, Divider { num: 1, den: 1 }),

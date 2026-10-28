@@ -1,0 +1,16 @@
+[package]
+name = "ipmc-hal"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Host test doubles of the traits (std), for the tests of the crates that use ipmc-hal.
+testing = []
+
+[dependencies]
+ipmc-core = { path = "../ipmc-core" }
+ipmc-defs = { path = "../ipmc-defs" }
+ipmc-fru = { path = "../ipmc-fru" }
+ipmc-sensors = { path = "../ipmc-sensors" }
+ipmc-wire = { path = "../ipmc-wire" }
+heapless = { version = "=0.8.0", default-features = false }

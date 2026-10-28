@@ -17,15 +17,13 @@
 // Failures are counted (RX ring overflow, TX timeout, overrun, console lines dropped) and read
 // through `counters()`.
 
+use crate::bsp::ports::{self, PinId, Pins, PortError, PortId, Pull, Speed};
 use core::cell::Cell;
-use core::fmt;
 use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::NVIC;
 use heapless::Vec;
-use ipmc_core::names::format_cut;
 use ipmc_core::ring::ByteRing;
-use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull, Speed};
 use stm32f4::stm32f401::{interrupt, usart1::RegisterBlock, Interrupt, RCC, USART1, USART2};
 
 use crate::bsp::static_slot::{self, StaticSlot};
@@ -78,10 +76,8 @@ const AF_USART: u8 = 7;
 
 const CONSOLE_RX: usize = ipmc_defs::IPMC_UART_RX_BUF;
 const CONSOLE_TX: usize = ipmc_defs::IPMC_UART_TX_BUF;
-/// CONSOLE_TX_USABLE -- bytes the console TX ring holds at once: a ring of N bytes keeps one slot
-/// free. Console output waits while the ring is full, so a command whose whole output is no
-/// longer than this never waits for the wire (the console commands bound their output by it).
-pub const CONSOLE_TX_USABLE: usize = CONSOLE_TX - 1;
+// CONSOLE_TX_USABLE (CONSOLE_TX - 1) lives in ipmc-hal beside `SerialPort`.
+pub use ipmc_hal::serial::CONSOLE_TX_USABLE;
 const APP_RX: usize = ipmc_defs::IPMC_APP_UART_RX_BUF;
 const APP_TX: usize = ipmc_defs::IPMC_APP_UART_TX_BUF;
 
@@ -406,28 +402,8 @@ impl PortCounters {
 
 static COUNTERS: [PortCounters; Port::COUNT] = [PortCounters::new(), PortCounters::new()];
 
-/// Counters -- snapshot of the failure counters of one port.
-#[derive(Clone, Copy)]
-pub struct Counters {
-    pub rx_overflow: u32,
-    pub tx_timeout: u32,
-    pub overrun: u32,
-    /// Bytes received with a framing, noise or parity error (FE, NF, PE).
-    pub line_errors: u32,
-    /// Trace lines dropped because the TX ring had no room for the whole line.
-    pub tx_lines_dropped: u32,
-}
-
-impl Counters {
-    /// lost -- bytes the port has lost or received damaged since reset: overrun, RX ring overflow
-    /// and framing, noise or parity errors (wrapping sum). A damaged byte cannot be trusted, so a
-    /// move of this count means the line in progress is unreliable.
-    pub fn lost(&self) -> u32 {
-        self.overrun
-            .wrapping_add(self.rx_overflow)
-            .wrapping_add(self.line_errors)
-    }
-}
+/// Counters -- snapshot of the failure counters of one port (ipmc-hal `SerialCounters`).
+pub type Counters = ipmc_hal::serial::SerialCounters;
 
 /// counters -- returns the failure counts of `port` since reset.
 pub fn counters(port: Port) -> Counters {
@@ -716,86 +692,9 @@ pub fn flush(port: Port) {
         .fetch_add(1, Ordering::Relaxed);
 }
 
-/// Writer -- `fmt::Write` into the TX ring of a port; `\n` becomes CR LF.
-struct Writer {
-    port: Port,
-}
-
-impl fmt::Write for Writer {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for (i, part) in s.split('\n').enumerate() {
-            // A failed write aborts the rest of the message: one timeout per message, not per
-            // byte.
-            if i > 0 {
-                write_all_wait(self.port, b"\r\n").map_err(|_| fmt::Error)?;
-            }
-            write_all_wait(self.port, part.as_bytes()).map_err(|_| fmt::Error)?;
-        }
-        Ok(())
-    }
-}
-
-/// print -- backend of the `out!` macro (lib.rs): formatted console output, complete (waits only while the
-/// TX ring is full).
-pub fn print(args: fmt::Arguments) {
-    // A write error means bytes were dropped; the timeout is already counted and the console has
-    // no other channel to report it on.
-    let _ = fmt::Write::write_fmt(
-        &mut Writer {
-            port: Port::Console,
-        },
-        args,
-    );
-}
-
-/// PortText -- a port as an `ipmc_boot::text::TextOut`: the text goes into the TX ring whole,
-/// with no `core::fmt` (the fault handlers and the bootloader's trace use it). A failed write
-/// drops the rest, as `print` does; the timeout is already counted.
-pub struct PortText(pub Port);
-
-impl ipmc_boot::text::TextOut for PortText {
-    fn put(&mut self, text: &str) {
-        let _ = write_all_wait(self.0, text.as_bytes());
-    }
-}
-
-/// ROW_TEXT_MAX -- longest I2C trace row, bytes: the columns of a `TraceRow` (up to 104 characters
-/// with the longest names) plus IPMB_MSG_MAX three-character hex bytes (96), rounded up.
-const ROW_TEXT_MAX: usize = 224;
-const _: () = assert!(
-    ROW_TEXT_MAX + 2 <= ipmc_defs::IPMC_UART_TX_BUF,
-    "the console TX ring must hold one whole I2C trace row"
-);
-
-/// CRLF -- the end of every console line.
-const CRLF: &[u8] = b"\r\n";
-
-/// print_cut_or_drop -- one line of at most N bytes plus CR LF, written whole when the TX ring
-/// of `port` has room for all of it, else dropped and counted (`tx_lines_dropped`); never a
-/// partial line and never a wait. A longer line is cut and ends in `...`.
-fn print_cut_or_drop<const N: usize>(port: Port, args: fmt::Arguments) {
-    let line = format_cut::<N>(args);
-    let text = line.bytes();
-    // Only the main loop writes a port and the interrupt only drains the ring, so the room found
-    // here is still there for the two writes.
-    if tx_free(port) >= text.len() + CRLF.len() {
-        write(port, text);
-        write(port, CRLF);
-    } else {
-        COUNTERS[port.index()]
-            .tx_lines_dropped
-            .fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// print_line_or_drop -- a trace line of at most IPMC_LOG_TEXT_MAX bytes (the length the capture
-/// log keeps) through `print_cut_or_drop`.
-pub fn print_line_or_drop(port: Port, args: fmt::Arguments) {
-    print_cut_or_drop::<{ ipmc_defs::IPMC_LOG_TEXT_MAX }>(port, args);
-}
-
-/// print_row_or_drop -- an I2C trace row (longer than a log text line, ROW_TEXT_MAX) through
-/// `print_cut_or_drop`.
-pub fn print_row_or_drop(port: Port, args: fmt::Arguments) {
-    print_cut_or_drop::<ROW_TEXT_MAX>(port, args);
+/// count_line_dropped -- books one trace line of `port` dropped for want of ring room.
+pub fn count_line_dropped(port: Port) {
+    COUNTERS[port.index()]
+        .tx_lines_dropped
+        .fetch_add(1, Ordering::Relaxed);
 }

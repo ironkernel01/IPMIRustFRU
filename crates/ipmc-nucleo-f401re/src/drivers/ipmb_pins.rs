@@ -13,8 +13,8 @@
 // inputs; they are written here anyway so the state does not depend on reset defaults.
 // When IPMB_BUS_B_ENABLE is false the IPMB-B pins stay parked and nothing else touches them.
 
+use crate::bsp::ports::{self, PinId, Pins, PortError, PortId, Pull};
 use ipmc_core::queue::Bus;
-use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull};
 
 const OWNER: &str = "ipmb";
 

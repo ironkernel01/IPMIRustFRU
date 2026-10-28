@@ -1,5 +1,5 @@
 //! pin_claims - hardware-free bookkeeping of GPIO pin ownership and the register-field mask
-//! arithmetic, so it builds and is tested on the host. `drivers::stm32f401::ports` applies it
+//! arithmetic, so it builds and is tested on the host. The board crate's `bsp::ports` applies it
 //! to the real ports.
 //!
 //! One owner per pin: `ClaimTable::claim` records the owner name of each pin of a mask and

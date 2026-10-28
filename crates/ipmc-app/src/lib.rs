@@ -144,7 +144,7 @@
 //! 5. The firmware copies the output buffer to the UART transmit ring as the ring has room.
 //!
 //! The crate never touches hardware. Everything it needs from the board comes through the
-//! `AppHost` trait (host.rs); the firmware implements the trait in `app_port.rs` over the IPMB
+//! `AppHost` trait (host.rs); the runtime implements the trait in `app_port.rs` over the IPMB
 //! link layer, and the tests implement it over a `FruStore` (tests.rs).
 //!
 //! # Add your own command
@@ -177,7 +177,7 @@
 //!
 //! 3. If the handler needs a value the host does not offer yet, add a method to `AppHost` in
 //!    host.rs, implement it in the firmware (`LinkHost` in
-//!    `crates/ipmc-nucleo-f401re/src/app_port.rs`) and in the test host (`FakeHost` in
+//!    `crates/ipmc-runtime/src/app_port.rs`) and in the test host (`FakeHost` in
 //!    tests.rs). The compiler lists the places that miss it.
 //! 4. Add one row to `REQUEST_TABLE` in tests.rs: the request line and the answer the fake host
 //!    must produce (`SECONDS: 1068` then `OK`). The test for the HELP table text (`HELP_TABLE`)

@@ -15,10 +15,10 @@
 //! 4. Trace lines by level (`trace::Level`): EVENTS and ALL print the change lines against the
 //!    previous snapshot; ALL adds the sample line. Sampling itself runs at every level.
 
-use crate::board_sensors::{build_snapshot, INPUTS};
+use crate::board_sensors::{build_snapshot, INPUTS, RAIL_COUNT};
 use crate::eval::faults;
 use crate::eval::power_fsm::{PowerController, PowerError, Transition};
-use crate::hal::{AnalogSource, DigitalInputs, Input, PowerSwitch, SourceError};
+use crate::hal::{AnalogSource, DigitalInputs, Input, PowerSwitch, RailWiring, SourceError};
 use crate::trace::{self, Level};
 use ipmc_core::dispatch::PowerRequest;
 use ipmc_core::fru_state::PowerOnRefused;
@@ -27,6 +27,8 @@ use ipmc_core::trace::Trace;
 
 /// Monitor -- latest snapshot, power controller and sampling schedule.
 pub struct Monitor {
+    /// The board's rail wiring, one entry per rail of `RAILS` (passed to `build_snapshot`).
+    wiring: &'static [RailWiring; RAIL_COUNT],
     power: PowerController,
     snapshot: SensorSnapshot,
     /// False until the first sample; the first sample prints no change lines.
@@ -39,9 +41,15 @@ pub struct Monitor {
 impl Monitor {
     /// new -- a monitor that samples every `period_ms` (IPMC_SENSOR_PERIOD_MS) and allows the
     /// supplies `pgood_timeout_ms` (IPMC_PGOOD_TIMEOUT_MS) to come up; `trace_level` is the
-    /// start-up trace level (IPMC_SENSOR_TRACE).
-    pub const fn new(period_ms: u32, pgood_timeout_ms: u32, trace_level: Level) -> Self {
+    /// start-up trace level (IPMC_SENSOR_TRACE). `wiring` is the board's rail wiring table.
+    pub const fn new(
+        period_ms: u32,
+        pgood_timeout_ms: u32,
+        trace_level: Level,
+        wiring: &'static [RailWiring; RAIL_COUNT],
+    ) -> Self {
         Monitor {
+            wiring,
             power: PowerController::new(pgood_timeout_ms),
             snapshot: SensorSnapshot::EMPTY,
             sampled: false,
@@ -49,6 +57,11 @@ impl Monitor {
             period_ms,
             trace_level,
         }
+    }
+
+    /// wiring -- the board's rail wiring table, one entry per rail of `RAILS`.
+    pub const fn wiring(&self) -> &'static [RailWiring; RAIL_COUNT] {
+        self.wiring
     }
 
     /// snapshot -- the latest sample (EMPTY before the first).
@@ -111,7 +124,14 @@ impl Monitor {
         }
         self.reconcile(io, trace);
         let released = self.power.output_released() && !io.is_enabled();
-        let snapshot = build_snapshot(analog, &eval, self.power.state(), io.is_enabled(), released);
+        let snapshot = build_snapshot(
+            analog,
+            self.wiring,
+            &eval,
+            self.power.state(),
+            io.is_enabled(),
+            released,
+        );
         if self.sampled && self.trace_level.prints_events() {
             trace::change_lines(&self.snapshot, &snapshot, trace);
         }
@@ -266,8 +286,8 @@ impl Monitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board_sensors::{sim_analog, RAILS};
-    use crate::drivers::sim::{SimAnalog, SimInputs, SimPower};
+    use crate::board_sensors::sim_analog;
+    use crate::drivers::sim::{SimAnalog, SimInputs, SimPower, SIM_RAIL_WIRING};
     use crate::hal::SourceError;
     use ipmc_core::sensor::{PowerState, RailStatus, Summary};
     use ipmc_core::trace::RecordingTrace;
@@ -305,8 +325,8 @@ mod tests {
 
     fn rig() -> (Monitor, SimAnalog, Io, RecordingTrace) {
         (
-            Monitor::new(1000, 1000, Level::All),
-            sim_analog(),
+            Monitor::new(1000, 1000, Level::All, &SIM_RAIL_WIRING),
+            sim_analog(&SIM_RAIL_WIRING),
             Io {
                 inputs: SimInputs::new(),
                 power: SimPower::new(),
@@ -402,12 +422,12 @@ mod tests {
         let (mut m, mut a, mut io, mut t) = rig();
         m.sample(0, &mut a, &mut io, &mut t);
         t.lines.clear();
-        a.set_rail_mv(RAILS[2].channel, 4400).unwrap();
+        a.set_rail_mv(SIM_RAIL_WIRING[2].channel, 4400).unwrap();
         m.sample(1, &mut a, &mut io, &mut t);
         assert_eq!(m.snapshot().rails[2].status, RailStatus::Critical);
         assert_eq!(t.lines[0], "event: rail 5V in range -> critical (4400 mV)");
         assert!(t.lines.last().unwrap().starts_with("sample: "));
-        a.set_rail_mv(RAILS[2].channel, 5000).unwrap();
+        a.set_rail_mv(SIM_RAIL_WIRING[2].channel, 5000).unwrap();
         t.lines.clear();
         m.sample(2, &mut a, &mut io, &mut t);
         assert_eq!(t.lines[0], "event: rail 5V critical -> in range (5000 mV)");
@@ -420,7 +440,7 @@ mod tests {
         m.sample(0, &mut a, &mut io, &mut t);
         m.sample(1000, &mut a, &mut io, &mut t);
         assert!(t.lines.is_empty(), "no change, no line: {:?}", t.lines);
-        a.set_rail_mv(RAILS[2].channel, 4400).unwrap();
+        a.set_rail_mv(SIM_RAIL_WIRING[2].channel, 4400).unwrap();
         m.sample(2000, &mut a, &mut io, &mut t);
         assert_eq!(t.lines[0], "event: rail 5V in range -> critical (4400 mV)");
         assert!(t.lines.iter().all(|l| l.starts_with("event: ")));

@@ -15,12 +15,12 @@
 
 use cortex_m_rt::{exception, ExceptionFrame};
 
-use ipmc_sensors::drivers::stm32f401::ports::PortError;
+use crate::bsp::ports::PortError;
 
-use ipmc_boot::text::{self, TextOut};
+use ipmc_boot::text::{self, SerialText, TextOut};
 
 use crate::bsp::fault_record::{self, Fault};
-use crate::bsp::uart::{Port, PortText};
+use crate::bsp::uart::Port;
 use crate::bsp::{led, uart};
 
 /// park -- the terminal fail-stop loop.
@@ -44,9 +44,9 @@ pub fn claim_failed(error: PortError) -> ! {
 
 /// say -- `pieces` on the console, in order: fixed text and the number writers of
 /// `ipmc_boot::text`, no `core::fmt` (both images link this file). A line end is the two bytes
-/// CR LF. The console print is best effort, as in `uart::print`.
+/// CR LF. The console print is best effort, as in `ipmc_runtime::text::ConsoleText::print`.
 fn say(pieces: &[Piece]) {
-    let mut out = PortText(Port::Console);
+    let mut out = SerialText(Port::Console);
     for piece in pieces {
         match *piece {
             Piece::Text(text) => out.put(text),

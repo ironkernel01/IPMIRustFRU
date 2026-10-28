@@ -10,6 +10,8 @@
 //! - `error`: the `ERR` codes of the session.
 //! - `load`: erase and the `LOAD` state machine over a `FlashOps` trait.
 //! - `commands`: the small command table of the session, its help text and the lookup.
+//! - `run`: the generic boot sequence over a `BootBoard` (trace, pins, request, check, decision,
+//!   countdown, stay, session).
 //! - `session`: the session state machine (commands, erase, `LOAD`, `RUN`) over a `BootHw` trait.
 #![no_std]
 #![forbid(unsafe_code)]
@@ -25,6 +27,7 @@ pub mod header;
 pub mod hex;
 pub mod load;
 pub mod request;
+pub mod run;
 pub mod session;
 #[cfg(test)]
 mod testflash;

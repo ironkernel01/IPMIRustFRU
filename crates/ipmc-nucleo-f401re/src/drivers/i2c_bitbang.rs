@@ -9,11 +9,11 @@
 // latch high) or driven low (latch low); a pin is never driven high. The half-bit delay and
 // every wait come from the DWT cycle counter. No logging inside a transfer.
 
+use crate::bsp::ports::{Pins, Pull, Speed};
 use cortex_m::peripheral::{DCB, DWT};
 use ipmc_core::link::BusSpeed;
 use ipmc_core::queue::Bus;
 use ipmc_defs::i2c_timing::BitPhases;
-use ipmc_sensors::drivers::stm32f401::ports::{Pins, Pull, Speed};
 
 use super::i2c_hw;
 use super::ipmb_common::{

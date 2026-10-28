@@ -1,9 +1,10 @@
 //! ipmc-emu - the IPMC on the PC.
 //!
-//! The emulator is the IPMC with the I2C drivers replaced by captured traffic. It builds the
-//! `ipmc-core` Link and dispatch Context and the `ipmc-sensors` Monitor over the simulated
-//! backends exactly as the firmware does, then feeds frames in and collects frames out through
-//! the same main-loop calls the drivers will make. All of it is Rust and runs on the host; there
+//! The emulator is the IPMC with the I2C drivers replaced by captured traffic. It runs the
+//! firmware's own code: `ipmc-runtime` (console, sensors, IPMB link service, FRU log, start-up
+//! and main loop) on the simulated board `ipmc_runtime::sim::Sim`, feeds frames into the bus
+//! queues and drains the frames the master wrote. A Cold Reset restarts it from the RAM flash and
+//! the kept words, as the processor restart does. All of it is Rust and runs on the host; there
 //! is no C harness. This documentation is the user documentation of the crate.
 //!
 //! # Modules
@@ -11,7 +12,7 @@
 //! | Module | Holds |
 //! |---|---|
 //! | `vectors` | the one reader of the vector file format (`vectors/sbc_ab.vec`) |
-//! | `emulator` | `Emulator`, the board in software, and `EmuConfig` |
+//! | `emulator` | `Emulator`, the board in software (the firmware's runtime on the simulated board), and `EmuConfig` |
 //! | `replay` | replay of a vector list through an `Emulator`, the comparison with the captured responses and `ReplayReport` |
 //! | `serve` | `Board`, the emulator in real time, and the TCP line protocol of `ipmc-emu serve` |
 //! | `trace` | the stdout trace sink and the hex formatter |
@@ -32,9 +33,10 @@
 //! record or does not end.
 //!
 //! `replay` feeds every request in the file that is addressed to the emulator (IPMB 82h with
-//! the default strap) to the Link at its capture time, polls, takes the response out and
-//! reports the transmission done 1 ms later. It then compares each response with the captured
-//! response of the same exchange and prints a table per command.
+//! the default strap) to the board at its capture time, runs the board's main loop and takes the
+//! response out (the simulated bus takes every write, except the ones `--fail-every` fails). It
+//! then compares each response with the captured response of the same exchange and prints a
+//! table per command.
 //!
 //! | Class | Meaning |
 //! |---|---|
@@ -78,7 +80,7 @@
 //! | `--b-enabled 0\|1` | IPMB-B starts enabled, as after the Chassis Manager's Set IPMB State (default 0, the power-up state; needs `--b-fitted 1`) |
 //! | `--policy alternate\|arrival` | response bus policy (default from `IPMB_COMPLIANCE`: `arrival` for NonStrict, `alternate` for Strict) |
 //! | `--b-power-up strict\|nonstrict` | IPMB-B before the first Set IPMB State that sets it: `strict` drops its frames (Rule 4.1.1-4), `nonstrict` answers requests that arrive on IPMB-B on IPMB-B (default from `IPMB_COMPLIANCE`: `nonstrict` for NonStrict, `strict` for Strict; `--b-enabled 1` ends the window at once) |
-//! | `--fail-every N` | every Nth transmission is reported failed, so the Link resends it on the other bus (default 0, none) |
+//! | `--fail-every N` | every Nth write fails on the simulated bus, so the Link resends it on the other bus (default 0, none) |
 //! | `--trace` | print every received and transmitted frame and every trace line to stdout |
 //! | `--quiet` | print only a one-line summary |
 //!

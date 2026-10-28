@@ -45,6 +45,11 @@ pub fn write(request: [u32; WORDS]) {
 
 /// clear -- zeroes the check word (word 3), so a later reset reads no request.
 pub fn clear() {
-    // SAFETY: as in `write`; `CHECK < WORDS`.
-    unsafe { kept_words::clear(words(), CHECK) };
+    clear_word(CHECK);
+}
+
+/// clear_word -- zeroes word `index` (below `WORDS`).
+pub fn clear_word(index: usize) {
+    // SAFETY: as in `write`; the callers pass an index below `WORDS`.
+    unsafe { kept_words::clear(words(), index) };
 }

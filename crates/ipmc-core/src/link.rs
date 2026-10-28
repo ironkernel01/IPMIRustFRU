@@ -22,7 +22,7 @@
 //! interrupt (Phase 6) only moves bytes, stamps the STOP time and posts the frame to that bus's
 //! single-producer single-consumer queue; the main loop drains both queues in arrival order into
 //! `on_frame`, then calls `poll` and `next_tx` / `on_tx_result`. The firmware keeps the Link in
-//! a static owned by one module (`ipmb_link.rs`). `on_frame` still copies at most IPMB_MSG_MAX
+//! a static owned by the board (`IpmbLink` of ipmc-runtime `link.rs`). `on_frame` still copies at most IPMB_MSG_MAX
 //! bytes, bumps counters and never traces (drops are logged to a small FIFO that `poll` prints).
 //! Nothing here blocks or waits.
 

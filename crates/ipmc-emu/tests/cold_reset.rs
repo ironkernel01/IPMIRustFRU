@@ -13,7 +13,7 @@ use ipmc_core::queue::Bus;
 use ipmc_core::requester::{Request, Requester};
 use ipmc_core::sensor::{PayloadMode, PowerState, TransitionStatus};
 use ipmc_core::trace::{RecordingTrace, Trace};
-use ipmc_emu::emulator::{EmuConfig, Emulator};
+use ipmc_emu::emulator::{EmuConfig, Emulator, Tx};
 use std::cell::Cell;
 
 const OWN: u8 = 0x82;
@@ -140,9 +140,13 @@ fn make_locked() -> Box<dyn Extension> {
 /// Lines -- collects the trace lines.
 type Lines = RecordingTrace;
 
+/// COLD_LINE / WARM_LINE -- the console lines of a Cold and a Warm Reset (ipmc-runtime link.rs).
+const COLD_LINE: &str = "Cold Reset: restarting";
+const WARM_LINE: &str = "Warm Reset: link state re-initialised";
+
 /// resets -- Cold Reset lines traced.
 fn resets(lines: &Lines) -> usize {
-    count(lines, "IPMC cold reset")
+    count(lines, COLD_LINE)
 }
 
 /// count -- traced lines equal to `line`.
@@ -187,14 +191,22 @@ fn request_with(netfn: u8, cmd: u8, seq: u8, data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// exchange -- one request frame in at `now_ms`, one poll, the response out and reported sent 1 ms
-/// later; returns the response bytes.
-fn exchange(emu: &mut Emulator, frame: &[u8], now_ms: u32, lines: &mut Lines) -> Vec<u8> {
+/// exchange_all -- one request frame in at `now_ms`, one poll, every frame the board wrote in it.
+fn exchange_all(emu: &mut Emulator, frame: &[u8], now_ms: u32, lines: &mut Lines) -> Vec<Tx> {
     emu.rx(Bus::A, frame, now_ms).unwrap();
-    assert_eq!(emu.poll(now_ms, lines), 1);
-    let (bus, bytes) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, now_ms + 1, lines).unwrap();
-    bytes
+    let written = emu.poll(now_ms, lines);
+    let sent = emu.take_sent();
+    assert_eq!(sent.len(), written);
+    sent
+}
+
+/// exchange -- one request frame in at `now_ms`, one poll, the response out; returns the
+/// response bytes.
+fn exchange(emu: &mut Emulator, frame: &[u8], now_ms: u32, lines: &mut Lines) -> Vec<u8> {
+    let sent = exchange_all(emu, frame, now_ms, lines);
+    assert_eq!(sent.len(), 1, "one response and nothing else");
+    assert!(sent[0].ok);
+    sent[0].bytes.clone()
 }
 
 #[test]
@@ -205,20 +217,10 @@ fn the_reset_happens_after_the_response_left_and_the_board_answers_again() {
     assert_eq!(emu.link().counters(Bus::A).rx_ok, 1);
     let fru_before = emu.context().fru.bytes().to_vec();
 
-    // The reset request is taken; its response waits, so the board has not reset yet.
-    emu.rx(Bus::A, &request(FAKE_RESET_CMD, 2), 10).unwrap();
-    assert_eq!(emu.poll(10, &mut lines), 1);
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
-    emu.poll(11, &mut lines);
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
-    assert_eq!(resets(&lines), 0, "not before the response has left");
-
-    // The response leaves; the next poll resets.
-    let (bus, response) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
+    // The reset request is taken, its response is written, and the pass that wrote it applies
+    // the reset (the gate sees the egress queue empty): one call, the response first.
+    let response = exchange(&mut emu, &request(FAKE_RESET_CMD, 2), 10, &mut lines);
     assert_eq!(ipmb::parse(&response).unwrap().completion_code, Some(0));
-    emu.tx_done(bus, true, 12, &mut lines).unwrap();
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
-    emu.poll(13, &mut lines);
     assert_eq!(resets(&lines), 1);
     assert_eq!(emu.context().pending_reset, None);
     assert_eq!(
@@ -234,27 +236,23 @@ fn the_reset_happens_after_the_response_left_and_the_board_answers_again() {
     assert_eq!(after, before);
     emu.rx(Bus::A, &request(FAKE_RESET_CMD, 3), 30).unwrap();
     emu.poll(30, &mut lines);
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
+    assert_eq!(resets(&lines), 2);
 }
 
 #[test]
-fn the_reset_happens_after_the_wait_when_the_response_cannot_leave() {
-    let wait = ipmc_defs::IPMC_RESET_WAIT_MS;
+fn a_response_that_cannot_be_sent_does_not_hold_the_reset() {
+    // Every write fails and there is no other bus to resend on: the link gives the response up
+    // (tx_dropped), the egress queue is empty and the reset follows at once, not after
+    // IPMC_RESET_WAIT_MS (that wait is `ResetGate`'s, tested in ipmc-core).
     let mut emu = board();
     let mut lines = Lines::default();
+    emu.set_fail_every(1);
     emu.rx(Bus::A, &request(FAKE_RESET_CMD, 1), 100).unwrap();
-    assert_eq!(emu.poll(100, &mut lines), 1);
-    // No driver takes the response (no bus can send): the egress queue stays occupied.
-    emu.poll(100 + wait - 1, &mut lines);
-    assert_eq!(resets(&lines), 0);
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Cold));
-    emu.poll(100 + wait, &mut lines);
+    emu.poll(100, &mut lines);
+    let sent = emu.take_sent();
+    assert!(!sent.is_empty() && sent.iter().all(|tx| !tx.ok));
     assert_eq!(resets(&lines), 1);
     assert_eq!(emu.context().pending_reset, None);
-    assert!(
-        emu.next_tx().is_none(),
-        "the queued response went with the reset"
-    );
 }
 
 /// read_last_byte -- the last FRU byte as the Chassis Manager reads it (Read FRU Data).
@@ -271,72 +269,55 @@ fn read_last_byte(emu: &mut Emulator, seq: u8, now_ms: u32, lines: &mut Lines) -
 }
 
 #[test]
-fn an_accepted_fru_write_survives_a_cold_reset_at_once() {
-    let mut emu = board();
-    let mut lines = Lines::default();
-    let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
-        .unwrap()
-        .to_le_bytes();
-    let before = read_last_byte(&mut emu, 1, 0, &mut lines);
-    let marker = !before;
-    // Write FRU Data, answered 00h; the save delay (IPMC_FRU_PERSIST_DELAY_MS) has not passed.
-    let write = request_with(
-        NETFN_STORAGE,
-        WRITE_FRU_DATA,
-        2,
-        &[0, last, last_hi, marker],
-    );
-    let response = exchange(&mut emu, &write, 10, &mut lines);
-    assert_eq!(ipmb::parse(&response).unwrap().completion_code, Some(0));
-    // Cold Reset at once: the response leaves, the unsaved write is saved, then the board resets.
-    emu.rx(Bus::A, &request(FAKE_RESET_CMD, 3), 20).unwrap();
-    assert_eq!(emu.poll(20, &mut lines), 1);
-    let (bus, _) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, 21, &mut lines).unwrap();
-    emu.poll(22, &mut lines);
-    assert_eq!(resets(&lines), 1);
-    assert_eq!(read_last_byte(&mut emu, 1, 30, &mut lines), marker);
-}
-
-#[test]
-fn a_cold_reset_restores_the_fru_image_from_the_flash_copy() {
-    // A write is saved IPMC_FRU_PERSIST_DELAY_MS after it was seen; a reset after that restores
-    // it from the copy, and the RAM store is not what the reset keeps.
-    let mut emu = board();
-    let mut lines = Lines::default();
-    let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
-        .unwrap()
-        .to_le_bytes();
-    let marker = !read_last_byte(&mut emu, 1, 0, &mut lines);
-    let write = request_with(
-        NETFN_STORAGE,
-        WRITE_FRU_DATA,
-        2,
-        &[0, last, last_hi, marker],
-    );
-    exchange(&mut emu, &write, 10, &mut lines);
-    emu.poll(10 + ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS, &mut lines);
-    exchange(&mut emu, &request(FAKE_RESET_CMD, 3), 2000, &mut lines);
-    emu.poll(2002, &mut lines);
-    assert_eq!(resets(&lines), 1);
-    assert_eq!(read_last_byte(&mut emu, 1, 3000, &mut lines), marker);
+fn an_accepted_fru_write_survives_a_cold_reset() {
+    // (reset time, the save delay passed first): a reset at once saves the unsaved write before
+    // the board resets; a reset after IPMC_FRU_PERSIST_DELAY_MS restores it from the copy the
+    // delay saved. The RAM store is not what the reset keeps.
+    for (reset_ms, saved_first) in [(20, false), (2000, true)] {
+        let mut emu = board();
+        let mut lines = Lines::default();
+        let [last, last_hi] = u16::try_from(emu.context().fru.bytes().len() - 1)
+            .unwrap()
+            .to_le_bytes();
+        let marker = !read_last_byte(&mut emu, 1, 0, &mut lines);
+        // Write FRU Data, answered 00h.
+        let write = request_with(
+            NETFN_STORAGE,
+            WRITE_FRU_DATA,
+            2,
+            &[0, last, last_hi, marker],
+        );
+        let response = exchange(&mut emu, &write, 10, &mut lines);
+        assert_eq!(ipmb::parse(&response).unwrap().completion_code, Some(0));
+        if saved_first {
+            emu.poll(10 + ipmc_defs::IPMC_FRU_PERSIST_DELAY_MS, &mut lines);
+        }
+        // The Cold Reset request: its response leaves, then the board resets.
+        exchange(&mut emu, &request(FAKE_RESET_CMD, 3), reset_ms, &mut lines);
+        assert_eq!(resets(&lines), 1, "reset at {reset_ms} ms");
+        assert_eq!(
+            read_last_byte(&mut emu, 1, reset_ms + 1000, &mut lines),
+            marker,
+            "reset at {reset_ms} ms"
+        );
+    }
 }
 
 /// event_round -- asks the fake extension for one Platform Event (Chassis Manager request
-/// number `cm_seq`) at `now_ms`, takes the request frame it sends, answers 00h as the Event
-/// Receiver; returns the rqSeq of the request.
+/// number `cm_seq`) at `now_ms`, takes the request frame it writes after the response, answers
+/// 00h as the Event Receiver; returns the rqSeq of the request.
 fn event_round(emu: &mut Emulator, cm_seq: u8, now_ms: u32, lines: &mut Lines) -> u8 {
-    exchange(emu, &request(FAKE_SEND_CMD, cm_seq), now_ms, lines);
-    emu.poll(now_ms + 2, lines);
-    let (bus, frame) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, now_ms + 3, lines).unwrap();
-    let sent = ipmb::parse(&frame).unwrap();
-    let header = ipmb::response_header_for(&sent).unwrap();
+    let sent = exchange_all(emu, &request(FAKE_SEND_CMD, cm_seq), now_ms, lines);
+    let [_response, event] = sent.as_slice() else {
+        panic!("the response and the event request: {sent:?}");
+    };
+    let frame = ipmb::parse(&event.bytes).unwrap();
+    let header = ipmb::response_header_for(&frame).unwrap();
     let mut buf = [0u8; ipmb::IPMB_MAX_LEN];
     let n = ipmb::encode_response(&header, 0, &[], &mut buf).unwrap();
-    emu.rx(bus, &buf[..n], now_ms + 4).unwrap();
+    emu.rx(event.bus, &buf[..n], now_ms + 4).unwrap();
     emu.poll(now_ms + 5, lines);
-    sent.header.seq
+    frame.header.seq
 }
 
 #[test]
@@ -358,22 +339,25 @@ fn no_sequence_number_sent_inside_t9_is_used_again_after_a_cold_reset() {
     }
     let reset_ms = events * spacing_ms + 200;
     exchange(&mut emu, &request(FAKE_RESET_CMD, 0), reset_ms, &mut lines);
-    emu.poll(reset_ms + 2, &mut lines);
     assert_eq!(resets(&lines), 1);
     // The fake extension asks again each poll until the requester takes the event.
-    exchange(
+    let answered = exchange_all(
         &mut emu,
         &request(FAKE_SEND_CMD, 62),
         reset_ms + 100,
         &mut lines,
     );
+    assert_eq!(
+        answered.len(),
+        1,
+        "the response alone: no sequence number is free yet"
+    );
     let mut first = None;
     let mut now_ms = reset_ms + 110;
     while first.is_none() && now_ms < reset_ms + 3 * ipmc_core::requester::SEQ_EXPIRY_MS {
         emu.poll(now_ms, &mut lines);
-        if let Some((bus, frame)) = emu.next_tx().map(|(b, f)| (b, f.to_vec())) {
-            emu.tx_done(bus, true, now_ms + 1, &mut lines).unwrap();
-            first = Some((now_ms, ipmb::parse(&frame).unwrap().header.seq));
+        if let Some(tx) = emu.take_sent().first() {
+            first = Some((now_ms, ipmb::parse(&tx.bytes).unwrap().header.seq));
         }
         now_ms += 10;
     }
@@ -397,7 +381,6 @@ fn a_cold_reset_restarts_the_payload_power_as_a_boot_does() {
     }
     assert_eq!(emu.payload_power(), PowerState::On);
     exchange(&mut emu, &request(FAKE_RESET_CMD, 1), 3000, &mut lines);
-    emu.poll(3002, &mut lines);
     assert_eq!(resets(&lines), 1);
     assert_eq!(
         emu.payload_power(),
@@ -438,20 +421,10 @@ fn a_warm_reset_rebuilds_the_link_and_keeps_everything_else() {
         "the test changed the enables"
     );
     assert_eq!(emu.link().counters(Bus::A).rx_ok, 1);
-    // The Warm Reset request is taken; it is applied once the response has left, as a Cold Reset.
-    emu.rx(Bus::A, &request(FAKE_WARM_CMD, 2), 3010).unwrap();
-    assert_eq!(emu.poll(3010, &mut lines), 1);
-    emu.poll(3011, &mut lines);
-    assert_eq!(emu.context().pending_reset, Some(ResetRequest::Warm));
-    assert_eq!(
-        count(&lines, "IPMC warm reset"),
-        0,
-        "not before the response left"
-    );
-    let (bus, _) = emu.next_tx().map(|(b, f)| (b, f.to_vec())).unwrap();
-    emu.tx_done(bus, true, 3012, &mut lines).unwrap();
-    emu.poll(3013, &mut lines);
-    assert_eq!(count(&lines, "IPMC warm reset"), 1);
+    // The Warm Reset request is taken and applied once the response has left, as a Cold Reset:
+    // the pass that wrote the response applies it.
+    exchange(&mut emu, &request(FAKE_WARM_CMD, 2), 3010, &mut lines);
+    assert_eq!(count(&lines, WARM_LINE), 1);
     assert_eq!(resets(&lines), 0, "a Warm Reset is not a Cold Reset");
     assert_eq!(emu.context().pending_reset, None);
     assert_eq!(WARM_CALLS.with(Cell::get), 1, "the extension is told once");
@@ -476,16 +449,12 @@ fn the_request_sequence_continues_across_a_cold_and_a_warm_reset() {
         return; // a Tier-1 build sends no request
     }
     // (command that asks for the reset, the trace line of its application)
-    for (command, applied) in [
-        (FAKE_RESET_CMD, "IPMC cold reset"),
-        (FAKE_WARM_CMD, "IPMC warm reset"),
-    ] {
+    for (command, applied) in [(FAKE_RESET_CMD, COLD_LINE), (FAKE_WARM_CMD, WARM_LINE)] {
         let mut emu = board();
         let mut lines = Lines::default();
         assert_eq!(event_round(&mut emu, 1, 0, &mut lines), 0);
         assert_eq!(event_round(&mut emu, 2, 100, &mut lines), 1);
         exchange(&mut emu, &request(command, 3), 200, &mut lines);
-        emu.poll(202, &mut lines);
         assert_eq!(count(&lines, applied), 1, "{applied}");
         assert_eq!(
             event_round(&mut emu, 1, 300, &mut lines),
@@ -516,7 +485,7 @@ fn the_payload_power_and_reset_hand_offs_are_served_by_the_owner() {
         &mut lines,
     );
     let pulse = format!(
-        "payload reset pulse {} ms",
+        "Payload reset: PAYLOAD_RST_OUT_N low for {} ms",
         ipmc_defs::IPMC_PAYLOAD_RESET_PULSE_MS
     );
     assert_eq!(count(&lines, &pulse), 1);

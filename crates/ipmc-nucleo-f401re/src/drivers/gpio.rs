@@ -11,9 +11,9 @@
 //! group that is not claimed is never configured or driven (a simulated power group leaves
 //! PWR_EN alone).
 
-use crate::hal::{DigitalInputs, Input, PowerSwitch, ResetOutput, SourceError};
+use ipmc_sensors::hal::{DigitalInputs, Input, PowerSwitch, ResetOutput, SourceError};
 
-use super::ports::{self, PinId, Pins, PortError, Pull, Speed};
+use crate::bsp::ports::{self, PinId, Pins, PortError, Pull, Speed};
 
 const OWNER: &str = "board_io";
 

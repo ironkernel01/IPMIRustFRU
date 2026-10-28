@@ -3,20 +3,20 @@
 //
 // The protocol (line editor, commands, answers) lives in crates/ipmc-app and never touches
 // hardware. This file does the three things the crate leaves to the firmware:
-//   1. `AppPort::poll` takes bytes from `uart::getc(Port::App)` and gives each to
+//   1. `AppPort::poll` takes bytes from the application port (`SerialPort::getc`) and gives each to
 //      `ipmc_app::serve`, which appends the echo and, when a line ends, the answer and the prompt
 //      to one output buffer. The buffer drains into the UART TX ring a few bytes per pass, with
 //      no wait (see "Time" below). The start-up banner goes out through the same buffer.
 //   2. `LinkHost` implements `ipmc_app::AppHost` over the IPMB link layer: the dispatch context
 //      (addresses, FRU image, FRU state, latest sensor snapshot), the flash log status, the live
-//      NVMRO pin, the command names of the capture log and the SysTick time. A new application
+//      NVMRO pin, the command names of the capture log and the clock. A new application
 //      command that needs more board data adds its method to `AppHost` and its body here.
 //   3. Every request line and the final line of every answer go into the capture log as text
 //      lines (`app request <line>`, `app answer <line>`), cut as the log cuts any text line.
 //
 // Time. A person reads the output, so nothing is dropped, and the main loop never waits for the
 // UART: an answer of up to ANSWER_MAX (1280 with the default table) bytes is formatted into `out`, then `drain` copies
-// what the TX ring takes (`uart::write`, which never waits) and keeps a cursor for the rest. While
+// what the TX ring takes (`SerialPort::write`, which never waits) and keeps a cursor for the rest. While
 // output is pending the port takes no new bytes, so one request is answered at a time and the
 // output order is the request order. One pass does at most IPMC_APP_BYTES_PER_POLL bytes of
 // input and stops after one answer. Formatting the answer is the work of that pass, estimated
@@ -31,8 +31,8 @@
 // loses bytes, with the same answer. A byte received with a framing, noise or parity error
 // counts as lost: its line gets the same answer and does not run.
 //
-// Ownership: the UART driver (ipmc-nucleo-f401re src/bsp/uart.rs) owns USART1 and its rings; this file only reads and
-// writes through its functions. The per-unit FRU fields are written through the same path as a
+// Ownership: the board's UART driver owns the application port and its rings; this file only reads and
+// writes through the `SerialPort` handle it holds. The per-unit FRU fields are written through the same path as a
 // Write FRU Data from the Chassis Manager: `IpmbLink::set_unit_field` edits the RAM image and
 // marks it dirty, and `IpmbLink::service_fru_log` saves it. There is no second writer.
 //
@@ -50,10 +50,12 @@ use ipmc_core::link::LocalError;
 use ipmc_core::names::Names;
 use ipmc_fru::{FieldError, FruField};
 
-use crate::bsp::systick;
-use crate::bsp::uart::{self, Port};
-use crate::debug_cmds::local;
-use crate::ipmb_link::IpmbLink;
+use ipmc_hal::board::Board;
+use ipmc_hal::serial::SerialPort;
+use ipmc_hal::system::Straps;
+use ipmc_hal::time::Clock;
+
+use crate::link::IpmbLink;
 
 /// ENABLED -- the application port is built in (ipmc-defs IPMC_APP_UART_ENABLE).
 pub const ENABLED: bool = ipmc_defs::IPMC_APP_UART_ENABLE;
@@ -66,9 +68,17 @@ const BYTES_PER_POLL: usize = ipmc_defs::IPMC_APP_BYTES_PER_POLL;
 
 /// AppPort -- the line editor, the output buffer and its cursor; the main loop calls `poll` every
 /// pass.
-pub struct AppPort {
+pub struct AppPort<B: Board> {
+    /// The application port (APP_UART).
+    pub(crate) port: B::App,
+    /// The clock `Status::uptime_s` reads.
+    clock: B::Clock,
+    /// The strap pins `Status::nvmro` reads (live).
+    straps: B::Straps,
+    /// The firmware version text `AppHost::version` answers.
+    version: &'static str,
     editor: LineEditor<LINE_MAX>,
-    /// `uart::counters(Port::App).lost()` at the last poll that looked: a move means bytes were lost since.
+    /// `SerialPort::counters().lost()` at the last poll that looked: a move means bytes were lost since.
     lost_seen: u32,
     /// Output waiting for the TX ring: the echo, the answer, the prompt, or the banner.
     out: AnswerBuf<ANSWER_MAX>,
@@ -78,10 +88,20 @@ pub struct AppPort {
     started: bool,
 }
 
-impl AppPort {
-    /// new -- an idle port.
-    pub const fn new() -> Self {
+impl<B: Board> AppPort<B> {
+    /// new -- an idle port over the application port `port`; `version` is the firmware version
+    /// text.
+    pub const fn new(
+        port: B::App,
+        clock: B::Clock,
+        straps: B::Straps,
+        version: &'static str,
+    ) -> Self {
         AppPort {
+            port,
+            clock,
+            straps,
+            version,
             editor: LineEditor::new(),
             lost_seen: 0,
             out: AnswerBuf::new(),
@@ -98,18 +118,18 @@ impl AppPort {
     /// most BYTES_PER_POLL bytes and answers at most one request line: the pass ends after the
     /// answer, so a payload CPU that sends many requests cannot hold the IPMB link service off.
     /// Does nothing when the port is off or did not start.
-    pub fn poll(&mut self, link: &mut IpmbLink, payload_power: bool) {
-        if !ENABLED || !uart::is_up(Port::App) {
+    pub fn poll(&mut self, link: &mut IpmbLink<B>, payload_power: bool) {
+        if !ENABLED || !self.port.is_up() {
             return;
         }
         self.poll_pass(link, payload_power);
         // A Cold Reset asked for from this port waits for its own answer: the link's reset gate
         // counts the output still in `out` or in the TX ring as "not idle".
-        link.set_app_output_pending(self.sent < self.out.len() || uart::tx_pending(Port::App));
+        link.set_app_output_pending(self.sent < self.out.len() || self.port.tx_pending());
     }
 
     /// poll_pass -- the work of one `poll` pass, with the port up.
-    fn poll_pass(&mut self, link: &mut IpmbLink, payload_power: bool) {
+    fn poll_pass(&mut self, link: &mut IpmbLink<B>, payload_power: bool) {
         if !self.started {
             self.started = true;
             // The banner fits the empty buffer.
@@ -117,6 +137,9 @@ impl AppPort {
                 &LinkHost {
                     link: &mut *link,
                     payload_power,
+                    clock: &self.clock,
+                    straps: &self.straps,
+                    version: self.version,
                 },
                 &mut self.out,
             );
@@ -126,7 +149,7 @@ impl AppPort {
             return;
         }
         for _ in 0..BYTES_PER_POLL {
-            let Some(byte) = uart::getc(Port::App) else {
+            let Some(byte) = self.port.getc() else {
                 break;
             };
             // The UART interrupt can lose a byte while this loop runs. Looking after every byte
@@ -143,6 +166,9 @@ impl AppPort {
                 &mut LinkHost {
                     link: &mut *link,
                     payload_power,
+                    clock: &self.clock,
+                    straps: &self.straps,
+                    version: self.version,
                 },
                 &mut self.out,
             );
@@ -171,11 +197,11 @@ impl AppPort {
     /// byte can be anywhere in the ring, so every byte waiting is dropped and the line editor
     /// resynchronises at the first line end that arrives afterwards. A caller that holds a byte
     /// taken before the loss was seen drops it too.
-    fn check_loss(&mut self, link: &mut IpmbLink) -> bool {
-        let lost_now = uart::counters(Port::App).lost();
+    fn check_loss(&mut self, link: &mut IpmbLink<B>) -> bool {
+        let lost_now = self.port.counters().lost();
         let moved = lost_now.wrapping_sub(self.lost_seen);
         if moved > 0 {
-            uart::discard_rx(Port::App);
+            self.port.discard_rx();
             self.editor.damage(moved);
             self.lost_seen = lost_now;
             link.log_text(format_args!(
@@ -189,7 +215,7 @@ impl AppPort {
     /// output is left. The buffer is reused once everything is copied.
     fn drain(&mut self) -> bool {
         let rest = self.out.as_bytes().get(self.sent..).unwrap_or(&[]);
-        self.sent += uart::write(Port::App, rest);
+        self.sent += self.port.write(rest);
         if self.sent < self.out.len() {
             return true;
         }
@@ -200,15 +226,18 @@ impl AppPort {
 }
 
 /// LinkHost -- the board as `ipmc-app` sees it, over the IPMB link layer.
-struct LinkHost<'a> {
-    link: &'a mut IpmbLink,
+struct LinkHost<'a, B: Board> {
+    link: &'a mut IpmbLink<B>,
     /// PWR_EN is asserted (`Sensing::payload_power_on`), read by the caller at the pass.
     payload_power: bool,
+    clock: &'a B::Clock,
+    straps: &'a B::Straps,
+    version: &'static str,
 }
 
-impl AppHost for LinkHost<'_> {
+impl<B: Board> AppHost for LinkHost<'_, B> {
     fn version(&self) -> &'static str {
-        env!("CARGO_PKG_VERSION")
+        self.version
     }
 
     fn status(&self) -> Status {
@@ -218,8 +247,8 @@ impl AppHost for LinkHost<'_> {
             ga: dispatch.addr.ga,
             power: dispatch.sensors.power,
             health: dispatch.sensors.health,
-            nvmro: crate::bsp::ga::nvmro_asserted(),
-            uptime_s: systick::seconds(),
+            nvmro: self.straps.nvmro_asserted(),
+            uptime_s: self.clock.seconds(),
             payload_power: self.payload_power,
         }
     }
@@ -237,10 +266,13 @@ impl AppHost for LinkHost<'_> {
     }
 
     fn ipmi(&mut self, netfn: u8, cmd: u8, data: &[u8]) -> Result<(u8, IpmiData), AppError> {
-        let reply = local(self.link, netfn, cmd, data).map_err(|error| match error {
-            LocalError::TooLong => AppError::TooLong,
-            LocalError::Dispatch => AppError::Dispatch,
-        })?;
+        let reply = self
+            .link
+            .local(netfn, cmd, data)
+            .map_err(|error| match error {
+                LocalError::TooLong => AppError::TooLong,
+                LocalError::Dispatch => AppError::Dispatch,
+            })?;
         let data = IpmiData::from_slice(reply.data()).ok_or(AppError::TooLong)?;
         Ok((reply.completion_code(), data))
     }

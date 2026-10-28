@@ -1,9 +1,9 @@
 // ga.rs - strap pin configuration (GA0..GA4, GAP, NVMRO, BOOTLOADER) and the raw level read.
 // Decoding is in ipmc_core::addr.
 
+use crate::bsp::ports::{self, PinId, Pins, PortError, PortId, Pull};
 use cortex_m::interrupt;
 use ipmc_core::addr;
-use ipmc_sensors::drivers::stm32f401::ports::{self, PinId, Pins, PortError, PortId, Pull};
 
 use crate::bsp::static_slot::{self, StaticSlot};
 

@@ -2,7 +2,7 @@
 // WATCHDOG (local IPMI requests, the duplicate cache, the restart into the bootloader and the
 // watchdog tests).
 //
-// The state lives in ipmb_link.rs (the link and the dispatch context); these handlers switch it,
+// The state lives in ipmc_runtime::link (the link and the dispatch context); these handlers switch it,
 // print it and run requests through it. The logging handlers (LOG, DUMP, CLEAR, TRACE) are in
 // log_cmds.rs and the ipmc-log crate; STATUS prints the log lines through ipmc-log. Nothing here
 // reads an IPMB byte layout of its own.
@@ -14,42 +14,48 @@ use core::fmt;
 
 use ipmc_boot::request::Interface;
 use ipmc_core::dispatch::cc;
-use ipmc_core::ipmb::{self, IPMB_MAX_LEN, NETFN_SE};
+use ipmc_core::ipmb::{IPMB_MAX_LEN, NETFN_SE};
 use ipmc_core::link::{LocalError, CM_ADDR8};
 use ipmc_core::names::{CommandName, HexBytes, NetFnName};
 use ipmc_core::queue::Bus;
 use ipmc_log::{LogLine, SwitchLines};
 use ipmc_menu::{eq_ignore_case, optional, Args, CmdError, CmdResult};
 
-use crate::bsp::systick;
-use crate::bsp::uart::{self, Port};
-use crate::console::{print_watchdog, Context};
-use crate::ipmb_link::IpmbLink;
+use ipmc_hal::board::Board;
+use ipmc_hal::serial::{SerialPort, CONSOLE_TX_USABLE};
+use ipmc_hal::time::Clock;
+
+use crate::console::{print_watchdog, Context, LinkHome};
+use crate::link::IpmbLink;
+use crate::out;
+use crate::text::ConsoleText;
 
 /// CMD_SET_EVENT_RECEIVER -- Set Event Receiver, S/E NetFn (IPMI v2.0 section 29.1).
-const CMD_SET_EVENT_RECEIVER: u8 = 0x00;
+pub(crate) const CMD_SET_EVENT_RECEIVER: u8 = 0x00;
 /// CMD_GET_EVENT_RECEIVER -- Get Event Receiver, S/E NetFn (IPMI v2.0 section 29.2).
 const CMD_GET_EVENT_RECEIVER: u8 = 0x01;
 /// RECEIVER_OFF -- the Event Receiver address that disables event messages (IPMI v2.0 29.1).
-const RECEIVER_OFF: u8 = 0xFF;
+pub(crate) const RECEIVER_OFF: u8 = 0xFF;
 /// RECEIVER_LUN_MASK -- the Event Receiver LUN is bits 1:0 of the second data byte.
 const RECEIVER_LUN_MASK: u8 = 0x03;
 
 /// reported -- prints one error line and stops the handler.
-pub(crate) fn reported(message: fmt::Arguments) -> CmdError {
-    out!("Error: {}\n", message);
+pub(crate) fn reported(con: &mut impl ConsoleText, message: fmt::Arguments) -> CmdError {
+    out!(con, "Error: {}\n", message);
     CmdError::Reported
 }
 
 // ---- hex words ----
 
 /// hex_word -- one typed byte: `06`, `0x06` and `6` are all 06h.
-fn hex_word(text: &str) -> Result<u8, CmdError> {
-    ipmc_wire::hex_word(text).ok_or_else(|| reported(format_args!("'{text}' is not a hex byte")))
+fn hex_word(con: &mut impl ConsoleText, text: &str) -> Result<u8, CmdError> {
+    ipmc_wire::hex_word(text)
+        .ok_or_else(|| reported(con, format_args!("'{text}' is not a hex byte")))
 }
 
 /// hex_words -- the words of `args` from index `first` on as bytes in `buf`; the count.
 fn hex_words(
+    con: &mut impl ConsoleText,
     args: &Args<'_>,
     first: usize,
     buf: &mut [u8; IPMB_MAX_LEN],
@@ -58,50 +64,14 @@ fn hex_words(
     while let Some(word) = args.get(first + count) {
         let slot = buf
             .get_mut(count)
-            .ok_or_else(|| reported(format_args!("more than {IPMB_MAX_LEN} bytes")))?;
-        *slot = hex_word(word)?;
+            .ok_or_else(|| reported(con, format_args!("more than {IPMB_MAX_LEN} bytes")))?;
+        *slot = hex_word(con, word)?;
         count += 1;
     }
     Ok(count)
 }
 
 // ---- local requests ----
-
-/// Reply -- the response frame of a local request (also used by the application port).
-pub(crate) struct Reply {
-    len: usize,
-    bytes: [u8; IPMB_MAX_LEN],
-}
-
-impl Reply {
-    /// frame -- the parsed response; None when it does not parse (the core built it, so never).
-    fn frame(&self) -> Option<ipmb::Frame<'_>> {
-        ipmb::parse(self.bytes.get(..self.len)?).ok()
-    }
-
-    /// completion_code -- the completion code of the response.
-    pub(crate) fn completion_code(&self) -> u8 {
-        self.frame()
-            .and_then(|f| f.completion_code)
-            .unwrap_or(cc::UNSPECIFIED)
-    }
-
-    /// data -- the response data after the completion code.
-    pub(crate) fn data(&self) -> &[u8] {
-        self.frame().map_or(&[], |f| f.data)
-    }
-}
-
-/// local -- runs a request locally (`IpmbLink::local_request`).
-pub(crate) fn local(
-    link: &mut IpmbLink,
-    netfn: u8,
-    cmd: u8,
-    data: &[u8],
-) -> Result<Reply, LocalError> {
-    let (len, bytes) = link.local_request(netfn, cmd, data)?;
-    Ok(Reply { len, bytes })
-}
 
 // ---- event receiver ----
 
@@ -131,8 +101,8 @@ impl fmt::Display for ReceiverState {
 }
 
 /// receiver_state -- Get Event Receiver, locally.
-fn receiver_state(link: &mut IpmbLink) -> ReceiverState {
-    let Ok(reply) = local(link, NETFN_SE, CMD_GET_EVENT_RECEIVER, &[]) else {
+fn receiver_state<B: Board>(link: &mut IpmbLink<B>) -> ReceiverState {
+    let Ok(reply) = link.local(NETFN_SE, CMD_GET_EVENT_RECEIVER, &[]) else {
         return ReceiverState::Failed(cc::UNSPECIFIED);
     };
     match (reply.completion_code(), reply.data()) {
@@ -160,10 +130,10 @@ pub(crate) enum EventsResult {
 
 /// set_events -- Set Event Receiver, locally: the CM address (events on, VITA 46.11 Rule 7-5) or
 /// FFh (off), LUN 0. The one function of DEBUG EVENTS and of the start-up with
-/// IPMC_EVENTS_AT_BOOT false.
-pub(crate) fn set_events(link: &mut IpmbLink, on: bool) -> EventsResult {
+/// the start-up with events off.
+pub(crate) fn set_events<B: Board>(link: &mut IpmbLink<B>, on: bool) -> EventsResult {
     let receiver = if on { CM_ADDR8 } else { RECEIVER_OFF };
-    match local(link, NETFN_SE, CMD_SET_EVENT_RECEIVER, &[receiver, 0]) {
+    match link.local(NETFN_SE, CMD_SET_EVENT_RECEIVER, &[receiver, 0]) {
         Err(error) => EventsResult::Failed(error),
         Ok(reply) => match reply.completion_code() {
             cc::OK => EventsResult::Set,
@@ -173,22 +143,34 @@ pub(crate) fn set_events(link: &mut IpmbLink, on: bool) -> EventsResult {
     }
 }
 
-/// events_off_at_boot -- the start-up with IPMC_EVENTS_AT_BOOT false: sends the IPMC itself Set
-/// Event Receiver FFh and says so, unless the build has no event messages (C1h).
-pub(crate) fn events_off_at_boot(link: &mut IpmbLink) {
-    if ipmc_defs::IPMC_EVENTS_AT_BOOT {
+/// events_off_at_boot -- the start-up with `events_at_boot` false: sends the IPMC itself Set
+/// Event Receiver FFh and says so, unless the build has no event messages (C1h). With
+/// `events_at_boot` true it sends nothing.
+pub(crate) fn events_off_at_boot<B: Board>(
+    events_at_boot: bool,
+    link: &mut IpmbLink<B>,
+    con: &mut impl ConsoleText,
+) {
+    if events_at_boot {
         return;
     }
     match set_events(link, false) {
         EventsResult::NoEvents => {}
         EventsResult::Set => {
-            out!("Events: off from start-up (defs.rs IPMC_EVENTS_AT_BOOT false)\n");
+            out!(
+                con,
+                "Events: off from start-up (defs.rs IPMC_EVENTS_AT_BOOT false)\n"
+            );
         }
         EventsResult::Refused(code) => {
-            out!("Events: start-up Set Event Receiver FFh answered CC {code:02X}h\n");
+            out!(
+                con,
+                "Events: start-up Set Event Receiver FFh answered CC {code:02X}h\n"
+            );
         }
         EventsResult::Failed(error) => {
             out!(
+                con,
                 "Events: start-up Set Event Receiver FFh failed: {}\n",
                 error.name()
             );
@@ -199,11 +181,21 @@ pub(crate) fn events_off_at_boot(link: &mut IpmbLink) {
 // ---- status ----
 
 /// cmd_debug_status -- DEBUG STATUS.
-pub fn cmd_debug_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
-    out!("{}{}", LogLine(ctx.ipmb.log()), SwitchLines(ctx.ipmb.log()));
-    let receiver = receiver_state(ctx.ipmb);
-    out!("Event receiver:  {}\n", receiver);
+pub fn cmd_debug_status<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    _args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     out!(
+        con,
+        "{}{}",
+        LogLine(ctx.ipmb.log()),
+        SwitchLines(ctx.ipmb.log())
+    );
+    let receiver = receiver_state(&mut *ctx.ipmb);
+    out!(con, "Event receiver:  {}\n", receiver);
+    out!(
+        con,
         "Duplicate cache: {} entries\n",
         ctx.ipmb.link().duplicate_cache_len()
     );
@@ -214,53 +206,65 @@ pub fn cmd_debug_status(ctx: &mut Context, _args: &Args<'_>) -> CmdResult {
 
 /// cmd_debug_events -- DEBUG EVENTS {STATE}: a local Set Event Receiver; no argument prints the
 /// Event Receiver.
-pub fn cmd_debug_events(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+pub fn cmd_debug_events<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     let Some(on) = optional(args.on_off_at(0))? else {
-        let receiver = receiver_state(ctx.ipmb);
-        out!("Event receiver: {}\n", receiver);
+        let receiver = receiver_state(&mut *ctx.ipmb);
+        out!(con, "Event receiver: {}\n", receiver);
         return Ok(());
     };
-    match set_events(ctx.ipmb, on) {
+    match set_events(&mut *ctx.ipmb, on) {
         EventsResult::Set if on => {
-            out!("OK: events on (receiver {CM_ADDR8:02X}h LUN 0)\n");
+            out!(con, "OK: events on (receiver {CM_ADDR8:02X}h LUN 0)\n");
             Ok(())
         }
         EventsResult::Set => {
-            out!("OK: events off\n");
+            out!(con, "OK: events off\n");
             Ok(())
         }
         EventsResult::NoEvents => {
-            out!("this build sends no event messages\n");
+            out!(con, "this build sends no event messages\n");
             Ok(())
         }
-        EventsResult::Refused(code) => Err(reported(format_args!(
-            "Set Event Receiver answered CC {code:02X}h"
-        ))),
-        EventsResult::Failed(error) => Err(reported(format_args!(
-            "Set Event Receiver did not run: {}",
-            error.name()
-        ))),
+        EventsResult::Refused(code) => Err(reported(
+            con,
+            format_args!("Set Event Receiver answered CC {code:02X}h"),
+        )),
+        EventsResult::Failed(error) => Err(reported(
+            con,
+            format_args!("Set Event Receiver did not run: {}", error.name()),
+        )),
     }
 }
 
 /// cmd_debug_ipmi -- DEBUG IPMI [NETFN] [CMD] {DATA...}: one request through the dispatcher as
 /// if the Chassis Manager had sent it; nothing goes on the bus. The request and the response go
 /// into the capture log as text lines.
-pub fn cmd_debug_ipmi(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
-    let netfn = hex_word(args.text_at(0)?)?;
-    let cmd = hex_word(args.text_at(1)?)?;
+pub fn cmd_debug_ipmi<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
+    let netfn = hex_word(con, args.text_at(0)?)?;
+    let cmd = hex_word(con, args.text_at(1)?)?;
     let mut buf = [0u8; IPMB_MAX_LEN];
-    let count = hex_words(args, 2, &mut buf)?;
+    let count = hex_words(con, args, 2, &mut buf)?;
     let data = buf.get(..count).unwrap_or(&[]);
     ctx.ipmb.log_text(format_args!(
         "console request NetFn {netfn:02X}h cmd {cmd:02X}h data {}",
         HexBytes(data)
     ));
-    let reply = local(ctx.ipmb, netfn, cmd, data).map_err(|error| {
-        reported(format_args!(
-            "the request cannot run ({}): NetFn must be even and at most 3Eh",
-            error.name()
-        ))
+    let reply = ctx.ipmb.local(netfn, cmd, data).map_err(|error| {
+        reported(
+            con,
+            format_args!(
+                "the request cannot run ({}): NetFn must be even and at most 3Eh",
+                error.name()
+            ),
+        )
     })?;
     let (code, response) = (reply.completion_code(), reply.data());
     ctx.ipmb.log_text(format_args!(
@@ -270,6 +274,7 @@ pub fn cmd_debug_ipmi(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     ));
     let names = ctx.ipmb.names();
     out!(
+        con,
         "-> CC {code:02X}h, {} bytes: {} ({} {})\n",
         response.len(),
         HexBytes(response),
@@ -285,27 +290,32 @@ pub fn cmd_debug_ipmi(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
 
 /// cmd_debug_inject -- DEBUG INJECT [BUS] {BYTES...}: a whole IPMB frame handed to the link as
 /// if the bus had received it. A request the link accepts is answered on the bus as any other.
-pub fn cmd_debug_inject(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+pub fn cmd_debug_inject<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     let bus_word = args.text_at(0)?;
     let bus = if bus_word.eq_ignore_ascii_case("A") {
         Bus::A
     } else if bus_word.eq_ignore_ascii_case("B") {
         Bus::B
     } else {
-        return Err(reported(format_args!("bus is A or B")));
+        return Err(reported(con, format_args!("bus is A or B")));
     };
     let mut buf = [0u8; IPMB_MAX_LEN];
-    let count = hex_words(args, 1, &mut buf)?;
+    let count = hex_words(con, args, 1, &mut buf)?;
     if count == 0 {
         return Err(CmdError::Arg(ipmc_menu::ArgError::Missing));
     }
     let frame = buf.get(..count).unwrap_or(&[]);
     match ctx.ipmb.inject(bus, frame) {
         Ok(()) => out!(
+            con,
             "OK: {count} bytes handed to the link as received on IPMB-{}\n",
             bus.name()
         ),
-        Err(reason) => out!("Dropped by the link: {}\n", reason.name()),
+        Err(reason) => out!(con, "Dropped by the link: {}\n", reason.name()),
     }
     Ok(())
 }
@@ -320,7 +330,7 @@ const CACHE_ROW: usize = 128;
 /// the header line, the "more" line and what the ring still holds ((4095 - 256) / 128 = 29 with the
 /// default ring). The cache holds up to IPMB_DUP_CACHE (64) entries, written by whatever the bus
 /// sends; the others are counted in the last line.
-const CACHE_ROWS_MAX: usize = uart::CONSOLE_TX_USABLE.saturating_sub(256) / CACHE_ROW;
+const CACHE_ROWS_MAX: usize = CONSOLE_TX_USABLE.saturating_sub(256) / CACHE_ROW;
 const _: () = assert!(
     CACHE_ROWS_MAX >= 1,
     "IPMC_UART_TX_BUF is too small for DEBUG CACHE (debug_cmds.rs CACHE_ROW)"
@@ -328,19 +338,24 @@ const _: () = assert!(
 
 /// cmd_debug_cache -- DEBUG CACHE {ACTION}: the duplicate cache entries (at most
 /// `CACHE_ROWS_MAX`, then a line that counts the rest), or CLEAR.
-pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+pub fn cmd_debug_cache<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     match optional(args.text_at(0))? {
         None => {
             let link = &*ctx.ipmb;
             let names = link.names();
             out!(
+                con,
                 "Duplicate cache: {} entries\n",
                 link.link().duplicate_cache_len()
             );
             let mut left = 0;
             for (index, e) in link
                 .link()
-                .duplicate_cache_entries(systick::millis())
+                .duplicate_cache_entries(ctx.clock.millis())
                 .enumerate()
             {
                 if index >= CACHE_ROWS_MAX {
@@ -348,6 +363,7 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
                     continue;
                 }
                 out!(
+                    con,
                     "  rqSA {:02X}h seq {:02X}h {} {}: {} bytes, age {} ms{}\n",
                     e.rq_sa,
                     e.rq_seq,
@@ -363,16 +379,16 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
                 );
             }
             if left > 0 {
-                out!("  ... {} more entries\n", left);
+                out!(con, "  ... {} more entries\n", left);
             }
             Ok(())
         }
         Some(word) if word.eq_ignore_ascii_case("CLEAR") => {
             ctx.ipmb.clear_duplicate_cache();
-            out!("OK: duplicate cache cleared\n");
+            out!(con, "OK: duplicate cache cleared\n");
             Ok(())
         }
-        Some(_) => Err(reported(format_args!("action is CLEAR"))),
+        Some(_) => Err(reported(con, format_args!("action is CLEAR"))),
     }
 }
 
@@ -384,15 +400,20 @@ pub fn cmd_debug_cache(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
 /// letter case); with power off, or with `CONFIRM`, it prints the restart line and restarts. The
 /// reset is the one Cold Reset path (`IpmbLink::request_bootloader`): the console is flushed, an
 /// accepted FRU write is saved first, and the request words are written just before the restart.
-pub fn cmd_debug_bootloader(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+pub fn cmd_debug_bootloader<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     let confirmed = match optional(args.text_at(0))? {
         None => false,
         Some(word) if eq_ignore_case(word, "CONFIRM") => true,
-        Some(_) => return Err(reported(format_args!("argument is CONFIRM"))),
+        Some(_) => return Err(reported(con, format_args!("argument is CONFIRM"))),
     };
     let power_on = ctx.sensing.payload_power_on();
     if power_on && !confirmed {
         out!(
+            con,
             "Payload power is on and drops at the reset into the bootloader
 Send DEBUG BOOTLOADER CONFIRM to restart
 "
@@ -400,11 +421,13 @@ Send DEBUG BOOTLOADER CONFIRM to restart
         return Ok(());
     }
     out!(
+        con,
         "Restarting into the bootloader
 "
     );
     if power_on {
         out!(
+            con,
             "Payload power drops at the reset
 "
         );
@@ -421,9 +444,13 @@ Send DEBUG BOOTLOADER CONFIRM to restart
 /// prints the reset cause (and the kept fault for a panic). Without `CONFIRM` the command only
 /// says what it does. A watchdog that is not running refuses both tests (a hang would never end).
 /// Argument words are any letter case.
-pub fn cmd_debug_watchdog(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
+pub fn cmd_debug_watchdog<B: Board, L: LinkHome<B>>(
+    ctx: &mut Context<B, L>,
+    args: &Args<'_>,
+) -> CmdResult {
+    let con = &mut ctx.con;
     let Some(test) = optional(args.text_at(0))? else {
-        print_watchdog(ctx);
+        print_watchdog(con, ctx.watchdog_ms);
         return Ok(());
     };
     let (hang, what) = if eq_ignore_case(test, "HANG") {
@@ -431,37 +458,43 @@ pub fn cmd_debug_watchdog(ctx: &mut Context, args: &Args<'_>) -> CmdResult {
     } else if eq_ignore_case(test, "PANIC") {
         (false, "panics")
     } else {
-        return Err(reported(format_args!("test is HANG or PANIC")));
+        return Err(reported(con, format_args!("test is HANG or PANIC")));
     };
     let confirmed = match optional(args.text_at(1))? {
         None => false,
         Some(word) if eq_ignore_case(word, "CONFIRM") => true,
-        Some(_) => return Err(reported(format_args!("argument is CONFIRM"))),
+        Some(_) => return Err(reported(con, format_args!("argument is CONFIRM"))),
     };
     let Some(ms) = ctx.watchdog_ms else {
-        return Err(reported(format_args!("the watchdog is not running")));
+        return Err(reported(con, format_args!("the watchdog is not running")));
     };
     let name = if hang { "HANG" } else { "PANIC" };
     if !confirmed {
         out!(
+            con,
             "DEBUG WATCHDOG {} {}, then the watchdog resets the board\n",
             name,
             what
         );
-        out!("Send DEBUG WATCHDOG {} CONFIRM to run it\n", name);
+        out!(con, "Send DEBUG WATCHDOG {} CONFIRM to run it\n", name);
         return Ok(());
     }
     if hang {
-        out!("Hanging: the watchdog resets the board within {} ms\n", ms);
-        uart::flush(Port::Console);
+        out!(
+            con,
+            "Hanging: the watchdog resets the board within {} ms\n",
+            ms
+        );
+        con.flush();
         loop {
             core::hint::spin_loop();
         }
     }
     out!(
+        con,
         "Panicking: the watchdog resets the board within {} ms\n",
         ms
     );
-    uart::flush(Port::Console);
+    con.flush();
     panic!("DEBUG WATCHDOG PANIC")
 }

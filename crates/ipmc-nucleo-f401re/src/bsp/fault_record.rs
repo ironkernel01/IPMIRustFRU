@@ -7,31 +7,15 @@
 
 use core::ptr::addr_of_mut;
 
-use crate::bsp::kept_words;
+use crate::bsp::hal_impl::FaultWords;
 
 /// WORDS -- words of the record.
 const WORDS: usize = 4;
 
-/// FAULT_MAGIC -- the check value that marks the words as written by `write`: the check word is
-/// the XOR of the other three words and this constant, which random RAM after a power-on matches
-/// with probability 2^-32 (as `KEPT_MAGIC` in reset_cause.rs).
-const FAULT_MAGIC: u32 = 0xFA17_0C0D;
-
-/// Kind codes in the KIND word.
-const KIND_HARDFAULT: u32 = 1;
-const KIND_UNHANDLED_IRQ: u32 = 2;
-const KIND_PANIC: u32 = 3;
-
-/// Fault -- what the record holds.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Fault {
-    /// HardFault; `pc` is the stacked program counter.
-    HardFault { pc: u32 },
-    /// Unhandled interrupt; `irq` is the number (negative: a system exception).
-    UnhandledIrq { irq: i32 },
-    /// Panic; the source line and column (0 when the location is unknown).
-    Panic { line: u32, column: u32 },
-}
+// The record is the words of `Fault::to_words` and a check word keyed by FAULT_MAGIC (ipmc-hal).
+pub use ipmc_hal::fault::Fault;
+use ipmc_hal::fault::FAULT_MAGIC;
+use ipmc_hal::kept::{store_checked, take_checked};
 
 extern "C" {
     /// The record: `__fault_record` of flash_map.x, the `WORDS` words at ORIGIN(NOINIT) + 0xF0.
@@ -40,42 +24,24 @@ extern "C" {
     static mut __fault_record: [u32; WORDS];
 }
 
-/// words -- the address of the first word.
-fn words() -> *mut u32 {
+/// words -- the address of the first word (`FaultWords` reads and writes through it).
+pub(crate) fn words() -> *mut u32 {
     addr_of_mut!(__fault_record).cast::<u32>()
 }
 
 /// write -- stores `fault` with volatile writes (a fault handler or the panic handler; the check
 /// word goes last).
 pub fn write(fault: Fault) {
-    let (kind, value, aux) = match fault {
-        Fault::HardFault { pc } => (KIND_HARDFAULT, pc, 0),
-        // The cast reinterprets the bits, so a negative system-exception number stays recognisable.
-        Fault::UnhandledIrq { irq } => (KIND_UNHANDLED_IRQ, irq as u32, 0),
-        Fault::Panic { line, column } => (KIND_PANIC, line, column),
-    };
-    // SAFETY: `__fault_record` is declared as the `WORDS` words at the end of NOINIT
-    // (flash_map.x), which the runtime's `.uninit` stays below (a link.x assert), the bootloader
-    // has no section in and no start-up code clears. Only exception context and the panic handler
-    // write it, and they park afterwards.
-    unsafe { kept_words::store_checked(words(), [kind, value, aux], FAULT_MAGIC) };
+    // `FaultWords` writes the `WORDS` words at the end of NOINIT (see `words`); only exception
+    // context and the panic handler write it, and they park afterwards.
+    store_checked(&mut FaultWords, fault.to_words(), FAULT_MAGIC);
 }
 
 /// take -- the record `write` stored, or None when the check word does not match or the kind is
 /// unknown. Clears the check word, so a later reset without a fault reads None. Call it once at
 /// start-up.
 pub fn take() -> Option<Fault> {
-    // SAFETY: as in `write`; the main thread calls this once at start-up, before any fault
-    // handler can run.
-    let [kind, value, aux] = unsafe { kept_words::take_checked(words(), FAULT_MAGIC) }?;
-    match kind {
-        KIND_HARDFAULT => Some(Fault::HardFault { pc: value }),
-        // The number was stored as its 32 bits.
-        KIND_UNHANDLED_IRQ => Some(Fault::UnhandledIrq { irq: value as i32 }),
-        KIND_PANIC => Some(Fault::Panic {
-            line: value,
-            column: aux,
-        }),
-        _ => None,
-    }
+    // The main thread calls this once at start-up, before any fault handler can run.
+    let words = take_checked(&mut FaultWords, FAULT_MAGIC)?;
+    Fault::from_words(words)
 }

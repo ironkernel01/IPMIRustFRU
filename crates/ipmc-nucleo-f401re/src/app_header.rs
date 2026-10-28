@@ -7,11 +7,10 @@
 // is the placeholder: magic, format, size, version, flags and vector address are filled at
 // compile time, the image length and the SHA-256 digest are FFh. `fwimage patch` fills them in
 // the built image (gen.ps1), and `arm-none-eabi-objcopy --update-section` writes the result back
-// into the ELF. The runtime also reads the header back from flash (`image_line`) for the banner.
+// into the ELF. The runtime also reads the header back from flash (`read`) for the banner.
 
 use crate::bsp::flash_regs::read_flash;
 use ipmc_boot::header::{self, FLAG_EVAL, FLAG_TIER23, HEADER_ADDR, HEADER_LEN};
-use ipmc_boot::text::{put_dec, put_hex_bytes, put_version, TextOut};
 
 /// flag -- `bit` when `on`, else 0.
 const fn flag(on: bool, bit: u32) -> u32 {
@@ -31,20 +30,12 @@ const FLAGS: u32 = flag(ipmc_defs::TIER23_BUILT, FLAG_TIER23) | flag(cfg!(ipmc_e
 static APP_HEADER: [u8; HEADER_LEN] =
     header::placeholder(header::version_bytes(env!("CARGO_PKG_VERSION")), FLAGS);
 
-/// DIGEST_SHOWN -- digest bytes the image line prints (16 hex digits).
-const DIGEST_SHOWN: usize = 8;
-
-/// image_line -- `v<x.y.z>, <n> bytes, SHA-256 <first 16 hex digits>` from the header in flash
-/// (the text after the `Image:` label of the banner and `SYS VERSION`).
-pub fn image_line(out: &mut dyn TextOut) {
+/// read -- the 64 header bytes in flash at `HEADER_ADDR`, read once at start for `StartInfo`
+/// (the runtime prints the version, length and digest from them in the banner and `SYS VERSION`).
+pub fn read() -> [u8; HEADER_LEN] {
     let mut raw = [0u8; HEADER_LEN];
     // The header address and length lie inside the flash, so the read cannot fail; a failure
     // would leave `raw` zero and the line would print an empty header.
     let _ = read_flash(HEADER_ADDR, &mut raw);
-    let image = header::decode(&raw);
-    put_version(out, image.version);
-    out.put(", ");
-    put_dec(out, image.length);
-    out.put(" bytes, SHA-256 ");
-    put_hex_bytes(out, image.digest.get(..DIGEST_SHOWN).unwrap_or(&[]));
+    raw
 }

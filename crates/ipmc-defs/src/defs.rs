@@ -618,8 +618,8 @@ pub const IPMC_INPUT_OVERTEMP_NAME: &str = "OVERTEMP_N";
 /// input name: payload held in reset (PA6), active low
 pub const IPMC_INPUT_RESET_NAME: &str = "PAYLOAD_RESET_N";
 
-/// x86 emulator: time from a request to the end of its response transmission, milliseconds
-/// (1..=227, the VITA 46.11 T5 response limit)
+/// x86 emulator replay: time from a request to the Event Receiver's answer to the IPMC's own
+/// request, milliseconds (1..=227, the VITA 46.11 T5 response limit)
 pub const IPMC_EMU_TX_DONE_DELAY_MS: u32 = 1;
 /// x86 emulator: longest accepted vector file line, characters; must hold a time, a bus tag and
 /// IPMB_MSG_MAX three-character hex tokens

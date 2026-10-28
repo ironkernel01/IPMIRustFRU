@@ -5,6 +5,7 @@
 // `stop_cycle_counter` are the only writers of DCB trace enable and DWT_CTRL.CYCCNTENA. The
 // bootloader's hand-over (boot/start.rs) calls `stop_cycle_counter`.
 
+use crate::bsp::hal_impl::DwtCycles;
 use cortex_m::peripheral::{DCB, DWT};
 
 /// COUNTER_CHECK_POLLS -- polls of the cycle counter that must show it advancing, at
@@ -20,21 +21,10 @@ pub fn now() -> u32 {
     DWT::cycle_count()
 }
 
-/// HZ_PER_MHZ -- core cycles per microsecond at 1 MHz.
-const HZ_PER_MHZ: u32 = 1_000_000;
-
 /// delay_us -- busy-waits `us` microseconds of core time (`hclk_hz` is the core clock) on the
-/// cycle counter. Bounded by the conversion itself: at most `ticks` polls run (one poll takes at
-/// least one core cycle), so a counter that does not advance ends the wait after at least the
-/// requested time.
+/// cycle counter: `ipmc_hal::time::delay_us` over `DwtCycles`, bounded as it is.
 pub fn delay_us(us: u32, hclk_hz: u32) {
-    let ticks = us.saturating_mul(hclk_hz / HZ_PER_MHZ);
-    let start = now();
-    for _ in 0..ticks {
-        if now().wrapping_sub(start) >= ticks {
-            break;
-        }
-    }
+    ipmc_hal::time::delay_us(&DwtCycles { hz: hclk_hz }, us);
 }
 
 /// stop_cycle_counter -- the reset state of the counter: CYCCNTENA and trace enable cleared (the

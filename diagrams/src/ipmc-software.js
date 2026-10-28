@@ -19,7 +19,7 @@ const cy = (y, h) => y + h / 2;
   container(s, 4.2, 0.5, 8.55, 6.2, "Root cargo workspace");
   // the one F401 crate: two binaries over one library
   box(s, 1.0, 0.95, 2.7, 0.8, "Bootloader binary", ["src/boot/, sectors 0-1", "start sequence, session glue"], G);
-  box(s, 1.0, 1.95, 2.7, 0.8, "Runtime binary", ["src/main.rs, src/drivers/", "ipmb_link, console, app_port"], G);
+  box(s, 1.0, 1.95, 2.7, 0.8, "Runtime binary", ["src/main.rs, src/drivers/", "ipmc-runtime link, console, app_port"], G);
   box(s, 1.0, 3.0, 2.7, 0.6, "Library src/lib.rs, src/bsp/", ["board support of both images"], G);
   wire(s, 1.0, 1.35, 0.8, 1.35, { end: false });
   wire(s, 0.8, 1.35, 0.8, 3.3, { end: false });
@@ -61,10 +61,10 @@ const cy = (y, h) => y + h / 2;
   label(s, 7.8, 5.08, 1.2, "when found");
   notes(s, 0.6, 3.95, 3.5, 2.8, [
     "Every crate reads defs.rs values as ipmc_defs::NAME; those arrows are not drawn.",
-    "The runtime binary also uses ipmc-core, -fru, -menu, -log, -sensors (feature stm32f401), -ext, -wire and -defs. The bootloader binary uses ipmc-boot and the library only.",
+    "The runtime binary also uses ipmc-core, -fru, -menu, -log, -sensors, -ext, -wire and -defs. The bootloader binary uses ipmc-boot and the library only.",
     "ipmc-boot uses ipmc-fru (store sector), -wire (SHA-256, checksum), -menu (line editor) and -defs. ipmc-log uses ipmc-core and -defs. ipmc-emu uses core, fru, sensors, wire, ext and defs. ipmc-app uses core, fru, wire and defs.",
     "ipmc-ext uses ipmc-core and -wire. ipmc-defs build.rs finds the extension folder; without it the build is Tier-1.",
-    "The firmware crate builds on its own (thumbv7em-none-eabihf). Every other crate forbids unsafe code except ipmc-sensors, which allows it only in drivers/stm32f401; ipmc-emu is a host std binary.",
+    "The firmware crate builds on its own (thumbv7em-none-eabihf). Every other crate forbids unsafe code; ipmc-emu is a host std binary.",
   ]);
   legend(s, 0.6, 6.85, LEG, 3.0);
   frame(s);
@@ -136,7 +136,7 @@ const cy = (y, h) => y + h / 2;
   notes(s, 0.6, 4.75, 4.4, 1.9, [
     "No IPMI code runs in an interrupt.",
     "One master write per main-loop pass, at most T2 + T1 = 80 ms.",
-    "The fault tracker (ipmb_link.rs) and the FRU flash log save run in the same pass and are on sheet 3.",
+    "The fault tracker (ipmc-runtime link.rs) and the FRU flash log save run in the same pass and are on sheet 3.",
     "The same Link, dispatch and handlers run in the x86 emulator, with the interrupt context replaced by the emulator frame input.",
     "IPMB-A and IPMB-B are off-board bus hardware, not code.",
   ]);

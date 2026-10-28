@@ -2,7 +2,7 @@
 //!
 //! `AppHost` is the only door between the protocol code (`commands.rs`) and the rest of the
 //! firmware. The protocol never reads a sensor, a flash page or an IPMB frame itself: it asks the
-//! host. The firmware implements the trait over its link layer (`app_port.rs` in the firmware
+//! host. The firmware implements the trait over its link layer (`app_port.rs` in the ipmc-runtime
 //! crate); the tests implement it over a plain `FruStore` (`tests.rs`). A new command that needs
 //! board data adds one method here, one implementation in each of those two places.
 

@@ -10,7 +10,6 @@ use crate::replay::is_request_frame;
 use crate::trace::Hex;
 use crate::vectors::{self, VectorErrorKind, LINE_MAX_CHARS};
 use core::fmt::Arguments;
-use ipmc_core::clock::at_or_after;
 use ipmc_core::queue::Bus;
 use ipmc_core::trace::Trace;
 use ipmc_fru::RamFlash;
@@ -24,9 +23,6 @@ const POLL_PERIOD: Duration = Duration::from_millis(ipmc_defs::IPMC_EMU_SERVE_PO
 /// READ_CHUNK_BYTES -- socket read size: one longest line (any size works; the splitter joins
 /// the pieces).
 const READ_CHUNK_BYTES: usize = LINE_MAX_CHARS;
-/// TX_DONE_DELAY_MS -- time from the start to the end of one transmission, from defs.rs
-/// IPMC_EMU_TX_DONE_DELAY_MS (the replay uses the same value).
-const TX_DONE_DELAY_MS: u32 = ipmc_defs::IPMC_EMU_TX_DONE_DELAY_MS;
 /// ERROR_ECHO_CHARS -- most characters of a rejected line echoed in its `#error` reply, from
 /// defs.rs IPMC_EMU_ERROR_ECHO_MAX.
 const ERROR_ECHO_CHARS: usize = ipmc_defs::IPMC_EMU_ERROR_ECHO_MAX;
@@ -122,18 +118,10 @@ impl Trace for LineTrace {
     }
 }
 
-/// Inflight -- the transmission handed to the "master driver", done at `done_ms`.
-struct Inflight {
-    bus: Bus,
-    bytes: Vec<u8>,
-    done_ms: u32,
-}
-
 /// Board -- the emulated IPMC with its simulated buses.
 pub struct Board {
     emu: Emulator,
     down: [bool; 2],
-    inflight: Option<Inflight>,
     trace: LineTrace,
 }
 
@@ -148,7 +136,6 @@ impl Board {
         Ok(Board {
             emu: Emulator::new_with_flash(config.emu, flash)?,
             down: [false; 2],
-            inflight: None,
             trace: LineTrace {
                 on: config.trace,
                 lines: Vec::new(),
@@ -187,6 +174,7 @@ impl Board {
             }
             ClientMsg::BusDown(bus, down) => {
                 self.down[bus.index()] = down;
+                self.emu.set_bus_down(bus, down);
                 self.trace.line(format_args!(
                     "IPMB-{} {}",
                     bus.name(),
@@ -199,36 +187,19 @@ impl Board {
         true
     }
 
-    /// step -- one main-loop step at `now_ms`: the emulator's poll, then the transmission state:
-    /// a frame handed out by the link is "on the wire" for TX_DONE_DELAY_MS, then reported done
-    /// (failed when its bus is down, which makes the link resend on the other bus). Appends the
-    /// protocol lines to send (`A <hex>` / `B <hex>` for frames that left, `# text` for traces).
+    /// step -- one main-loop step at `now_ms`: the emulator's poll (the board's main loop; a
+    /// write on a down bus fails, which makes the link resend on the other bus), then the frames
+    /// it wrote. Appends the protocol lines to send (`A <hex>` / `B <hex>` for frames that left,
+    /// `# text` for traces).
     pub fn step(&mut self, now_ms: u32, out: &mut Vec<String>) {
         self.emu.poll(now_ms, &mut self.trace);
-        if self.inflight.is_none() {
-            if let Some((bus, bytes)) = self.emu.next_tx() {
-                self.inflight = Some(Inflight {
-                    bus,
-                    bytes: bytes.to_vec(),
-                    done_ms: now_ms.wrapping_add(TX_DONE_DELAY_MS),
-                });
-            }
-        }
-        if self
-            .inflight
-            .as_ref()
-            .is_some_and(|tx| at_or_after(now_ms, tx.done_ms))
-        {
-            if let Some(tx) = self.inflight.take() {
-                let ok = !self.is_down(tx.bus);
-                if ok {
-                    out.push(format!("{} {}", tx.bus.name(), Hex(&tx.bytes)));
-                }
-                if let Err(e) = self.emu.tx_done(tx.bus, ok, now_ms, &mut self.trace) {
-                    self.trace.line(format_args!("tx_done: {}", e.name()));
-                }
-            }
-        }
+        out.extend(
+            self.emu
+                .take_sent()
+                .into_iter()
+                .filter(|tx| tx.ok)
+                .map(|tx| format!("{} {}", tx.bus.name(), Hex(&tx.bytes))),
+        );
         out.append(&mut self.trace.lines);
     }
 }

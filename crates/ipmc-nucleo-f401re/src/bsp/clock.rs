@@ -15,6 +15,7 @@
 // the range the RM states for every device in the family.
 // When HSE never becomes ready, HSI is the PLL source with the same VCO frequency.
 
+use ipmc_hal::system::{ClockDomain, ClockSummary};
 use stm32f4::stm32f401::{FLASH, PWR, RCC};
 
 /// HSE_HZ -- HSE input frequency, Hz (defs.rs IPMC_HSE_HZ).
@@ -150,6 +151,24 @@ pub struct ClockInfo {
     pub hclk_hz: u32,
     pub pclk1_hz: u32,
     pub pclk2_hz: u32,
+}
+
+impl ClockInfo {
+    /// summary -- the clock tree as the console prints it (`ipmc_hal::system::ClockSummary`):
+    /// the source text, the start-up fault `fault` and the four frequencies with their labels.
+    pub fn summary(&self, fault: Option<ClockFault>) -> ClockSummary {
+        let domain = |label, hz| Some(ClockDomain { label, hz });
+        ClockSummary {
+            source: self.source.text(),
+            fault: fault.map(ClockFault::text),
+            domains: [
+                domain("SYSCLK:       ", self.sysclk_hz),
+                domain("HCLK (AHB):   ", self.hclk_hz),
+                domain("PCLK1 (APB1): ", self.pclk1_hz),
+                domain("PCLK2 (APB2): ", self.pclk2_hz),
+            ],
+        }
+    }
 }
 
 /// Polls `done` at most `bound` times. Returns true when it became true.

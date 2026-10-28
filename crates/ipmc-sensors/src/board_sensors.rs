@@ -2,7 +2,7 @@
 //! sensor reading is built. Read this file first.
 //!
 //! Drivers: each group is backed by the driver its defs.rs switch names (routing.rs): the
-//! on-chip ADC and GPIO (drivers/stm32f401), the simulators (drivers/sim), or an external part
+//! on-chip ADC and GPIO (the board crate's drivers), the simulators (drivers/sim), or an external part
 //! (drivers/i2c, drivers/spi; no bus assigned yet). Adding a driver: see drivers/*/mod.rs.
 //!
 //! Values: every number and every name below comes from a define in defs.rs (read here as
@@ -23,6 +23,11 @@
 //! | OVERTEMP_N | digital input | asserted when low; unreadable makes health bad |
 //! | PAYLOAD_RESET_N | digital input | asserted when low; shown, not part of health |
 //! | PWR_EN | digital output | driven by the power state machine (eval/power_fsm.rs) |
+//!
+//! The input and the divider of each rail are board facts. The board crate lists them as
+//! `RAIL_WIRING` (one `hal::RailWiring` per entry of `RAILS`, same order) and hands the table to
+//! `Monitor::new`, `build_snapshot` and `sim_analog`; the rows above describe the Nucleo board.
+//! `RAILS` holds the neutral sensor facts only: name, nominal, windows.
 //!
 //! Pins and ADC channels are not named here: the board support chooses them once, in
 //! ipmc-nucleo-f401re `drivers/board_pins.rs` (external input n is the n-th entry of its ADC table). Which pin
@@ -54,7 +59,7 @@ use crate::drivers::sim::SimAnalog;
 use crate::eval::faults::{FaultEval, InputDef};
 use crate::eval::rail::{self, RailDef};
 use crate::eval::temperature::{self, Thresholds};
-use crate::hal::{AnalogSource, Channel, Divider, Input};
+use crate::hal::{AnalogSource, Channel, Input, RailWiring};
 use ipmc_core::sensor::{
     PowerState, RailReading, RailStatus, SensorSnapshot, Summary, TemperatureReading, TEMP_FLAG_UC,
 };
@@ -74,64 +79,36 @@ const fn dc_from_define(degrees_c: i32) -> i32 {
 /// EXTERNAL_INPUTS -- number of external analog inputs (rails 1..): the rails behind a divider.
 pub const EXTERNAL_INPUTS: usize = RAIL_COUNT - 1;
 
-/// Abstract channel ids of the external rails: external input n (A0 = 0 .. A3 = 3). The pin and
-/// ADC channel behind each id are chosen once, by the board support (ipmc-nucleo-f401re drivers/board_pins.rs).
-const INPUT_A0: u8 = 0;
-const INPUT_A1: u8 = 1;
-const INPUT_A2: u8 = 2;
-const INPUT_A3: u8 = 3;
-
-/// RAILS -- the monitored rails, in table order; the SIM console numbers rails by this index.
+/// RAILS -- the monitored rails, in table order; the SIM console numbers rails by this index. The
+/// board crate's `RAIL_WIRING` has one entry for each, in the same order.
 pub const RAILS: [RailDef; RAIL_COUNT] = [
     RailDef {
         name: ipmc_defs::IPMC_RAIL0_NAME,
-        channel: Channel::Vdda,
         nominal_mv: ipmc_defs::IPMC_RAIL0_NOMINAL_MV,
-        divider: Divider { num: 1, den: 1 },
         noncrit_pct: ipmc_defs::IPMC_RAIL_NONCRIT_PCT,
         crit_pct: ipmc_defs::IPMC_RAIL_CRIT_PCT,
     },
     RailDef {
         name: ipmc_defs::IPMC_RAIL1_NAME,
-        channel: Channel::Adc(INPUT_A0),
         nominal_mv: ipmc_defs::IPMC_RAIL1_NOMINAL_MV,
-        divider: Divider {
-            num: ipmc_defs::IPMC_RAIL1_DIV_NUM,
-            den: ipmc_defs::IPMC_RAIL1_DIV_DEN,
-        },
         noncrit_pct: ipmc_defs::IPMC_RAIL_NONCRIT_PCT,
         crit_pct: ipmc_defs::IPMC_RAIL_CRIT_PCT,
     },
     RailDef {
         name: ipmc_defs::IPMC_RAIL2_NAME,
-        channel: Channel::Adc(INPUT_A1),
         nominal_mv: ipmc_defs::IPMC_RAIL2_NOMINAL_MV,
-        divider: Divider {
-            num: ipmc_defs::IPMC_RAIL2_DIV_NUM,
-            den: ipmc_defs::IPMC_RAIL2_DIV_DEN,
-        },
         noncrit_pct: ipmc_defs::IPMC_RAIL_NONCRIT_PCT,
         crit_pct: ipmc_defs::IPMC_RAIL_CRIT_PCT,
     },
     RailDef {
         name: ipmc_defs::IPMC_RAIL3_NAME,
-        channel: Channel::Adc(INPUT_A2),
         nominal_mv: ipmc_defs::IPMC_RAIL3_NOMINAL_MV,
-        divider: Divider {
-            num: ipmc_defs::IPMC_RAIL3_DIV_NUM,
-            den: ipmc_defs::IPMC_RAIL3_DIV_DEN,
-        },
         noncrit_pct: ipmc_defs::IPMC_RAIL_NONCRIT_PCT,
         crit_pct: ipmc_defs::IPMC_RAIL_CRIT_PCT,
     },
     RailDef {
         name: ipmc_defs::IPMC_RAIL4_NAME,
-        channel: Channel::Adc(INPUT_A3),
         nominal_mv: ipmc_defs::IPMC_RAIL4_NOMINAL_MV,
-        divider: Divider {
-            num: ipmc_defs::IPMC_RAIL4_DIV_NUM,
-            den: ipmc_defs::IPMC_RAIL4_DIV_DEN,
-        },
         noncrit_pct: ipmc_defs::IPMC_RAIL_NONCRIT_PCT,
         crit_pct: ipmc_defs::IPMC_RAIL_CRIT_PCT,
     },
@@ -186,21 +163,26 @@ pub const INPUTS: [InputDef; Input::COUNT] = [
     },
 ];
 
-/// sim_analog -- the analog simulator for this board: every rail at its nominal millivolts, the
+/// sim_analog -- the analog simulator for this board: every rail, keyed by its `wiring` channel,
+/// at its nominal millivolts, the
 /// die temperature at SIM_TEMPERATURE_DC (the start values of the SIM console group).
-pub fn sim_analog() -> SimAnalog {
+pub fn sim_analog(wiring: &[RailWiring; RAIL_COUNT]) -> SimAnalog {
     let mut initial = [(Channel::Vdda, 0); RAIL_COUNT];
-    for (slot, def) in initial.iter_mut().zip(RAILS.iter()) {
-        *slot = (def.channel, def.nominal_mv);
+    for ((slot, def), wire) in initial.iter_mut().zip(RAILS.iter()).zip(wiring) {
+        *slot = (wire.channel, def.nominal_mv);
     }
     SimAnalog::new(&initial, SIM_TEMPERATURE_DC)
 }
 
-/// read_rail -- one rail: its millivolts and window status; unavailable when unreadable.
-fn read_rail<A: AnalogSource + ?Sized>(analog: &mut A, def: &RailDef) -> RailReading {
-    let mv = match def.channel {
+/// read_rail -- one rail through its wiring: its millivolts and window status; unavailable when unreadable.
+fn read_rail<A: AnalogSource + ?Sized>(
+    analog: &mut A,
+    def: &RailDef,
+    wire: &RailWiring,
+) -> RailReading {
+    let mv = match wire.channel {
         Channel::Vdda => analog.vdda_mv(),
-        Channel::Adc(channel) => analog.rail_mv(channel, def.divider),
+        Channel::Adc(channel) => analog.rail_mv(channel, wire.divider),
     };
     match mv {
         Ok(mv) => RailReading {
@@ -228,8 +210,8 @@ fn voltage_summary(rails: &[RailReading]) -> Summary {
     summary
 }
 
-/// build_snapshot -- one sample of everything: reads the rails and the die temperature from
-/// `analog`, takes the already evaluated inputs in `faults`, and derives the three Tier-1
+/// build_snapshot -- one sample of everything: reads the rails (through `wiring`, one entry per
+/// rail of `RAILS`) and the die temperature from `analog`, takes the already evaluated inputs in `faults`, and derives the three Tier-1
 /// summaries. `power` and `power_enabled` come from the power state machine and the switch;
 /// `enable_released` says PWR_EN is known to be released (the controller requests no enable, no
 /// `EnableWrite` fault is latched and the confirmed output level is off). With the PGOOD input
@@ -237,14 +219,15 @@ fn voltage_summary(rails: &[RailReading]) -> Summary {
 /// and an unreadable one leaves `payload_shut_down` false.
 pub fn build_snapshot<A: AnalogSource + ?Sized>(
     analog: &mut A,
+    wiring: &[RailWiring; RAIL_COUNT],
     faults: &FaultEval,
     power: PowerState,
     power_enabled: bool,
     enable_released: bool,
 ) -> SensorSnapshot {
     let mut snapshot = SensorSnapshot::EMPTY;
-    for (slot, def) in snapshot.rails.iter_mut().zip(RAILS.iter()) {
-        *slot = read_rail(analog, def);
+    for ((slot, def), wire) in snapshot.rails.iter_mut().zip(RAILS.iter()).zip(wiring) {
+        *slot = read_rail(analog, def, wire);
         snapshot.rail_count += 1;
     }
     snapshot.temperature = match analog.die_temperature_dc() {
@@ -287,7 +270,7 @@ pub fn build_snapshot<A: AnalogSource + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drivers::sim::SimInputs;
+    use crate::drivers::sim::{SimInputs, SIM_RAIL_WIRING};
     use crate::eval::faults;
     use ipmc_core::sensor::{
         encode_sensor_reading, SENSOR_FRU_HEALTH, SENSOR_FRU_TEMPERATURE, SENSOR_FRU_VOLTAGE,
@@ -304,14 +287,21 @@ mod tests {
     impl Bench {
         fn new() -> Self {
             Bench {
-                analog: sim_analog(),
+                analog: sim_analog(&SIM_RAIL_WIRING),
                 inputs: SimInputs::new(),
             }
         }
 
         fn snapshot(&mut self, power: PowerState, enabled: bool) -> SensorSnapshot {
             let eval = faults::evaluate(&INPUTS, &mut self.inputs);
-            build_snapshot(&mut self.analog, &eval, power, enabled, !enabled)
+            build_snapshot(
+                &mut self.analog,
+                &SIM_RAIL_WIRING,
+                &eval,
+                power,
+                enabled,
+                !enabled,
+            )
         }
     }
 
@@ -340,11 +330,11 @@ mod tests {
 
     #[test]
     fn board_simulator_starts_at_nominal_values() {
-        let mut sim = sim_analog();
-        for def in RAILS.iter() {
-            let value = match def.channel {
+        let mut sim = sim_analog(&SIM_RAIL_WIRING);
+        for (def, wire) in RAILS.iter().zip(SIM_RAIL_WIRING.iter()) {
+            let value = match wire.channel {
                 Channel::Vdda => sim.vdda_mv(),
-                Channel::Adc(ch) => sim.rail_mv(ch, def.divider),
+                Channel::Adc(ch) => sim.rail_mv(ch, wire.divider),
             };
             assert_eq!(value, Ok(def.nominal_mv), "{}", def.name);
         }
@@ -377,7 +367,7 @@ mod tests {
             let mut bench = Bench::new();
             bench
                 .analog
-                .set_rail_mv(RAILS[RAIL_5V].channel, mv)
+                .set_rail_mv(SIM_RAIL_WIRING[RAIL_5V].channel, mv)
                 .unwrap();
             let s = bench.snapshot(PowerState::On, true);
             assert_eq!(s.rails[RAIL_5V].status, status, "{mv} mV");
@@ -450,17 +440,31 @@ mod tests {
     #[test]
     fn unreadable_fault_input_is_kept_in_the_snapshot_and_makes_health_bad() {
         for (index, input) in [(1, Input::FaultN), (2, Input::OvertempN)] {
-            let mut analog = sim_analog();
+            let mut analog = sim_analog(&SIM_RAIL_WIRING);
             let eval = faults::evaluate(&INPUTS, &mut dead_pin(input));
-            let s = build_snapshot(&mut analog, &eval, PowerState::Off, false, true);
+            let s = build_snapshot(
+                &mut analog,
+                &SIM_RAIL_WIRING,
+                &eval,
+                PowerState::Off,
+                false,
+                true,
+            );
             assert_eq!(s.inputs_unreadable, 1 << index, "{input:?}");
             assert_eq!(s.inputs_asserted & (1 << index), 0, "{input:?}");
             assert_eq!(s.health, Summary::Bad, "{input:?}");
         }
         // PAYLOAD_RESET_N does not enter health, but its unreadability is still recorded.
-        let mut analog = sim_analog();
+        let mut analog = sim_analog(&SIM_RAIL_WIRING);
         let eval = faults::evaluate(&INPUTS, &mut dead_pin(Input::PayloadResetN));
-        let s = build_snapshot(&mut analog, &eval, PowerState::Off, false, true);
+        let s = build_snapshot(
+            &mut analog,
+            &SIM_RAIL_WIRING,
+            &eval,
+            PowerState::Off,
+            false,
+            true,
+        );
         assert_eq!(s.inputs_unreadable, 0b1000);
         assert_eq!(s.health, Summary::Good);
     }
@@ -478,17 +482,25 @@ mod tests {
 
     #[test]
     fn unreadable_pgood_counts_as_not_good_while_enabled() {
-        let mut analog = sim_analog();
+        let mut analog = sim_analog(&SIM_RAIL_WIRING);
         let eval = faults::evaluate(&INPUTS, &mut dead_pin(Input::Pgood));
         let on = build_snapshot(
             &mut analog,
+            &SIM_RAIL_WIRING,
             &eval,
             PowerState::PowerOnRequested,
             true,
             false,
         );
         assert_eq!(on.health, Summary::Bad);
-        let off = build_snapshot(&mut analog, &eval, PowerState::Off, false, true);
+        let off = build_snapshot(
+            &mut analog,
+            &SIM_RAIL_WIRING,
+            &eval,
+            PowerState::Off,
+            false,
+            true,
+        );
         assert_eq!(off.health, Summary::Good);
         // An unreadable PGOOD is no evidence of a shutdown, whatever PWR_EN does.
         assert!(!off.payload_shut_down);
@@ -505,13 +517,24 @@ mod tests {
             fn die_temperature_dc(&mut self) -> Result<i32, crate::hal::SourceError> {
                 Err(crate::hal::SourceError::Unavailable)
             }
-            fn rail_mv(&mut self, _c: u8, _d: Divider) -> Result<u32, crate::hal::SourceError> {
+            fn rail_mv(
+                &mut self,
+                _c: u8,
+                _d: crate::hal::Divider,
+            ) -> Result<u32, crate::hal::SourceError> {
                 Err(crate::hal::SourceError::Unavailable)
             }
         }
         let mut inputs = SimInputs::new();
         let eval = faults::evaluate(&INPUTS, &mut inputs);
-        let s = build_snapshot(&mut Dead, &eval, PowerState::Off, false, true);
+        let s = build_snapshot(
+            &mut Dead,
+            &SIM_RAIL_WIRING,
+            &eval,
+            PowerState::Off,
+            false,
+            true,
+        );
         assert!(!s.temperature.available);
         assert_eq!(s.voltage, Summary::Unavailable);
         assert_eq!(bytes(SENSOR_FRU_VOLTAGE, &s), [0x00, 0x60, 0x00]);

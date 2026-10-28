@@ -1,12 +1,13 @@
 //! replay.rs - replays a captured vector list through an `Emulator` and compares each response
 //! with the captured controller's.
 //!
-//! For every captured request addressed to the emulator: `rx` at its capture time, `poll`, then
-//! drain `next_tx` / `tx_done` the way the master driver does. The captured response is the next
+//! For every captured request addressed to the emulator: `rx` at its capture time, `poll` (the
+//! board's main loop writes the response, and the resends of a failed write, on the simulated
+//! buses), then take the frames it wrote with `take_sent`. The captured response is the next
 //! response frame in the list from the emulator's address with the request's sequence number,
 //! NetFn and command.
 
-use crate::emulator::Emulator;
+use crate::emulator::{Emulator, Tx};
 use crate::trace::Hex;
 use crate::vectors::Vector;
 use core::fmt;
@@ -17,7 +18,7 @@ use ipmc_core::link::{FrameDrop, TxPolicy, TX_RETRIES};
 use ipmc_core::queue::Bus;
 use ipmc_core::requester;
 use ipmc_core::trace::Trace;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// TX_DONE_DELAY_MS -- time from a request to the end of its transmission in the replay, from
 /// defs.rs IPMC_EMU_TX_DONE_DELAY_MS.
@@ -470,7 +471,7 @@ pub fn replay(
         ipmc_requests: 0,
         events: 0,
     };
-    let mut attempts: u32 = 0;
+    emu.set_fail_every(options.fail_every);
     for (index, v) in vectors.iter().enumerate() {
         let Ok(request) = ipmb::parse(&v.bytes) else {
             report.malformed += 1;
@@ -508,7 +509,7 @@ pub fn replay(
                 drop == FrameDrop::BusUnavailable && !emu.link().bus_state(v.bus).fitted;
         }
         emu.poll(v.time_ms, trace);
-        let sent = drain(emu, v.time_ms, options, &mut attempts, &mut report, trace);
+        let sent = drain(emu, v.time_ms, &mut report, trace);
 
         let captured = find_captured(vectors, index, &request.header);
         let class = match (sent.first(), captured) {
@@ -641,33 +642,30 @@ fn answer_request(
     emu.poll(at_ms, trace);
 }
 
-/// drain -- takes every frame the emulator wants transmitted, reporting each transmission done
-/// at `request_ms` + TX_DONE_DELAY_MS (failed for every `fail_every`th one). Returns the
-/// responses completed: one entry per response that a transmission delivered, with the bus and
-/// bytes of that successful attempt. A response whose every attempt failed has no entry (it is
-/// lost, and the link counts it in tx_dropped). A request the IPMC originated (`is_request_frame`)
-/// is no response: it is answered as the Event Receiver (`answer_request`) and counted in
+/// drain -- takes the frames the emulator wrote since the last call, reporting each as done
+/// at `request_ms` + TX_DONE_DELAY_MS (the simulated bus failed every `fail_every`th write, and
+/// the Link resent the response on the other bus). Returns the responses completed: one entry
+/// per response that a write delivered, with the bus and bytes of that successful attempt. A
+/// response whose every attempt failed has no entry (it is lost, and the link counts it in
+/// tx_dropped). A request the IPMC originated (`is_request_frame`) is no response: it is answered
+/// as the Event Receiver (`answer_request`), which can release more frames, and counted in
 /// `report`.
 fn drain(
     emu: &mut Emulator,
     request_ms: u32,
-    options: &ReplayOptions,
-    attempts: &mut u32,
     report: &mut ReplayReport,
     trace: &mut dyn Trace,
 ) -> Vec<Sent> {
     let done_ms = request_ms.saturating_add(TX_DONE_DELAY_MS);
     let mut sent: Vec<Sent> = Vec::new();
+    let mut written: VecDeque<Tx> = emu.take_sent().into();
     // The bus of the failed attempt the next transmission resends; None when the next
     // transmission starts a new response.
     let mut failed_bus: Option<Bus> = None;
     for _ in 0..DRAIN_ATTEMPTS_MAX {
-        let Some((bus, frame)) = emu.next_tx() else {
+        let Some(Tx { bus, bytes, ok }) = written.pop_front() else {
             break;
         };
-        let bytes = frame.to_vec();
-        *attempts += 1;
-        let ok = options.fail_every == 0 || !(*attempts).is_multiple_of(options.fail_every);
         trace.line(format_args!(
             "tx IPMB-{} {}: {}",
             bus.name(),
@@ -680,12 +678,10 @@ fn drain(
                 report.resends_other_bus += 1;
             }
         }
-        if emu.tx_done(bus, ok, done_ms, trace).is_err() {
-            break;
-        }
         if ok && is_request_frame(&bytes) {
             // Its own request, not an answer: the Event Receiver answers it one step later.
             answer_request(emu, bus, &bytes, done_ms.saturating_add(1), report, trace);
+            written.extend(emu.take_sent());
         } else if ok {
             sent.push(Sent { bus, bytes });
         }

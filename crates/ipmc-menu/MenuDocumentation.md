@@ -291,7 +291,7 @@ the line, and the line end then reports `LineTooLong`.
 
 ## 7. Command Reference
 
-Firmware command tree (`crates/ipmc-nucleo-f401re/src/console.rs`). Prompt `CLI> ` at the top level and
+Firmware command tree (`crates/ipmc-runtime/src/console.rs`). Prompt `CLI> ` at the top level and
 `CLI/<group>> ` inside a group. The table shows the full form; inside a group, drop the group
 keyword. Min and Max count the tokens of the full form.
 

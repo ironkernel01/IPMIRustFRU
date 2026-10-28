@@ -4,43 +4,56 @@
 // bootloader gone a debugger can still run it (cortex-m-rt features set-vtor and set-sp).
 // Start-up order: reset cause and the kept fault record, clock, pin owner (`ports`), LED, SysTick (after the LED state it
 // services exists), console UART, application UART (when enabled), IPMB pin park, sensor hardware (ADC1, board I/O; only the groups whose
-// defs.rs source is hardware), strap pins, FRU flash log (load; may erase a sector, so it runs
-// before the I2C slaves exist), IPMB drivers (the own address is known; bus
-// recovery, bit-bang master, I2C slaves), banner, sensor start, prompt, watchdog start (the IWDG,
-// when IPMC_WATCHDOG_ENABLE), then the CLI loop
-// (watchdog feed, console, application port, sensor sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts
-// TIM2 after the UART and stops the IPMB when the period is over (eval.rs).
+// defs.rs source is hardware), strap pins, the DWT cycle counter, the IPMB master and the FRU flash
+// driver. Then `ipmc_runtime::run` does the rest, the same on every board: FRU flash log (load; may
+// erase a sector, so it runs before the I2C slaves exist), IPMB buses (the own address is known;
+// bus recovery, I2C slaves), banner, sensor start, prompt, watchdog start (the IWDG, when
+// IPMC_WATCHDOG_ENABLE), then the CLI loop (watchdog feed, console, application port, sensor
+// sampling, IPMB link, sleep). The evaluation build (IPMC_EVAL=1) also starts TIM2 after the UART
+// and stops the IPMB when the period is over (eval.rs).
 // Fail-stop: a UART init error cannot be reported on the console, so the LED flashes at
 // IPMC_FAULT_BLINK_CHZ (defs.rs) and the device parks (bsp::fault::park). A pin claim
 // conflict prints both owner names on the console and parks (bsp::fault::claim_failed). A panic
 // and the fault handlers (bsp::fault) keep a record in NOINIT, print one line and park; once the
-// watchdog runs (below) it resets the processor and the next start reports the kept fault.
+// watchdog runs (above) it resets the processor and the next start reports the kept fault.
 
 #![no_std]
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// `out!` (formatted console output) and the shared board support come from the library.
-#[macro_use]
-extern crate ipmc_nucleo_f401re;
 pub(crate) use ipmc_nucleo_f401re::bsp;
 
 mod app_header;
-mod app_port;
-mod console;
-mod data_cmds;
-mod debug_cmds;
+mod board;
 mod drivers;
 #[cfg(ipmc_eval)]
 mod eval;
-mod fru_log;
-mod ipmb_link;
-mod log_cmds;
 mod sensing;
 
+use crate::board::F401;
+use crate::drivers::ipmb_bus::{DriverParts, F401Ipmb};
+use crate::drivers::{adc, flash::Flash, gpio};
 use cortex_m_rt::entry;
-use ipmc_sensors::drivers::stm32f401::{adc, gpio, ports};
+use ipmc_nucleo_f401re::bsp::hal_impl::{
+    BootRequestWords, CortexSystem, DwtCycles, GaStraps, KeptSeqWords, Ld2, SysTickClock, Uart,
+    APP, CONSOLE,
+};
+use ipmc_nucleo_f401re::bsp::ports;
+use ipmc_runtime::link::{IpmbLink, LinkArgs};
+use ipmc_runtime::run::{run, BoardParts, StartInfo, SystemParts};
 use stm32f4::stm32f401;
+
+/// home -- the one IpmbLink, in static storage (PLAN 3.3a); Some on the first call, None after.
+/// No interrupt handler touches it.
+/// `singleton!` builds the value on the stack and then copies it into the static (about
+/// 16.9 KB, `size_of::<IpmbLink<F401>>()`: mostly the 8 KB capture log and the duplicate cache).
+/// `inline(never)` keeps that temporary in this function's frame, which is gone when `home`
+/// returns at start-up; inlined into `main`, the copy would occupy `main`'s frame, and so the
+/// stack, for as long as the firmware runs.
+#[inline(never)]
+fn home(args: LinkArgs<F401>) -> Option<&'static mut IpmbLink<F401>> {
+    cortex_m::singleton!(: IpmbLink<F401> = IpmbLink::new(args))
+}
 
 #[entry]
 fn main() -> ! {
@@ -107,7 +120,10 @@ fn main() -> ! {
     // start stops the image (it could not end the evaluation).
     #[cfg(ipmc_eval)]
     if drivers::eval_timer::start(&dp.RCC, dp.TIM2, &clock).is_err() {
-        out!("EVALUATION BUILD: timer start failed (TIM2 tick rate)\n");
+        ipmc_runtime::out!(
+            &mut Uart::<CONSOLE>,
+            "EVALUATION BUILD: timer start failed (TIM2 tick rate)\n"
+        );
         bsp::led::set_fault(ipmc_defs::IPMC_FAULT_BLINK_CHZ);
         bsp::fault::park();
     }
@@ -116,7 +132,7 @@ fn main() -> ! {
     // Hardware is started only for the groups the source switches make hardware; a simulated
     // group claims and touches nothing (no analog pins, no input pins, no PWR_EN drive).
     let needs = sensing::hardware_needs();
-    let adc = needs.adc.then(|| {
+    let analog = needs.adc.then(|| {
         match adc::init(
             &dp.RCC,
             dp.ADC1,
@@ -126,10 +142,10 @@ fn main() -> ! {
             needs.adc_pins,
         ) {
             Err(adc::InitError::Pins(e)) => bsp::fault::claim_failed(e),
-            other => other,
+            other => other.map_err(adc::InitError::name),
         }
     });
-    let board_io = (needs.input_pins || needs.power_pin).then(|| {
+    let io = (needs.input_pins || needs.power_pin).then(|| {
         gpio::init(
             &drivers::board_pins::GPIO,
             needs.input_pins,
@@ -140,21 +156,14 @@ fn main() -> ! {
     if let Err(e) = bsp::ga::init() {
         bsp::fault::claim_failed(e);
     }
-
-    // FRU flash log: loads the stored image (`None`: the built image stays in use) and erases the
-    // store sector when it holds only damage and NVMRO is deasserted. After the UART (it prints),
-    // before the I2C slaves start: an erase stalls the core for up to 500 ms (16 KB sector) and no
-    // slave exists yet to miss a frame. The DWT cycle counter runs first so the erase can give SysTick the stalled time
-    // (systick::catch_up); a counter that does not run is reported by the IPMB master start.
+    // The DWT cycle counter runs before the FRU flash log starts, so an erase can give SysTick the
+    // stalled time (systick::catch_up); a counter that does not run is reported by the IPMB master
+    // start.
     let _ = drivers::ipmb_common::start_cycle_counter(&mut cp.DCB, &mut cp.DWT);
-    let nvmro = bsp::ga::nvmro_asserted();
-    let (fru_log, fru_image) = fru_log::FruLog::boot(dp.FLASH, nvmro);
-
-    // IPMB drivers: the bus recovery, the bit-bang master and the I2C slaves, now that the own
-    // address is known. A bus that cannot start prints a line and stays disabled.
-    let address = ipmc_core::addr::resolve(bsp::ga::read_raw());
-    let ipmb_io = ipmb_link::start_drivers(
-        ipmb_link::DriverParts {
+    // The IPMB master takes the pins and the cycle counter; the I2C slaves start in `run`, once
+    // the FRU log has loaded.
+    let ipmb = F401Ipmb::new(
+        DriverParts {
             rcc: dp.RCC,
             nvic: cp.NVIC,
             dcb: &mut cp.DCB,
@@ -165,67 +174,41 @@ fn main() -> ! {
         dp.I2C1,
         dp.I2C3,
         ipmb_pins,
-        &address,
-    );
-    // The one IpmbLink lives in a static; None would mean main re-entered.
-    let Some(ipmb) = ipmb_link::IpmbLink::take(
-        ipmb_io,
-        fru_log,
-        fru_image,
-        bsp::reset_cause::kept_sequence(reset_cause),
-    ) else {
-        loop {
-            cortex_m::asm::wfi();
-        }
-    };
-    let mut console = console::Console::new(
-        reset_cause,
-        last_fault,
-        clock,
-        clock_fault,
-        sensing::Sensing::new(adc, board_io),
-        ipmb,
-    );
-    // Banner first: start_sensors may print the first power event line.
-    console.banner();
-    if let Some(error) = app_uart_fault {
-        out!("APP_UART not started: {}\n", error.name());
-    }
-    console.start_events();
-    console.start_sensors();
-    console.prompt();
-    // The watchdog starts last, just before the loop. A start failure leaves the board running
-    // without it.
-    let mut watchdog = bsp::watchdog::Watchdog::new(dp.IWDG, &dp.DBGMCU);
-    if ipmc_defs::IPMC_WATCHDOG_ENABLE {
-        match watchdog.start(ipmc_defs::IPMC_WATCHDOG_MS) {
-            Ok(ms) => console.set_watchdog(Some(ms)),
-            Err(e) => out!("Watchdog not started: {}\n", e.name()),
-        }
-    }
-    #[cfg(ipmc_eval)]
-    let mut ipmb_ended = false;
-    loop {
-        watchdog.feed(); // once per pass, first: the only place the watchdog is fed
-        console.poll();
-        console.service_app();
-        console.service_sensors();
-        #[cfg(not(ipmc_eval))]
-        console.service_link();
-        #[cfg(ipmc_eval)]
-        if !ipmb_ended {
-            if eval::expired() {
-                console.stop_ipmb_for_eval();
-                out!("Evaluation period ended: IPMB stopped (power cycle to restart)\n");
-                ipmb_ended = true;
-            } else {
-                console.service_link();
-            }
-        } else {
-            // A Write FRU Data accepted before the stop is still saved; the save never touches
-            // the stopped slaves.
-            console.service_fru_log();
-        }
-        cortex_m::asm::wfi(); // sleeps until the next interrupt (UART byte or 1 ms tick)
-    }
+    )
+    .map_err(drivers::ipmb_common::TimebaseError::name);
+
+    run::<F401>(
+        BoardParts {
+            start: StartInfo {
+                reset_cause,
+                last_fault,
+                clock: clock.summary(clock_fault),
+                app_uart_fault: app_uart_fault.map(bsp::uart::UartError::name),
+                image_header: app_header::read(),
+                version: env!("CARGO_PKG_VERSION"),
+                events_at_boot: ipmc_defs::IPMC_EVENTS_AT_BOOT,
+                power_at_boot: ipmc_defs::IPMC_POWER_AT_BOOT,
+            },
+            clock: SysTickClock,
+            cycles: DwtCycles { hz: clock.hclk_hz },
+            console: Uart::<CONSOLE>,
+            app: Uart::<APP>,
+            ipmb,
+            fru: Flash::new(dp.FLASH).map_err(drivers::flash::StartError::text),
+            analog,
+            io,
+            rail_wiring: &drivers::board_pins::RAIL_WIRING,
+            straps: GaStraps,
+            led: Ld2,
+        },
+        SystemParts {
+            system: CortexSystem,
+            watchdog: bsp::watchdog::Watchdog::new(dp.IWDG, dp.DBGMCU),
+            kept_seq: KeptSeqWords,
+            boot_request: BootRequestWords,
+            #[cfg(ipmc_eval)]
+            eval_expired: eval::expired,
+        },
+        home,
+    )
 }

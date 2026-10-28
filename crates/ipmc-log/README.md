@@ -6,5 +6,5 @@ trace tee (`tee.rs`) and the log switches with their status lines (`switches.rs`
 hardware, no allocator. It depends on `ipmc-core`; the core never depends on it.
 
 The firmware glue (the console handlers DEBUG LOG, DUMP, CLEAR and TRACE) is
-`crates/ipmc-nucleo-f401re/src/log_cmds.rs`. `tools/capture/capture2pcap.py` turns a DEBUG DUMP
+`crates/ipmc-runtime/src/log_cmds.rs`. `tools/capture/capture2pcap.py` turns a DEBUG DUMP
 CSV into a Wireshark pcap.

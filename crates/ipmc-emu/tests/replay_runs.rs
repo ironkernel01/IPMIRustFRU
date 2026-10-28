@@ -211,7 +211,8 @@ fn without_ipmb_b_the_b_requests_are_not_fitted_not_unanswered() {
     assert_eq!(r.totals.bus_not_fitted, b_requests);
     assert_eq!(r.totals.unanswered, 0);
     assert_eq!(r.answered, REQUESTS - b_requests);
-    assert_eq!(r.link.buses[1].unavailable, b_requests);
+    // The frames never reach the link: no target runs on a bus that is not built in.
+    assert_eq!(r.link.buses[1].unavailable, 0);
     let text = r.to_string();
     assert!(text.contains("requests on IPMB-B, not fitted in this build: 155"));
     assert!(text.trim_end().ends_with("PASS"));

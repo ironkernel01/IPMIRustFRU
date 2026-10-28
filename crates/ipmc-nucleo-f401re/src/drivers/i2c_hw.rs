@@ -11,7 +11,7 @@
 //
 // Receive path (PLAN 3.3a): the EV interrupt appends the bytes of one START..STOP frame to a
 // buffer and, at STOP, posts it with the SysTick time to that bus's heapless SPSC queue; the
-// main loop (ipmb_link.rs) drains both queues. The interrupt does no formatting and never
+// main loop (ipmc-runtime link.rs) drains both queues. The interrupt does no formatting and never
 // touches the Link.
 // Master hand-off: the bit-bang master calls `slave_idle`, `suspend` and `resume` around a
 // transmission (PE = 0 while it drives the pins). The hardware master (`HwMaster`, at the end of
@@ -20,6 +20,7 @@
 // defensive recovery; the "analog filter locks BUSY" erratum is documented for other STM32
 // families and is not confirmed in ES0299); both masters use it.
 
+use crate::bsp::ports::{Pins, Pull, Speed};
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::interrupt::free;
 use cortex_m::peripheral::NVIC;
@@ -28,7 +29,7 @@ use heapless::spsc::{Consumer, Producer, Queue};
 use ipmc_core::link::BusSpeed;
 use ipmc_core::queue::Bus;
 use ipmc_defs::i2c_timing::{hw_ccr, hw_trise};
-use ipmc_sensors::drivers::stm32f401::ports::{Pins, Pull, Speed};
+use ipmc_hal::frame::{FrameAssembler, SlaveErrors, StopEvent};
 use stm32f4::stm32f401::{i2c1::RegisterBlock, interrupt, Interrupt, I2C1, I2C3, RCC};
 
 use super::ipmb_common::{
@@ -41,45 +42,8 @@ use crate::bsp::{led, systick};
 
 // ---- sizes, from defs.rs ----
 
-/// GENERAL_CALL -- the address byte a broadcast frame starts with (IPMI v2.0 section 20.9). Peer:
-/// ipmc-core link.rs GENERAL_CALL strips it; a different value here makes Broadcast Get Device
-/// ID answer nothing.
-const GENERAL_CALL: u8 = 0x00;
-
-/// RX_FRAME_MAX -- bytes of one received frame as the interrupt stores it: the IPMB frame
-/// maximum (IPMB_MSG_MAX, the whole frame from rsSA to the second checksum) plus one for the
-/// leading address byte, which the interrupt prepends because the hardware consumes the address
-/// phase (own address byte, or 00h for a general call). A broadcast frame is then 00h followed
-/// by a normal frame, the same length as a frame that carries its own address (IPMB_MSG_MAX)
-/// plus the general-call byte in front. A longer frame is an overrun and is dropped.
-pub const RX_FRAME_MAX: usize = ipmc_defs::IPMB_MSG_MAX + 1;
-const _: () = assert!(RX_FRAME_MAX <= 255, "RxFrame::len is a u8");
-
-/// RX_QUEUE_LEN -- heapless::spsc::Queue<_, N> holds N - 1 frames (one slot separates a full
-/// queue from an empty one), so N = IPMB_RX_QUEUE_DEPTH + 1 holds DEPTH frames.
-pub const RX_QUEUE_LEN: usize = ipmc_defs::IPMB_RX_QUEUE_DEPTH + 1;
-
-/// RxFrame -- one received frame as posted by the interrupt: `bytes[..len]`, STOP time in
-/// SysTick milliseconds.
-#[derive(Clone, Copy)]
-pub struct RxFrame {
-    pub bytes: [u8; RX_FRAME_MAX],
-    pub len: u8,
-    pub stop_ms: u32,
-}
-
-impl RxFrame {
-    const EMPTY: RxFrame = RxFrame {
-        bytes: [0; RX_FRAME_MAX],
-        len: 0,
-        stop_ms: 0,
-    };
-
-    /// data -- the received bytes.
-    pub fn data(&self) -> &[u8] {
-        self.bytes.get(..usize::from(self.len)).unwrap_or(&[])
-    }
-}
+// RxFrame and RX_QUEUE_LEN live in ipmc-hal beside `FrameAssembler`, the frame state of the interrupt.
+pub use ipmc_hal::frame::{RxFrame, RX_QUEUE_LEN};
 
 type RxQueue = Queue<RxFrame, RX_QUEUE_LEN>;
 /// RxProducer -- the interrupt's end of a bus queue.
@@ -357,38 +321,8 @@ fn counters(bus: Bus) -> &'static DriverCounters {
     }
 }
 
-/// DriverStats -- snapshot of one bus's driver counters.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DriverStats {
-    /// Frames posted to the queue.
-    pub rx_frames: u32,
-    /// Frames dropped for exceeding RX_FRAME_MAX.
-    pub rx_overrun: u32,
-    /// Frames dropped because the queue was full.
-    pub rx_queue_full: u32,
-    /// Address-only writes (no data byte): dropped.
-    pub rx_empty: u32,
-    /// Partial frames dropped by a repeated START.
-    pub restart_drops: u32,
-    /// Reads of this slave answered with FFh.
-    pub slave_reads: u32,
-    /// Slave reads that ended with the master's NACK (normal end).
-    pub slave_read_end: u32,
-    /// BERR: misplaced START or STOP.
-    pub bus_error: u32,
-    /// ARLO.
-    pub arbitration_lost: u32,
-    /// AF outside a slave read: a NACK that was not the end of one.
-    pub ack_failure: u32,
-    /// OVR.
-    pub overrun: u32,
-    /// TIMEOUT.
-    pub timeout: u32,
-    /// Runs of `clear_stuck_busy` (the BUSY-flag erratum workaround).
-    pub busy_errata_resets: u32,
-    /// BERR flags the hardware master cleared and ignored (ES0299 2.9.1).
-    pub master_berr_spurious: u32,
-}
+// DriverStats lives in ipmc-hal with the other IPMB counters.
+pub use ipmc_hal::ipmb::DriverStats;
 
 /// stats -- the driver counters of `bus`.
 pub fn stats(bus: Bus) -> DriverStats {
@@ -414,131 +348,12 @@ pub fn stats(bus: Bus) -> DriverStats {
 
 // ---- slave state ----
 
-/// Phase -- where the slave is in a transfer.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    /// Between frames.
-    Idle,
-    /// Address matched with the write bit: bytes go into the frame.
-    Receiving,
-    /// Address matched with the read bit: the slave answers FFh until the master NACKs.
-    Transmitting,
-}
-
-/// RxState -- the frame being received and the producer end of the bus queue.
-struct RxState {
-    own_addr8: u8,
-    producer: RxProducer,
-    frame: RxFrame,
-    overrun: bool,
-    phase: Phase,
-}
-
-impl RxState {
-    fn clear_frame(&mut self) {
-        self.frame.len = 0;
-        self.overrun = false;
-    }
-
-    /// push -- appends one byte; beyond RX_FRAME_MAX the byte is dropped and the frame marked
-    /// overrun (the reads of DR go on so the bus is not held).
-    fn push(&mut self, byte: u8) {
-        match self.frame.bytes.get_mut(usize::from(self.frame.len)) {
-            Some(slot) => {
-                *slot = byte;
-                self.frame.len += 1;
-            }
-            None => self.overrun = true,
-        }
-    }
-
-    /// on_address -- an address matched (SR2 has been read). A write (SR2.TRA = 0) starts a frame
-    /// whose first byte is the address that matched: 00h for a general call (SR2.GENCALL), else
-    /// the own 8-bit address. A read (TRA = 1) starts a transmission of FFh bytes.
-    fn on_address(&mut self, sr2: u16, c: &DriverCounters) {
-        if self.phase == Phase::Receiving && self.frame.len > 0 {
-            bump(&c.restart_drops); // a repeated START ended a frame without a STOP
-        }
-        self.clear_frame();
-        if sr2 & SR2_TRA != 0 {
-            self.phase = Phase::Transmitting;
-            bump(&c.slave_reads);
-        } else {
-            self.phase = Phase::Receiving;
-            let first = if sr2 & SR2_GENCALL != 0 {
-                GENERAL_CALL
-            } else {
-                self.own_addr8
-            };
-            self.push(first);
-        }
-    }
-
-    /// on_byte -- a received byte (DR read).
-    fn on_byte(&mut self, byte: u8) {
-        if self.phase == Phase::Receiving {
-            self.push(byte);
-        }
-    }
-
-    /// on_stop -- STOP after a write: posts the frame unless it overran or is address-only.
-    fn on_stop(&mut self, c: &DriverCounters) {
-        if self.phase == Phase::Receiving {
-            if self.overrun {
-                bump(&c.rx_overrun);
-            } else if self.frame.len <= 1 {
-                bump(&c.rx_empty);
-            } else {
-                self.frame.stop_ms = systick::millis();
-                match self.producer.enqueue(self.frame) {
-                    Ok(()) => bump(&c.rx_frames),
-                    Err(_) => bump(&c.rx_queue_full),
-                }
-                led::activity();
-            }
-        }
-        self.phase = Phase::Idle;
-        self.clear_frame();
-    }
-
-    /// on_errors -- SR1 error flags `flags`: counted per kind; a slave-side flag drops the partial
-    /// frame and returns the slave to idle. AF at the end of a slave read is the normal end
-    /// (RM0368 18.3.3, slave transmitter), counted separately. ARLO alone is only counted: it
-    /// reports the hardware master losing arbitration (RM0368 18.6.6, ARLO), after which the
-    /// peripheral may already be receiving the winner's frame addressed to this slave, and that
-    /// frame is kept.
-    fn on_errors(&mut self, flags: u16, c: &DriverCounters) {
-        if flags & SR1_BERR != 0 {
-            bump(&c.bus_error);
-        }
-        if flags & SR1_ARLO != 0 {
-            bump(&c.arbitration_lost);
-        }
-        if flags & SR1_AF != 0 {
-            if self.phase == Phase::Transmitting {
-                bump(&c.slave_read_end);
-            } else {
-                bump(&c.ack_failure);
-            }
-        }
-        if flags & SR1_OVR != 0 {
-            bump(&c.overrun);
-        }
-        if flags & SR1_TIMEOUT != 0 {
-            bump(&c.timeout);
-        }
-        if flags & !SR1_ARLO != 0 {
-            self.phase = Phase::Idle;
-            self.clear_frame();
-        }
-    }
-}
-
 /// Slave -- one bus's peripheral, timing and receive state.
 struct Slave {
     hw: I2cPeripheral,
     timing: Timing,
-    rx: RxState,
+    rx: FrameAssembler,
+    producer: RxProducer,
 }
 
 // Shared state, one per bus. Written by `init` (thread, once, before the interrupts are
@@ -617,8 +432,7 @@ fn arm(bus: Bus, slave: &mut Slave, pins: &BusPins) {
             .enabled()
     });
 
-    slave.rx.phase = Phase::Idle;
-    slave.rx.clear_frame();
+    slave.rx.reset();
     let (ev, er) = irqs(bus);
     NVIC::unpend(ev);
     NVIC::unpend(er);
@@ -691,13 +505,8 @@ pub fn init(
         let mut state = Slave {
             hw,
             timing,
-            rx: RxState {
-                own_addr8,
-                producer,
-                frame: RxFrame::EMPTY,
-                overrun: false,
-                phase: Phase::Idle,
-            },
+            rx: FrameAssembler::new(own_addr8),
+            producer,
         };
         arm(bus, &mut state, pins);
         slot(bus).borrow(cs).replace(Some(state));
@@ -748,10 +557,29 @@ fn on_event(bus: Bus) {
             slave.rx.on_byte(byte);
         }
         if sr1 & SR1_STOPF != 0 {
-            slave.rx.on_stop(c);
+            match slave.rx.on_stop(systick::millis) {
+                StopEvent::Frame(frame) => {
+                    match slave.producer.enqueue(frame) {
+                        Ok(()) => bump(&c.rx_frames),
+                        Err(_) => bump(&c.rx_queue_full),
+                    }
+                    led::activity();
+                }
+                StopEvent::Overrun => bump(&c.rx_overrun),
+                StopEvent::Empty => bump(&c.rx_empty),
+                StopEvent::Ignored => {}
+            }
         }
         if let Some(sr2) = sr2 {
-            slave.rx.on_address(sr2, c);
+            let event = slave
+                .rx
+                .on_address(sr2 & SR2_TRA != 0, sr2 & SR2_GENCALL != 0);
+            if event.restart_drop {
+                bump(&c.restart_drops); // a repeated START ended a frame without a STOP
+            }
+            if event.slave_read {
+                bump(&c.slave_reads);
+            }
         }
     });
 }
@@ -773,7 +601,34 @@ fn on_error(bus: Bus) {
         // effect), 0 in the read-only bits (ignored).
         regs.sr1()
             .write(|w| unsafe { w.bits(SR1_ERROR_FLAGS & !flags) });
-        slave.rx.on_errors(flags, counters(bus));
+        let c = counters(bus);
+        let event = slave.rx.on_errors(SlaveErrors {
+            bus_error: flags & SR1_BERR != 0,
+            arbitration_lost: flags & SR1_ARLO != 0,
+            ack_failure: flags & SR1_AF != 0,
+            overrun: flags & SR1_OVR != 0,
+            timeout: flags & SR1_TIMEOUT != 0,
+            other: flags & (SR1_PECERR | SR1_SMBALERT) != 0,
+        });
+        if flags & SR1_BERR != 0 {
+            bump(&c.bus_error);
+        }
+        if flags & SR1_ARLO != 0 {
+            bump(&c.arbitration_lost);
+        }
+        if flags & SR1_AF != 0 {
+            if event.slave_read_end {
+                bump(&c.slave_read_end);
+            } else {
+                bump(&c.ack_failure);
+            }
+        }
+        if flags & SR1_OVR != 0 {
+            bump(&c.overrun);
+        }
+        if flags & SR1_TIMEOUT != 0 {
+            bump(&c.timeout);
+        }
     });
 }
 
@@ -807,7 +662,7 @@ pub fn slave_idle(bus: Bus) -> bool {
 }
 
 fn idle_now(slave: &Slave) -> bool {
-    slave.rx.phase == Phase::Idle && slave.hw.regs().sr2().read().bits() & SR2_BUSY == 0
+    slave.rx.is_idle() && slave.hw.regs().sr2().read().bits() & SR2_BUSY == 0
 }
 
 /// take_bus -- takes `bus` away from the slave interrupts for a master transmission.
@@ -985,7 +840,7 @@ fn reset_peripheral(regs: &RegisterBlock) {
 pub fn busy_without_frame(bus: Bus) -> bool {
     free(|cs| {
         slot(bus).borrow(cs).borrow().as_ref().is_some_and(|slave| {
-            slave.rx.phase == Phase::Idle && slave.hw.regs().sr2().read().bits() & SR2_BUSY != 0
+            slave.rx.is_idle() && slave.hw.regs().sr2().read().bits() & SR2_BUSY != 0
         })
     })
 }

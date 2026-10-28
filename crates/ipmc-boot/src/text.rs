@@ -1,9 +1,22 @@
 //! text - numbers as text without `core::fmt`: the bootloader must fit 32 KB, and the number
 //! writers here are the only way a number reaches a UART.
 
+use ipmc_hal::serial::SerialPort;
+
 /// TextOut -- where the bootloader's text goes (a UART in the firmware, a String in tests).
 pub trait TextOut {
     fn put(&mut self, text: &str);
+}
+
+/// SerialText -- a serial port as a `TextOut`: the text goes into the TX ring whole, with no
+/// `core::fmt` (the fault handlers and the bootloader's trace use it). A failed write drops the
+/// rest of the text; the port has counted the timeout.
+pub struct SerialText<S: SerialPort>(pub S);
+
+impl<S: SerialPort> TextOut for SerialText<S> {
+    fn put(&mut self, text: &str) {
+        let _ = self.0.write_all_wait(text.as_bytes());
+    }
 }
 
 pub const CRLF: &str = "\r\n";
@@ -90,7 +103,19 @@ impl TextOut for std::string::String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ipmc_hal::testing::FakePort;
     use std::string::String;
+
+    #[test]
+    fn serial_text_writes_whole_and_drops_on_a_full_port() {
+        let port = FakePort::new(8);
+        let mut out = SerialText(port.clone());
+        put_dec(&mut out, 1234);
+        out.put("-ok");
+        assert_eq!(port.text(), "1234-ok");
+        out.put("overflow"); // only the byte that fits is kept; the rest is dropped, no panic
+        assert_eq!(port.text(), "1234-oko");
+    }
 
     #[test]
     fn decimal_rows() {

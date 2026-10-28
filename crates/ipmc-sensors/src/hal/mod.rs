@@ -10,7 +10,7 @@ pub mod analog;
 pub mod digital;
 pub mod power;
 
-pub use analog::{AnalogSource, Channel, Divider};
+pub use analog::{AnalogSource, Channel, Divider, RailWiring};
 pub use digital::{DigitalInputs, Input};
 pub use power::{PowerSwitch, ResetOutput};
 

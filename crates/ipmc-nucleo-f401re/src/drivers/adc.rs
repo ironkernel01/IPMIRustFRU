@@ -20,12 +20,12 @@
 
 use stm32f4::stm32f401::{ADC1, ADC_COMMON, RCC};
 
-use crate::board_sensors::EXTERNAL_INPUTS;
-use crate::eval::rail;
-use crate::eval::temperature::{self, Calibration};
-use crate::hal::{AnalogSource, Divider, SourceError};
+use ipmc_sensors::board_sensors::EXTERNAL_INPUTS;
+use ipmc_sensors::eval::rail;
+use ipmc_sensors::eval::temperature::{self, Calibration};
+use ipmc_sensors::hal::{AnalogSource, Divider, SourceError};
 
-use super::ports::{self, PinId, Pins, PortError};
+use crate::bsp::ports::{self, PinId, Pins, PortError};
 
 const OWNER: &str = "adc";
 
@@ -185,11 +185,6 @@ pub fn init(
 }
 
 impl Adc {
-    /// calibration -- the validated factory values, or why they are unusable.
-    pub fn calibration(&self) -> Result<Calibration, SourceError> {
-        self.calibration
-    }
-
     /// convert_once -- one software-triggered conversion of the channel in SQR3.
     fn convert_once(&self) -> Result<u32, SourceError> {
         // SAFETY: clears every status flag (SR bits are write-0-to-clear) before the start.

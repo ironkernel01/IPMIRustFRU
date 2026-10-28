@@ -3,7 +3,7 @@
 //
 // Two implementations: the bit-bang master (drivers/i2c_bitbang.rs, `IPMB_MASTER_BITBANG`) and the
 // hardware I2C master (drivers/i2c_hw.rs, `IPMB_MASTER_HW`). Both implement the same trait, so the
-// main loop (ipmb_link.rs) is written once. `SelectedMaster` is the method ipmc-defs
+// link service (ipmc-runtime link.rs) is written once. `SelectedMaster` is the method ipmc-defs
 // IPMB_MASTER_MODE chooses.
 
 use cortex_m::peripheral::{DCB, DWT};
@@ -15,156 +15,8 @@ use super::i2c_hw;
 use super::ipmb_common::{self, Deadline, TimebaseError};
 use super::ipmb_pins::{BusPins, IpmbPins};
 
-/// Recovery -- outcome of `IpmbMaster::recover_if_stuck`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Recovery {
-    /// Both lines were high.
-    NotNeeded,
-    /// SDA was held low; the recovery clocks freed it.
-    Recovered,
-}
-
-/// MasterError -- why a master write failed; `name` gives the text for a log line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MasterError {
-    /// No free bus before the write's time budget (T2 + T1) ran out.
-    BusBusy,
-    /// Another master has the bus: a released SDA read low, the hardware reported ARLO, or
-    /// another master started in the moment after the free-bus check. The bus is released at
-    /// once; the write is retried after a new free-bus wait (IPMB_ARB_RETRIES).
-    ArbitrationLost,
-    /// Nobody acknowledged the address byte.
-    AddressNack,
-    /// A data byte was not acknowledged (the transfer ended with a STOP).
-    DataNack,
-    /// SCL stayed low longer than IPMB_STRETCH_TIMEOUT_US after being released (VITA T8), a
-    /// hardware event did not come within it, or the write ran past VITA T1 (20 ms).
-    StretchTimeout,
-    /// SCL still read low after the transfer ended: the STOP could not complete.
-    SclStuckLow,
-    /// SDA still read low after the transfer and the recovery clocks.
-    SdaStuckLow,
-    /// The frame is empty: there is no address byte to send.
-    FrameLength,
-    /// SCL read high although the recovery procedure drove it low (Table 10.2.2-1 code 3).
-    SclStuckHigh,
-    /// SDA read high although the recovery procedure drove it low (Table 10.2.2-1 code 4).
-    SdaStuckHigh,
-}
-
-impl MasterError {
-    /// COUNT -- number of variants; sizes the per-kind counters.
-    pub const COUNT: usize = 10;
-
-    /// index -- position in the per-kind counters (0..COUNT).
-    pub const fn index(self) -> usize {
-        match self {
-            MasterError::BusBusy => 0,
-            MasterError::ArbitrationLost => 1,
-            MasterError::AddressNack => 2,
-            MasterError::DataNack => 3,
-            MasterError::StretchTimeout => 4,
-            MasterError::SclStuckLow => 5,
-            MasterError::SdaStuckLow => 6,
-            MasterError::FrameLength => 7,
-            MasterError::SclStuckHigh => 8,
-            MasterError::SdaStuckHigh => 9,
-        }
-    }
-
-    /// name -- text for log lines.
-    pub const fn name(self) -> &'static str {
-        match self {
-            MasterError::BusBusy => "bus busy",
-            MasterError::ArbitrationLost => "arbitration lost",
-            MasterError::AddressNack => "address not acknowledged",
-            MasterError::DataNack => "data not acknowledged",
-            MasterError::StretchTimeout => "clock stretch timeout",
-            MasterError::SclStuckLow => "SCL stuck low",
-            MasterError::SdaStuckLow => "SDA stuck low",
-            MasterError::FrameLength => "empty frame",
-            MasterError::SclStuckHigh => "SCL stuck high",
-            MasterError::SdaStuckHigh => "SDA stuck high",
-        }
-    }
-}
-
-/// BusStats -- master counters of one bus. All wrap-free in practice (u32 saturating adds).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct BusStats {
-    /// Writes that completed with every byte acknowledged.
-    pub writes_ok: u32,
-    /// Failed writes by kind, indexed by `MasterError::index`.
-    pub errors: [u32; MasterError::COUNT],
-    /// Arbitration losses retried on the same bus (IPMB_ARB_RETRIES).
-    pub arb_retries: u32,
-}
-
-/// MasterStats -- the counters of both buses plus the timing of the latest write.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MasterStats {
-    pub a: BusStats,
-    pub b: BusStats,
-    /// Core clock cycles from the first SCL fall to the last ACK clock of the latest completed
-    /// write, 0 before the first.
-    pub last_bit_cycles: u32,
-    /// Clock bits in `last_bit_cycles` (9 per byte, address byte included).
-    pub last_bits: u32,
-    /// Core clock in Hz, to turn cycles into time.
-    pub core_hz: u32,
-}
-
-impl MasterStats {
-    /// new -- zero counters for a master that runs at `core_hz`.
-    pub fn new(core_hz: u32) -> Self {
-        MasterStats {
-            core_hz,
-            ..MasterStats::default()
-        }
-    }
-
-    /// bus -- the counters of `bus`.
-    pub fn bus(&self, bus: Bus) -> &BusStats {
-        match bus {
-            Bus::A => &self.a,
-            Bus::B => &self.b,
-        }
-    }
-
-    /// record -- books the outcome of one `write_retrying` on `bus`.
-    pub fn record(&mut self, bus: Bus, result: Result<(), MasterError>, arb_retries: u32) {
-        let c = self.bus_mut(bus);
-        c.arb_retries = c.arb_retries.saturating_add(arb_retries);
-        match result {
-            Ok(()) => c.writes_ok = c.writes_ok.saturating_add(1),
-            Err(error) => {
-                if let Some(count) = c.errors.get_mut(error.index()) {
-                    *count = count.saturating_add(1);
-                }
-            }
-        }
-    }
-
-    /// bus_mut -- the counters of `bus`, for the master that counts.
-    pub fn bus_mut(&mut self, bus: Bus) -> &mut BusStats {
-        match bus {
-            Bus::A => &mut self.a,
-            Bus::B => &mut self.b,
-        }
-    }
-
-    /// scl_period_ns -- mean SCL period of the latest write in nanoseconds; None before the
-    /// first write.
-    pub fn scl_period_ns(&self) -> Option<u32> {
-        if self.last_bits == 0 || self.core_hz == 0 {
-            return None;
-        }
-        let ns = u64::from(self.last_bit_cycles) * 1_000_000_000
-            / u64::from(self.core_hz)
-            / u64::from(self.last_bits);
-        u32::try_from(ns).ok()
-    }
-}
+/// Recovery, MasterError and MasterStats live in ipmc-hal (shared with every board).
+pub use ipmc_hal::ipmb::{MasterError, MasterStats, Recovery};
 
 /// MasterState -- what every master method holds: the pins of both buses, the wait times in core
 /// clock cycles and the counters. The bit-bang master and the hardware master are each this state

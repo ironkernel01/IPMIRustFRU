@@ -11,4 +11,8 @@ path = "src/lib.rs"
 ipmc-defs = { path = "../ipmc-defs" }
 ipmc-wire = { path = "../ipmc-wire" }
 ipmc-fru = { path = "../ipmc-fru" }
+ipmc-hal = { path = "../ipmc-hal" }
 ipmc-menu = { path = "../ipmc-menu" }
+
+[dev-dependencies]
+ipmc-hal = { path = "../ipmc-hal", features = ["testing"] }

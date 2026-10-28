@@ -14,7 +14,7 @@ request zero or more `KEY: value` data lines and one final line, `OK` or
 - `Documentation/ipmc_software_spec.md` section 7.6 has the command table, the error codes and a
   session, and section 6.8 describes the files of this crate.
 - The crate never touches hardware. It asks the board through the `AppHost` trait (`src/host.rs`);
-  the firmware implements the trait in `crates/ipmc-nucleo-f401re/src/app_port.rs`, and the tests
+  the firmware implements the trait in `crates/ipmc-runtime/src/app_port.rs`, and the tests
   implement it over a plain `FruStore` (`src/tests.rs`).
 - The bench client is `tools/app-port/app_cli.py` (see its README).
 

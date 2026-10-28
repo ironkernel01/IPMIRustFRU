@@ -18,6 +18,15 @@ pub struct Divider {
     pub den: u32,
 }
 
+/// RailWiring -- the board facts of one rail: which channel carries it and the divider in front of
+/// that channel. The neutral sensor facts (name, nominal, windows) are `RailDef` in
+/// `eval/rail.rs`; the board crate supplies one `RailWiring` per `RailDef`, in the same order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RailWiring {
+    pub channel: Channel,
+    pub divider: Divider,
+}
+
 /// AnalogSource -- voltages and temperature in engineering units.
 pub trait AnalogSource {
     /// vdda_mv -- the ADC supply in millivolts. Parts that do not measure it keep the default.

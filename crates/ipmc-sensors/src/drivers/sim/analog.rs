@@ -2,8 +2,48 @@
 //!
 //! A rail value is held after the divider: the simulator ignores `Divider`.
 
-use crate::hal::{AnalogSource, Channel, Divider, SourceError};
+use crate::board_sensors::RAIL_COUNT;
+use crate::hal::{AnalogSource, Channel, Divider, RailWiring, SourceError};
 use ipmc_core::sensor::RAILS_MAX;
+
+/// SIM_RAIL_WIRING -- the wiring table of a host build (the emulator and the tests), the one shared
+/// definition: rail 0 is VDDA, rails 1.. are external inputs 0.. behind the defs.rs dividers. A
+/// simulator ignores the divider and keys its rails by the channel, so any distinct channels
+/// serve; these match the Nucleo board's table in its `drivers/board_pins.rs`.
+pub const SIM_RAIL_WIRING: [RailWiring; RAIL_COUNT] = [
+    RailWiring {
+        channel: Channel::Vdda,
+        divider: Divider { num: 1, den: 1 },
+    },
+    RailWiring {
+        channel: Channel::Adc(0),
+        divider: Divider {
+            num: ipmc_defs::IPMC_RAIL1_DIV_NUM,
+            den: ipmc_defs::IPMC_RAIL1_DIV_DEN,
+        },
+    },
+    RailWiring {
+        channel: Channel::Adc(1),
+        divider: Divider {
+            num: ipmc_defs::IPMC_RAIL2_DIV_NUM,
+            den: ipmc_defs::IPMC_RAIL2_DIV_DEN,
+        },
+    },
+    RailWiring {
+        channel: Channel::Adc(2),
+        divider: Divider {
+            num: ipmc_defs::IPMC_RAIL3_DIV_NUM,
+            den: ipmc_defs::IPMC_RAIL3_DIV_DEN,
+        },
+    },
+    RailWiring {
+        channel: Channel::Adc(3),
+        divider: Divider {
+            num: ipmc_defs::IPMC_RAIL4_DIV_NUM,
+            den: ipmc_defs::IPMC_RAIL4_DIV_DEN,
+        },
+    },
+];
 
 /// SimAnalog -- simulated rails and die temperature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

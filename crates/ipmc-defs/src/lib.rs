@@ -243,7 +243,7 @@ const _: () = assert!(
 // (this log, the UART rings, the FRU image) share it with the stack. The firmware reserves 35 KB
 // for the stack (`_stack_reserve` in memory.x, measured on the release ELF; the method and the
 // numbers are in that file) and link.x fails the build when the statics leave less. The
-// IpmbLink temporary in `take` was measured at 16.6 KB whatever the log size.
+// IpmbLink temporary in `home` (main.rs) was measured at 17.4 KB whatever the log size.
 const _: () = assert!(
     IPMC_LOG_SIZE >= 1024 && IPMC_LOG_SIZE <= 16384 && IPMC_LOG_SIZE.is_power_of_two(),
     "IPMC_LOG_SIZE must be a power of two, 1024..=16384 (the usable size is one byte less)"

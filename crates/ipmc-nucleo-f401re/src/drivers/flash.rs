@@ -18,7 +18,7 @@
 // it and the runtime starts after it: a layout that drifts apart can never erase code.
 //
 // An erase or a program operation stalls every flash access (timing in flash_regs.rs). The
-// caller keeps the IPMB slaves off the bus around an erase (ipmb_link.rs); nothing here runs in
+// caller keeps the IPMB slaves off the bus around an erase (ipmc-runtime link.rs); nothing here runs in
 // an interrupt handler.
 //
 // NVMRO (VITA 46.11 Rule 8-3, Rec 4.1.10-1): `FlashRegs` samples the pin as the first step of
