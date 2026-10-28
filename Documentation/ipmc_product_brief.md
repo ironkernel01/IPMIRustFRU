@@ -45,7 +45,7 @@ PIC32C microcontrollers, and the RISC-V soft processors Nios V and MicroBlaze V 
 - Tier-1, Tier-2 and Tier-3 from one source tree
 - Dual IPMB with per-bus queues, retries on the other bus and a duplicate cache
 - Supply rails in volts and die temperature in degrees C
-- PC emulator of the same IPMI code; 1,253 individual tests verified, zero failures
+- PC emulator of the same IPMI code; 1,320 test cases, 1,253 tests run, 1,253 passed
 
 </div>
 <div>
@@ -105,8 +105,8 @@ code, so it is tested on a PC and moves to another microcontroller with a new bo
 
 | Evidence | Result |
 |---|---|
-| Host and tool tests (Rust and Python) | 1,253 individual tests verified, each with its recorded result; zero failures |
-| Conformance suite | written from the VITA 46.11 and IPMI texts only, by an author who does not read the implementation; runs against the board or the emulator. Tier-3 build: 101 requirements, 78 passed, 0 failed, 23 not testable on the emulator; Tier-2 build: 65 requirements, 54 passed, 0 failed, 11 not testable |
+| Host and tool tests (Rust and Python) | 1,320 test cases, 1,253 tests run, 1,253 passed, each with its recorded result |
+| Conformance suite | written from the VITA 46.11 and IPMI texts only, by an author who does not read the implementation; runs against the board or the emulator. Tier-3 build: 101 requirement cases, 78 tests run, 78 passed; Tier-2 build: 65 requirement cases, 54 tests run, 54 passed |
 | Captured system traffic | the emulator replays the IPMB traffic of a live VPX chassis and compares every answer |
 | Third-party Chassis Manager | an independent VITA 46.11 Chassis Manager's Linux code, compiled for a PC and driving a real IPMB, discovers the IPMC, walks its SDR, reads its FRU inventory and sensors: 198 requests, 198 answers, no checksum errors |
 
