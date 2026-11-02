@@ -20,10 +20,9 @@
 #                                    carry -field (ipmc-boot-field.bin, ipmc-board-field.bin, ...);
 #                                    with -Eval the suffix is -eval-field. Restored after the build.
 #   -VolumeLabel <pattern>           flash target volume label (default NOD_F401RE)
-#   Tier-2/3 extension: build sets IPMC_TIER23 for cargo (unless already set) to 1 when
-#   ..\..\..\IPMIRustFRU_Tier23\defs_tier23.rs exists and to 0 otherwise, so a folder that
-#   appears or disappears after an earlier build takes effect (cargo reruns the ipmc-defs build
-#   script when the variable changes). Set IPMC_TIER23 yourself to override.
+#   Tier: IPMC_TIER23, IPMC_TIER2 and IPMC_TIER3 in crates\ipmc-defs\src\defs.rs select it (the
+#   ipmc-defs build script reads IPMC_TIER23 there); build sets no Tier variable. An IPMC_TIER23
+#   environment variable set by hand still overrides defs.rs, with a cargo warning.
 # Build steps (the files are in target\thumbv7em-none-eabihf\release unless noted; <sfx> is the
 # -eval and -field suffix):
 #   1. cargo build --profile boot --bin ipmc-boot (IPMC_EVAL=0); objcopy -O binary --gap-fill 0xFF to
@@ -146,25 +145,14 @@ function Invoke-Build {
     Assert-Tool 'arm-none-eabi-objcopy'
     Assert-Tool 'arm-none-eabi-size'
     Push-Location $root
-    $savedTier23 = $env:IPMC_TIER23
     $savedEval = $env:IPMC_EVAL
     $savedField = $env:IPMC_FIELD
     $script:BuildStart = Get-Date
     try {
         if ($Eval) {
             if (-not (Test-Path $tier23Header -PathType Leaf)) { throw "-Eval needs the Tier23 folder: $tier23Header not found" }
-            if ($env:IPMC_TIER23 -eq '0') { throw '-Eval needs the Tier-2/3 extension, but IPMC_TIER23 is 0' }
         }
         $env:IPMC_FIELD = if ($Field) { '1' } else { '0' }
-        if (-not $env:IPMC_TIER23) {
-            if (Test-Path $tier23Header -PathType Leaf) {
-                $env:IPMC_TIER23 = '1'
-                Write-Host "Tier-2/3 extension: built from $((Resolve-Path (Split-Path $tier23Header)).Path)"
-            } else {
-                $env:IPMC_TIER23 = '0'
-                Write-Host 'Tier-2/3 extension: not present, Tier-1 build'
-            }
-        }
 
         # 1. The bootloader: no evaluation code in it, whatever the runtime is.
         $env:IPMC_EVAL = '0'
@@ -214,7 +202,6 @@ function Invoke-Build {
             Write-Host "FIELD images: IPMC_BOOT_COUNTDOWN_FIELD applies"
         }
     } finally {
-        $env:IPMC_TIER23 = $savedTier23
         $env:IPMC_EVAL = $savedEval
         $env:IPMC_FIELD = $savedField
         Pop-Location

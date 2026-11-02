@@ -2,29 +2,44 @@
 //
 // build.rs includes this file with `#[path]`; tests/tier23.rs
 // includes it so the rules run under `cargo test`. The file system and the environment stay in
-// build.rs: it reads the variable and checks the two marker files, and these functions decide.
+// build.rs: it reads src/defs.rs, the variable and the two marker files, and these functions decide.
 //
-// IPMC_TIER23 selects the extension: unset = on when both marker files exist, 0 = off whatever
-// exists, 1 = on and a missing marker fails the build; any other value fails the build.
+// The setting is `IPMC_TIER23` in src/defs.rs (true = build the extension). The one line is read
+// here because a cfg must be known before the crate compiles; nothing else in defs.rs is read.
+// The environment variable IPMC_TIER23 (0 or 1) overrides it for one build: the tools that build
+// Tier-1 and Tier-2/3 in one run use it, and build.rs prints a warning whenever it is set.
 
-/// Mode -- the setting of the IPMC_TIER23 environment variable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// Variable unset: on when both marker files exist, off when neither does.
-    Auto,
-    /// Variable 0: off whatever exists.
-    Off,
-    /// Variable 1: on; a missing marker fails the build.
-    On,
+/// DEFS_LINE -- the start of the one line of defs.rs that holds the Tier-2/3 setting.
+pub const DEFS_LINE: &str = "pub const IPMC_TIER23: bool =";
+
+/// parse_defs -- the value of `IPMC_TIER23` in the text of defs.rs. Err when the line is missing,
+/// written twice, or its value is not `true;` or `false;`.
+pub fn parse_defs(text: &str) -> Result<bool, String> {
+    let mut lines = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(DEFS_LINE));
+    let value = match (lines.next(), lines.next()) {
+        (Some(value), None) => value.trim(),
+        (None, _) => return Err(format!("defs.rs has no line `{DEFS_LINE} true|false;`")),
+        (Some(_), Some(_)) => return Err(format!("defs.rs has `{DEFS_LINE}` more than once")),
+    };
+    match value {
+        "true;" => Ok(true),
+        "false;" => Ok(false),
+        other => Err(format!(
+            "defs.rs IPMC_TIER23 is {other:?}: it must be `true;` or `false;`"
+        )),
+    }
 }
 
-/// parse_mode -- the Mode for the value of IPMC_TIER23 (None = unset).
-/// Err names the variable and the value for any other text, the empty string included.
-pub fn parse_mode(value: Option<&str>) -> Result<Mode, String> {
+/// parse_override -- the IPMC_TIER23 environment override (None = unset, the defs.rs value
+/// holds): Some(false) for 0, Some(true) for 1. Err names the variable and the value for any other
+/// text, the empty string included.
+pub fn parse_override(value: Option<&str>) -> Result<Option<bool>, String> {
     match value {
-        None => Ok(Mode::Auto),
-        Some("0") => Ok(Mode::Off),
-        Some("1") => Ok(Mode::On),
+        None => Ok(None),
+        Some("0") => Ok(Some(false)),
+        Some("1") => Ok(Some(true)),
         Some(other) => Err(format!(
             "IPMC_TIER23 is {other:?}: it must be unset, 0 or 1"
         )),
@@ -38,28 +53,24 @@ pub struct Marker<'a> {
     pub present: bool,
 }
 
-/// decide -- whether the Tier-2/3 extension is built, for `mode` and the two markers.
-/// Err: mode On with a marker missing (names its path); mode Auto with exactly one marker
-/// present ("half a Tier23 checkout").
-pub fn decide(mode: Mode, markers: [Marker; 2]) -> Result<bool, String> {
-    let [first, second] = markers;
-    match mode {
-        Mode::Off => Ok(false),
-        Mode::On => match markers.iter().find(|m| !m.present) {
-            Some(missing) => Err(format!("IPMC_TIER23=1 but {} is missing", missing.path)),
-            None => Ok(true),
-        },
-        Mode::Auto => match (first.present, second.present) {
-            (true, true) => Ok(true),
-            (false, false) => Ok(false),
-            (true, false) => Err(half_checkout(first.path, second.path)),
-            (false, true) => Err(half_checkout(second.path, first.path)),
-        },
-    }
-}
+/// TIER1_HINT -- how to make the public Tier-1 build, for the error of a missing Tier23 folder.
+pub const TIER1_HINT: &str =
+    "the public Tier-1 build sets IPMC_TIER23, IPMC_TIER2 and IPMC_TIER3 to false in defs.rs";
 
-fn half_checkout(present: &str, missing: &str) -> String {
-    format!("half a Tier23 checkout: {present} found, {missing} missing")
+/// decide -- whether the Tier-2/3 extension is built, for the setting `on` and the two markers.
+/// Err: `on` with a marker missing (names its path and how to make the Tier-1 build). `on` false
+/// builds no extension whatever exists.
+pub fn decide(on: bool, markers: [Marker; 2]) -> Result<bool, String> {
+    if !on {
+        return Ok(false);
+    }
+    match markers.iter().find(|m| !m.present) {
+        Some(missing) => Err(format!(
+            "IPMC_TIER23 is true but {} is missing; {TIER1_HINT}",
+            missing.path
+        )),
+        None => Ok(true),
+    }
 }
 
 /// parse_switch -- whether the environment switch `name` is on (None = unset): unset or 0 = off,

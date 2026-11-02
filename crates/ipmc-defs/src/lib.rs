@@ -5,34 +5,39 @@
 //! integer for a wire or register value, a small enum for a choice between alternatives, `&str`
 //! for a text). There is no parser and no generated file. This file re-exports every item as
 //! `ipmc_defs::NAME` and checks every value at compile time: a value that breaks a spec or
-//! datasheet rule stops the build and names the define. When the private Tier-2/3 folder is
-//! present, `build.rs` sets `cfg(tier23)` and this file mounts that folder's `defs_tier23.rs` and
-//! `defs_guards.rs`; otherwise `IPMC_TIER` is 1. `build.rs` holds the one detection of the
-//! extension and of the evaluation build.
+//! datasheet rule stops the build and names the define. With `IPMC_TIER23` true, `build.rs` sets
+//! `cfg(tier23)` and this file mounts the private folder's `defs_tier23.rs` and `defs_guards.rs`;
+//! `IPMC_TIER` follows `IPMC_TIER2` and `IPMC_TIER3`, and is 1 without the extension. `build.rs`
+//! holds the one detection of the extension and of the evaluation build.
 #![no_std]
 #![forbid(unsafe_code)]
 
 mod defs;
 pub use defs::*;
 
-// The Tier-2/3 tunables, mounted only when the private folder is present (build.rs sets
-// cfg(tier23)); the Tier-1 build reports Tier 1.
+// The Tier-2/3 tunables, mounted only with IPMC_TIER23 true (build.rs sets cfg(tier23)).
 #[cfg(tier23)]
 #[rustfmt::skip] // formatted by the Tier23 gate; absent, rustfmt cannot open it
 #[path = "../../../../IPMIRustFRU_Tier23/defs_tier23.rs"]
 mod defs_tier23;
 #[cfg(tier23)]
 pub use defs_tier23::*;
-/// IPMC_TIER -- the Tier the IPMC reports in Get VSO Capabilities; the Tier-1 build has no
-/// Tier-2/3 file and reports 1.
-#[cfg(not(tier23))]
-pub const IPMC_TIER: u32 = 1;
+/// IPMC_TIER -- the Tier the IPMC reports in Get VSO Capabilities: 3 with IPMC_TIER3, 2 with
+/// IPMC_TIER2 alone, 1 without the extension (IPMC_TIER23 false, or its environment override 0).
+pub const IPMC_TIER: u32 = if !TIER23_BUILT {
+    1
+} else if IPMC_TIER3 {
+    3
+} else {
+    2
+};
 
 /// i2c_timing -- the IPMB timing arithmetic: cycles, SCL phases and peripheral divisors.
 pub mod i2c_timing;
 
-/// TIER23_BUILT -- true when build.rs found the Tier-2/3 extension folder (or IPMC_TIER23=1
-/// demanded it) and mounted its defs_tier23.rs into these constants; false in the Tier-1 build.
+/// TIER23_BUILT -- true when build.rs built the Tier-2/3 extension (IPMC_TIER23 true, or its
+/// environment override 1) and mounted its defs_tier23.rs into these constants; false in the
+/// Tier-1 build.
 /// The bridge crate `ipmc-ext` selects the extension from the same detection.
 pub const TIER23_BUILT: bool = cfg!(tier23);
 
@@ -42,6 +47,18 @@ pub const TIER23_BUILT: bool = cfg!(tier23);
 #[path = "../../../../IPMIRustFRU_Tier23/defs_guards.rs"]
 mod tier23_guards;
 
+const _: () = assert!(
+    !IPMC_TIER3 || IPMC_TIER2,
+    "IPMC_TIER3 needs IPMC_TIER2 true (a Tier-3 IPMC includes Tier-2)"
+);
+const _: () = assert!(
+    IPMC_TIER2 == IPMC_TIER23,
+    "IPMC_TIER2 must equal IPMC_TIER23 (Tier-2/3 is the private extension; Tier-1 sets all three false)"
+);
+const _: () = assert!(
+    !TIER23_BUILT || IPMC_TIER2,
+    "the IPMC_TIER23=1 environment override builds the extension, but IPMC_TIER2 is false"
+);
 const _: () = assert!(
     IPMC_TIER >= 1 && IPMC_TIER <= 3,
     "IPMC_TIER must be 1, 2 or 3 (VITA 46.11 section 4)"

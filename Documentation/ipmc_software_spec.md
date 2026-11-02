@@ -391,22 +391,29 @@ detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7
 
 | Build | Selected by | `IPMC_TIER` | `ipmc_ext::Active` |
 |---|---|---:|---|
-| Public Tier-1 | sibling folder absent, or `IPMC_TIER23=0` | 1 | `NoExtension` |
-| Commercial release, Tier-2 | folder present, its `defs_tier23.rs` sets `IPMC_TIER` 2 | 2 | the extension |
-| Commercial release, Tier-3 (the default) | its `defs_tier23.rs` sets `IPMC_TIER` 3 | 3 | the extension |
+| Public Tier-1 | `defs.rs`: `IPMC_TIER23`, `IPMC_TIER2`, `IPMC_TIER3` all `false` | 1 | `NoExtension` |
+| Commercial release, Tier-2 | `IPMC_TIER23` and `IPMC_TIER2` `true`, `IPMC_TIER3` `false` | 2 | the extension |
+| Commercial release, Tier-3 (the default) | all three `true` | 3 | the extension |
 | Evaluation (section 8.4) | `IPMC_EVAL=1` with the extension, release profile | as the commercial build | the extension |
 
+The three switches sit at the top of `defs.rs`. `lib.rs` derives `IPMC_TIER` from them (3 with
+`IPMC_TIER3`, 2 with `IPMC_TIER2` alone, 1 without the extension) and stops the build when
+`IPMC_TIER3` is set without `IPMC_TIER2` or `IPMC_TIER2` differs from `IPMC_TIER23`. The IPMB bus
+settings are independent of the Tier: a Tier-2 or Tier-3 build runs on IPMB-A, on both buses, or
+with IPMB-B not fitted, as `IPMB_BUS_B_ENABLE` and `IPMB_COMPLIANCE` say.
+
 `crates/ipmc-defs/build.rs` is the one detection point; its rules are pure functions in
-`tier23_detect.rs`, tested by `tests/tier23.rs`.
+`tier23_detect.rs`, tested by `tests/tier23.rs`. A cfg must be known before the crate compiles,
+so `build.rs` reads the one line `pub const IPMC_TIER23: bool = ...;` of `defs.rs` (`parse_defs`;
+a missing, repeated or malformed line fails the build).
 
-| `IPMC_TIER23` | Result |
+| Setting | Result |
 |---|---|
-| unset | on when both marker files exist (the extension's `defs_tier23.rs` and its library source), off when neither exists; exactly one present fails the build ("half a Tier23 checkout") |
-| `0` | off, whatever exists: the public Tier-1 build |
-| `1` | on; a missing marker file fails the build and names it |
-| any other value | fails the build |
+| `IPMC_TIER23` `false` | off, whatever exists: the public Tier-1 build |
+| `IPMC_TIER23` `true` | on; a missing marker file (the extension's `defs_tier23.rs` or its library source) fails the build, names it and says how to make the Tier-1 build |
+| environment `IPMC_TIER23=0` or `1` | overrides `defs.rs` for one build, with a cargo warning; the tools that build Tier-1 and Tier-2/3 in one run (`tools/test_coverage.py`, `tools/captured_sdr.py`, the gates) use it; any other value fails the build |
 
-- Defines: off uses `defs.rs` plus `IPMC_TIER` = 1 (a `cfg(not(tier23))` constant in `lib.rs`);
+- Defines: off uses `defs.rs` and `IPMC_TIER` = 1;
   on, `lib.rs` mounts the extension's `defs_tier23.rs` (a `#[path]` module under `cfg(tier23)`)
   and re-exports it beside `defs.rs`; a name in both files is ambiguous where it is used and
   fails the build. The guards of the extension's defines are mounted from the extension folder
@@ -420,11 +427,10 @@ detection. The public Tier-1 build answers every Tier-2/3 command C1h (section 7
   published value into `cfg(tier23)` or `cfg(ipmc_eval)`. They read no file and no other
   variable, so they cannot disagree with `ipmc-defs`.
 - With `cfg(tier23)`, `ipmc-ext` mounts the extension's sources through a relative
-  `#[path]` and `Active` is the extension's state type; otherwise `Active` is `NoExtension`. A
-  compile-time assertion requires a build without the extension to report `IPMC_TIER` 1.
-- The build script cannot watch a folder that is missing, so after adding
-  it to a tree already built without it, run `cargo clean -p ipmc-defs`. `gen.ps1 build` sets
-  `IPMC_TIER23` from the folder.
+  `#[path]` and `Active` is the extension's state type; otherwise `Active` is `NoExtension`;
+  `IPMC_TIER` is 1 without the extension by its definition.
+- `build.rs` watches `src/defs.rs`, so a change of the switch takes effect at the next build.
+  `gen.ps1 build` sets no Tier variable.
 - `IPMC_EVAL` is unset or 0 (off) or 1 (on); `IPMC_EVAL=1` without the
   extension, or outside the release profile, fails the build. On, it prints a build warning with
   the length and sets `cfg(ipmc_eval)`.
@@ -650,11 +656,12 @@ connect.
 
 `src/defs.rs` is the configuration (section 5); `src/lib.rs` re-exports it, mounts the extension's
 `defs_tier23.rs` and `defs_guards.rs` under `cfg(tier23)`, and holds the compile-time guards.
-`build.rs` reads no define and writes no file. It is the one detection point of the Tier-2/3
-extension (section 4, Build modes and the Tier-2/3 extension): it reads `IPMC_TIER23` and
-`IPMC_EVAL`, checks the extension's marker files (`defs_tier23.rs` and
-`crates/ipmc-tier23/src/lib.rs`) and publishes the decision. `tier23_detect.rs` holds the pure
-rules (`parse_mode`, `decide`, `parse_eval`, `check_eval`); `dep_cfg.rs` is the build-script step
+`build.rs` writes no file and reads one define, `IPMC_TIER23`. It is the one detection point of
+the Tier-2/3 extension (section 4, Build modes and the Tier-2/3 extension): it reads that line of
+`defs.rs`, the `IPMC_TIER23` override and `IPMC_EVAL`, checks the extension's marker files
+(`defs_tier23.rs` and `crates/ipmc-tier23/src/lib.rs`) and publishes the decision.
+`tier23_detect.rs` holds the pure rules (`parse_defs`, `parse_override`, `decide`, `parse_eval`,
+`check_eval`); `dep_cfg.rs` is the build-script step
 `ipmc-ext` and the firmware crate share.
 
 `i2c_timing.rs` is the IPMB timing arithmetic, hardware-free and host-tested, shared by the
@@ -1517,8 +1524,7 @@ The Tier-2/3 values live in the private configuration file `defs_tier23.rs` (gua
 
 | Switch | File | Default | Effect on the commands |
 |---|---|---|---|
-| `IPMC_TIER` | `defs_tier23.rs` | 3 | Selects the rows answered (2 builds the Tier-2 IPMC) and the Tier reported in Get VSO Capabilities. |
-| `IPMC_TIER3_IPMB_A_ONLY` | `defs_tier23.rs` | true | Lets a Tier-3 build run with IPMB-B disabled; the guard needs `IPMB_BUS_B_ENABLE` or this switch. |
+| `IPMC_TIER23`, `IPMC_TIER2`, `IPMC_TIER3` | `defs.rs` | true, true, true | Build the extension and select its Tier; `ipmc_defs::IPMC_TIER` (3, or 2 with `IPMC_TIER3` false) selects the rows answered and the Tier reported in Get VSO Capabilities. |
 | `IPMC_SEL_ENTRIES` | `defs_tier23.rs` | 64 | SEL size, 1 to 1024 records. |
 | `IPMC_FRU_EVENT_RESEND_MS` | `defs_tier23.rs` | 3000 | Resend period of an unacknowledged FRU State event, 100 to 60000. |
 | `IPMC_EVENT_QUEUE_DEPTH` | `defs_tier23.rs` | 12 | Queued sensor events, 1 to 32; at least 6 at Tier-2 and 9 at Tier-3. |
@@ -2404,8 +2410,8 @@ The six text fields that name the Tier (board product name, serial and part numb
 part number and serial) carry the Tier of the build: `defs.rs` holds a `_T1`, `_T2` and `_T3` literal of
 each ("VPX Tier-1 IPMC", "VPX Tier-2 IPMC", "VPX Tier-3 IPMC", serials "IK-T1-000001" and so on), and
 `ipmc-defs` `lib.rs` defines the name every consumer reads with the selector `by_tier`, the variant of
-`IPMC_TIER`: the public build is Tier 1, the build with the extension Tier 3 (Tier 2 when
-`defs_tier23.rs` sets it). The string and room guards check all eighteen literals, so a bad variant
+`IPMC_TIER`: the public build is Tier 1, the build with the extension Tier 3 (Tier 2 with
+`IPMC_TIER3` false). The string and room guards check all eighteen literals, so a bad variant
 fails every build; the reserved room comes from the selected default. `tools/defs.py` returns the
 Tier-1 variant unless a Tier is passed. The lengths are equal across the Tiers, so the layout below
 holds for each.
@@ -3281,10 +3287,10 @@ cargo run -p ipmc-emu -- serve --b-fitted 1
 cargo run -p ipmc-emu -- sdr
 ```
 
-The two build modes (section 4) use the same commands. With the extension folder next to the
-repository the build is the commercial release build; `IPMC_TIER23=0` forces the public Tier-1
-build and `IPMC_TIER23=1` demands the folder. `gen.ps1 build` sets `IPMC_TIER23` from the folder,
-and `gen.ps1 build|flash -Eval` makes the evaluation image (section 8.4). The numbers of the
+The two build modes (section 4) use the same commands. `IPMC_TIER23`, `IPMC_TIER2` and
+`IPMC_TIER3` at the top of `defs.rs` select the build: all three `true` (the default) is the
+commercial Tier-3 build and needs the extension folder next to the repository, all three `false`
+is the public Tier-1 build. `gen.ps1 build|flash -Eval` makes the evaluation image (section 8.4). The numbers of the
 capture replay (section 13.2) belong to the Tier-1 build.
 
 `gen.ps1 build` makes, in `crates/ipmc-nucleo-f401re/target/thumbv7em-none-eabihf/release`:

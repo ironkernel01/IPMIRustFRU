@@ -11,7 +11,24 @@
 //! as `ipmc_defs::NAME`; the bench tools read it with `tools/defs.py`.
 //! Prefixes: IPMB_ for bus values, IPMC_ for controller and application values.
 //! The Tier-2/3 tunables live in the private extension's `defs_tier23.rs`, which `lib.rs`
-//! mounts when that folder is present.
+//! mounts when `IPMC_TIER23` below is true.
+
+// ==========================================================================================
+// BUILD TIER -- which IPMC this build is (VITA 46.11 section 4)
+//   Tier-3 (default): IPMC_TIER23 true, IPMC_TIER2 true, IPMC_TIER3 true
+//   Tier-2:           IPMC_TIER23 true, IPMC_TIER2 true, IPMC_TIER3 false
+//   Tier-1 (public):  all three false; the only build without the ../IPMIRustFRU_Tier23 folder
+// The IPMC reports the result as ipmc_defs::IPMC_TIER (1, 2 or 3) in Get VSO Capabilities.
+// ==========================================================================================
+/// true = build the private Tier-2/3 extension from ../IPMIRustFRU_Tier23 (the build fails when
+/// that folder is missing); false = the public Tier-1 build. crates/ipmc-defs/build.rs reads this
+/// line; the environment variable IPMC_TIER23 (0 or 1) overrides it for one build, with a warning
+pub const IPMC_TIER23: bool = true;
+/// true = the Tier-2 commands and events (needs IPMC_TIER23 true)
+pub const IPMC_TIER2: bool = true;
+/// true = the Tier-3 commands and events on top of Tier-2 (needs IPMC_TIER2 true); false with
+/// IPMC_TIER2 true = a Tier-2 IPMC
+pub const IPMC_TIER3: bool = true;
 
 // ==========================================================================================
 // BENCH / TEST SWITCHES -- check these before a system build
@@ -50,7 +67,9 @@ pub const IPMB_MASTER_MODE: MasterMode = MasterMode::BitBang;
 /// true = IPMB-A built in; must be true (VITA Rule 4.1.1-1: IPMB-A is mandatory)
 pub const IPMB_BUS_A_ENABLE: bool = true;
 /// true = IPMB-B built in (VITA Rule 4.1.1-1: "should"; owner 11-02-2026: both buses on, a Chassis
-/// Manager may use either or both); false = IPMB-B not fitted, its pins stay parked
+/// Manager may use either or both); false = IPMB-B not fitted, its pins stay parked. The bus
+/// settings are independent of the Tier: a Tier-3 build with false reports one interface in Get
+/// VSO Capabilities and does not meet Rule 4.1.1-1.1 (a Tier-3 IPMC has both buses)
 pub const IPMB_BUS_B_ENABLE: bool = true;
 /// true = the processor's internal pull-ups (about 40 kOhm) on the four IPMB pins, so an unwired
 /// bus reads idle-high (logic 1); bench deviation from VITA Rule 9.2.3-2 ("the IPMC shall not

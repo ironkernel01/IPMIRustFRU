@@ -5,7 +5,9 @@
 #[path = "../tier23_detect.rs"]
 mod tier23_detect;
 
-use tier23_detect::{check_eval, decide, parse_eval, parse_field, parse_mode, Marker, Mode};
+use tier23_detect::{
+    check_eval, decide, parse_defs, parse_eval, parse_field, parse_override, Marker, DEFS_LINE,
+};
 
 fn markers(header: bool, lib: bool) -> [Marker<'static>; 2] {
     [
@@ -21,88 +23,84 @@ fn markers(header: bool, lib: bool) -> [Marker<'static>; 2] {
 }
 
 #[test]
-fn mode_parses_unset_zero_one_and_rejects_the_rest() {
-    assert_eq!(parse_mode(None), Ok(Mode::Auto));
-    assert_eq!(parse_mode(Some("0")), Ok(Mode::Off));
-    assert_eq!(parse_mode(Some("1")), Ok(Mode::On));
+fn defs_line_reads_true_or_false_once() {
+    let line = |v: &str| {
+        format!(
+            "/// doc
+{DEFS_LINE} {v}
+pub const IPMC_TIER2: bool = true;
+"
+        )
+    };
+    assert_eq!(parse_defs(&line("true;")), Ok(true));
+    assert_eq!(parse_defs(&line("false;")), Ok(false));
+    assert_eq!(parse_defs(&format!("    {DEFS_LINE} false;")), Ok(false));
+    for (text, part) in [
+        (line("1;"), "\"1;\""),
+        (line("true"), "\"true\""),
+        ("pub const IPMC_TIER2: bool = true;".to_string(), "no line"),
+        (
+            format!(
+                "{0} true;
+{0} false;",
+                DEFS_LINE
+            ),
+            "more than once",
+        ),
+    ] {
+        let err = parse_defs(&text).unwrap_err();
+        assert!(err.contains(part), "{err} lacks {part}");
+    }
+    // The real defs.rs has the line, so the build reads it.
+    assert!(parse_defs(include_str!("../src/defs.rs")).is_ok());
+}
+
+#[test]
+fn override_parses_unset_zero_one_and_rejects_the_rest() {
+    assert_eq!(parse_override(None), Ok(None));
+    assert_eq!(parse_override(Some("0")), Ok(Some(false)));
+    assert_eq!(parse_override(Some("1")), Ok(Some(true)));
     for bad in ["", "2", "yes", "01", " 1"] {
-        let err = parse_mode(Some(bad)).unwrap_err();
+        let err = parse_override(Some(bad)).unwrap_err();
         assert!(err.contains("IPMC_TIER23"), "{err}");
         assert!(err.contains(&format!("{bad:?}")), "{err}");
     }
 }
 
-/// Decision -- one (mode, header present, lib present) case and its result.
+/// Decision -- one (setting, header present, lib present) case and its result.
 struct Decision {
-    mode: Mode,
+    on: bool,
     header: bool,
     lib: bool,
     want: Result<bool, &'static str>,
 }
 
 #[test]
-fn decide_follows_the_mode_and_the_markers() {
-    use Mode::{Auto, Off, On};
+fn decide_follows_the_setting_and_the_markers() {
+    let case = |on, header, lib, want| Decision {
+        on,
+        header,
+        lib,
+        want,
+    };
     let table = [
-        Decision {
-            mode: Auto,
-            header: true,
-            lib: true,
-            want: Ok(true),
-        },
-        Decision {
-            mode: Auto,
-            header: false,
-            lib: false,
-            want: Ok(false),
-        },
-        Decision {
-            mode: Auto,
-            header: true,
-            lib: false,
-            want: Err("half a Tier23 checkout: T/defs_tier23.rs found, T/lib.rs missing"),
-        },
-        Decision {
-            mode: Auto,
-            header: false,
-            lib: true,
-            want: Err("half a Tier23 checkout: T/lib.rs found, T/defs_tier23.rs missing"),
-        },
-        Decision {
-            mode: Off,
-            header: true,
-            lib: true,
-            want: Ok(false),
-        },
-        Decision {
-            mode: Off,
-            header: true,
-            lib: false,
-            want: Ok(false),
-        },
-        Decision {
-            mode: On,
-            header: true,
-            lib: true,
-            want: Ok(true),
-        },
-        Decision {
-            mode: On,
-            header: false,
-            lib: true,
-            want: Err("T/defs_tier23.rs is missing"),
-        },
-        Decision {
-            mode: On,
-            header: true,
-            lib: false,
-            want: Err("T/lib.rs is missing"),
-        },
+        case(false, true, true, Ok(false)),
+        case(false, false, false, Ok(false)),
+        case(false, true, false, Ok(false)),
+        case(true, true, true, Ok(true)),
+        case(true, false, true, Err("T/defs_tier23.rs is missing")),
+        case(true, true, false, Err("T/lib.rs is missing")),
+        case(
+            true,
+            false,
+            false,
+            Err("sets IPMC_TIER23, IPMC_TIER2 and IPMC_TIER3 to false"),
+        ),
     ];
     for case in table {
-        let got = decide(case.mode, markers(case.header, case.lib));
+        let got = decide(case.on, markers(case.header, case.lib));
         match case.want {
-            Ok(on) => assert_eq!(got, Ok(on), "{:?} {} {}", case.mode, case.header, case.lib),
+            Ok(on) => assert_eq!(got, Ok(on), "{} {} {}", case.on, case.header, case.lib),
             Err(part) => {
                 let err = got.unwrap_err();
                 assert!(err.contains(part), "{err} lacks {part}");

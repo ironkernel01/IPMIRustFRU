@@ -1,13 +1,16 @@
 // build.rs - the one detection point of the Tier-2/3 extension and of the evaluation build. It
-// reads no define and writes no file: the configuration is the Rust module src/defs.rs.
+// writes no file and reads one line of src/defs.rs, `IPMC_TIER23` (whether the extension is built
+// in decides a cfg, which must be known before the crate compiles); the rest of the configuration
+// is the Rust module src/defs.rs.
 //
 // The ipmc-ext bridge crate reads the result as DEP_IPMC_DEFS_TIER23 and the firmware crate as
 // DEP_IPMC_DEFS_EVAL (through dep_cfg.rs). The sibling folder IPMIRustFRU_Tier23 holds
-// defs_tier23.rs and crates/ipmc-tier23/src/lib.rs. When both exist the extension is built:
-// `cfg(tier23)` is set and `cargo:tier23=1` is published (src/lib.rs then mounts defs_tier23.rs).
-// The rules (environment, half a checkout) live in tier23_detect.rs.
+// defs_tier23.rs and crates/ipmc-tier23/src/lib.rs. With IPMC_TIER23 true the extension is built:
+// `cfg(tier23)` is set and `cargo:tier23=1` is published (src/lib.rs then mounts defs_tier23.rs);
+// a missing file fails the build. The rules live in tier23_detect.rs.
 // Environment:
-//   IPMC_TIER23   unset = auto, 0 = off, 1 = on and a missing file fails the build.
+//   IPMC_TIER23   unset = the defs.rs value; 0 or 1 overrides it for this build (the tools that
+//                 build Tier-1 and Tier-2/3 in one run), with a warning.
 //   IPMC_EVAL     unset or 0 = off, 1 = evaluation build (the IPMB stops after
 //                 IPMC_EVAL_MINUTES, a define of defs_tier23.rs): needs the extension and
 //                 --release. The firmware crate reads the result as DEP_IPMC_DEFS_EVAL; no
@@ -34,9 +37,21 @@ fn main() {
     println!("cargo:rerun-if-env-changed=IPMC_FIELD");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=tier23_detect.rs");
+    println!("cargo:rerun-if-changed=src/defs.rs");
 
-    let mode = tier23_detect::parse_mode(env::var("IPMC_TIER23").ok().as_deref())
+    let defs_path = manifest.join("src/defs.rs");
+    let defs = std::fs::read_to_string(&defs_path)
+        .unwrap_or_else(|e| panic!("{}: {e}", defs_path.display()));
+    let in_defs = tier23_detect::parse_defs(&defs).unwrap_or_else(|e| panic!("{e}"));
+    let overridden = tier23_detect::parse_override(env::var("IPMC_TIER23").ok().as_deref())
         .unwrap_or_else(|e| panic!("{e}"));
+    if let Some(value) = overridden {
+        println!(
+            "cargo:warning=IPMC_TIER23={} from the environment overrides defs.rs ({in_defs})",
+            u8::from(value)
+        );
+    }
+    let setting = overridden.unwrap_or(in_defs);
     let root = manifest.join(TIER23_ROOT);
     let (tier23_defs, tier23_lib) = (root.join(TIER23_DEFS), root.join(TIER23_LIB));
     let (defs_text, lib_text) = (
@@ -45,9 +60,9 @@ fn main() {
     );
     // Off skips the file system: a missing watched path would rerun this script, and rebuild
     // the whole workspace, on every cargo call.
-    let on = mode != tier23_detect::Mode::Off
+    let on = setting
         && tier23_detect::decide(
-            mode,
+            setting,
             [
                 tier23_detect::Marker {
                     path: &defs_text,
