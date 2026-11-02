@@ -228,6 +228,12 @@ impl Pins {
         );
     }
 
+    /// open_drain -- open-drain output with the given pull, released (high) before the pin
+    /// becomes an output.
+    pub fn open_drain(&self, pull: Pull, speed: Speed) {
+        self.configure(MODER_OUTPUT, pull, speed, true, None, Some(true));
+    }
+
     /// alternate -- alternate function number `af` (0..=15).
     pub fn alternate(&self, af: u8, pull: Pull, open_drain: bool, speed: Speed) {
         self.configure(

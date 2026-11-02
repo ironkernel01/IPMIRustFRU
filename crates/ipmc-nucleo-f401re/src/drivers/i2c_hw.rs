@@ -20,7 +20,7 @@
 // defensive recovery; the "analog filter locks BUSY" erratum is documented for other STM32
 // families and is not confirmed in ES0299); both masters use it.
 
-use crate::bsp::ports::{Pins, Pull, Speed};
+use crate::bsp::ports::Pins;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::interrupt::free;
 use cortex_m::peripheral::NVIC;
@@ -386,17 +386,16 @@ fn take_queue(bus: Bus) -> Option<&'static mut RxQueue> {
     }
 }
 
-/// pins_to_af -- SCL and SDA to the alternate function of the I2C peripheral, open-drain, no pull
-/// (VITA Rule 9.2.3-2).
+/// pins_to_af -- SCL and SDA to the alternate function of the I2C peripheral, open-drain, with
+/// the IPMB pull (`BusPins::alternate`, defs.rs IPMB_PULL_UPS).
 fn pins_to_af(bus: Bus, pins: &BusPins) {
     let (scl_af, sda_af) = pin_afs(bus);
-    pins.scl.alternate(scl_af, Pull::None, true, Speed::Medium);
-    pins.sda.alternate(sda_af, Pull::None, true, Speed::Medium);
+    pins.alternate(scl_af, sda_af);
 }
 
 /// arm -- puts the pins on the peripheral and (re)configures it as the IPMB slave, then unmasks
 /// its interrupts. The one implementation `init` and `resume` share.
-/// 1. SCL and SDA to the alternate function, open-drain, no pull (VITA Rule 9.2.3-2).
+/// 1. SCL and SDA to the alternate function, open-drain, with the IPMB pull (`pins_to_af`).
 /// 2. PE = 0, then CR2.FREQ, CCR (standard or fast mode as `Timing::speed` says), TRISE and OAR1:
 ///    CCR and TRISE are written only while PE = 0 (RM0368 18.6.8, 18.6.9).
 /// 3. CR1: ENGC = 1 (general call, Broadcast Get Device ID) and PE = 1; then ACK = 1, after PE
@@ -874,8 +873,7 @@ pub fn clear_stuck_busy(bus: Bus, pins: &BusPins) -> Result<(), StuckLine> {
     NVIC::mask(er);
     let regs = regs_of(bus);
     regs.cr1().modify(|_, w| w.pe().disabled());
-    pins.scl.output(true, true, Speed::Medium);
-    pins.sda.output(true, true, Speed::Medium);
+    pins.drive();
     let checked = check_lines(pins);
     pins.scl.set_all(true);
     pins.sda.set_all(true);

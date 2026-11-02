@@ -49,9 +49,14 @@ pub const IPMB_MASTER_MODE: MasterMode = MasterMode::BitBang;
 
 /// true = IPMB-A built in; must be true (VITA Rule 4.1.1-1: IPMB-A is mandatory)
 pub const IPMB_BUS_A_ENABLE: bool = true;
-/// false = IPMB-B not fitted (Tier-1 bench: one Aardvark on IPMB-A); true = IPMB-B built in (VITA
-/// Rule 4.1.1-1: "should")
-pub const IPMB_BUS_B_ENABLE: bool = false;
+/// true = IPMB-B built in (VITA Rule 4.1.1-1: "should"; owner 11-02-2026: both buses on, a Chassis
+/// Manager may use either or both); false = IPMB-B not fitted, its pins stay parked
+pub const IPMB_BUS_B_ENABLE: bool = true;
+/// true = the processor's internal pull-ups (about 40 kOhm) on the four IPMB pins, so an unwired
+/// bus reads idle-high (logic 1); bench deviation from VITA Rule 9.2.3-2 ("the IPMC shall not
+/// implement pull-ups on the System IPMB signals"; the backplane fits 2.49 kOhm), owner
+/// 11-02-2026. false = no pull, as the rule requires (a module for a chassis).
+pub const IPMB_PULL_UPS: bool = true;
 /// IPMB clock, 100 kHz
 pub const IPMB_I2C_HZ: u32 = 100_000;
 /// IPMB FAST-MODE clock, 400 kHz (VITA 46.11 Rule 4.1.1-4.4; Tier-3, entered with the Set IPMB

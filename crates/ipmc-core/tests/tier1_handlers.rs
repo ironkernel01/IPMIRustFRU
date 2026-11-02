@@ -43,8 +43,22 @@ fn ctx() -> Context {
 
 /// A context whose link view says IPMB-B is fitted (power-up state: A enabled, B isolated).
 fn ctx_with_b() -> Context {
+    ctx_fitted(true)
+}
+
+/// A context whose link view says IPMB-B is not fitted, whatever IPMB_BUS_B_ENABLE says.
+fn ctx_without_b() -> Context {
+    ctx_fitted(false)
+}
+
+/// ctx_fitted -- a power-up context with IPMB-B fitted or not.
+fn ctx_fitted(b_fitted: bool) -> Context {
     let mut c = ctx();
-    c.link = LinkView::power_up(LinkConfig::bench(TxPolicy::Alternate, false), true);
+    let config = LinkConfig {
+        b_fitted,
+        ..LinkConfig::bench(TxPolicy::Alternate, false)
+    };
+    c.link = LinkView::power_up(config, true);
     c
 }
 
@@ -714,7 +728,7 @@ fn vso_capabilities_for_one_and_two_interfaces() {
     // FRU Device ID 0.
     let tier = by_tier([0x00, 0x01, 0x02]);
     let speed = by_tier([0x00, 0x00, 0x10]);
-    let one = call_vso(&mut ctx(), GET_VSO_CAPABILITIES, &[]);
+    let one = call_vso(&mut ctx_without_b(), GET_VSO_CAPABILITIES, &[]);
     assert_eq!(
         (one.cc, one.data),
         (OK, vec![tier, speed, 0x00, 0x22, 0x00, 0x00])
@@ -733,7 +747,7 @@ fn vso_capabilities_frame_is_byte_exact() {
     // CC 00h, data 03 TT SS 00 22 00 00 with the IPMC identifier TT = Tier - 1 (00h, 01h, 02h)
     // and the IPMB capabilities SS = 00h (10h, 400 kHz, at Tier-3), chk2 =
     // -(82+14+03+TT+SS+22) = 45h, 44h, 33h.
-    let r = call(&mut ctx(), 0x2C, GET_VSO_CAPABILITIES, &[0x03]);
+    let r = call(&mut ctx_without_b(), 0x2C, GET_VSO_CAPABILITIES, &[0x03]);
     let (tier, speed, chk2) = by_tier([(0x00, 0x00, 0x45), (0x01, 0x00, 0x44), (0x02, 0x10, 0x33)]);
     assert_eq!(
         r.frame,
@@ -866,7 +880,7 @@ fn set_ipmb_state_refusals_change_nothing() {
         "no refused request leaves a change"
     );
     // IPMB-B not fitted: Local Control for it is unsupported (Rule 4.1.1-14).
-    let mut single = ctx();
+    let mut single = ctx_without_b();
     expect_err(
         call_vso(&mut single, SET_IPMB_STATE, &[0xFF, 0x01]),
         BAD_FIELD,
@@ -908,7 +922,7 @@ fn speed_byte_400_khz_follows_the_tier() {
     let pending = c.pending_ipmb.take().unwrap();
     assert_eq!((pending.speed_a, pending.speed_b), (None, None));
     // 400 kHz for IPMB-B when it is not fitted: CCh even at Tier-3.
-    let mut single = ctx();
+    let mut single = ctx_without_b();
     expect_err(
         call_vso(&mut single, SET_IPMB_STATE, &[0xFF, 0xFF, 0x04]),
         BAD_FIELD,

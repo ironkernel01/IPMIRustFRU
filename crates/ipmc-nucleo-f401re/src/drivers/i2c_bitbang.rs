@@ -9,7 +9,7 @@
 // latch high) or driven low (latch low); a pin is never driven high. The half-bit delay and
 // every wait come from the DWT cycle counter. No logging inside a transfer.
 
-use crate::bsp::ports::{Pins, Pull, Speed};
+use crate::bsp::ports::Pins;
 use cortex_m::peripheral::{DCB, DWT};
 use ipmc_core::link::BusSpeed;
 use ipmc_core::queue::Bus;
@@ -395,11 +395,9 @@ pub(super) fn recover_if_stuck(pins: &BusPins, cy: Cycles) -> Result<Recovery, M
         return Ok(Recovery::NotNeeded);
     }
     // EVIDENCE: SDA reads low with the slave not yet running; a device holds it mid-byte.
-    pins.scl.output(true, true, Speed::Medium);
-    pins.sda.output(true, true, Speed::Medium);
+    pins.drive();
     let freed = wire.recover_sda();
-    pins.scl.input(Pull::None);
-    pins.sda.input(Pull::None);
+    pins.idle();
     if freed {
         Ok(Recovery::Recovered)
     } else {
@@ -447,8 +445,7 @@ impl IpmbMaster for BitbangMaster {
         wait_bus_free(bus, pins, &state.cy.t, deadline, i2c_hw::suspend)?;
         // While PE = 0 the slave cannot hear its bus: a frame another master sends from here to
         // `resume` is lost and is recovered by the requester's retry (PLAN 3.4).
-        pins.scl.output(true, true, Speed::Medium);
-        pins.sda.output(true, true, Speed::Medium);
+        pins.drive();
         let result = if wire.scl_high() && wire.sda_high() {
             wire.transfer(frame)
         } else {

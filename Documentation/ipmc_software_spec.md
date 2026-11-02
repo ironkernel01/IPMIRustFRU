@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 10-27-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 11-02-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -85,7 +85,7 @@ The Google Slides reference copies wait for the Drive folder (`diagrams/drive-co
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -145,7 +145,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -191,7 +191,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -220,7 +220,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | FR-016 | An invalid hardware address (even parity or GA = 0) isolates both buses and keeps the FRU in M0 | Rules 4.1.5.4.1-4, 4.1.5.4.1-5 | `addr.rs`, `link.rs` |
 | FR-017 | Startup self test of the FRU image and the SDR chain; 55h 00h or 57h with the failure bits; a failure keeps the FRU in M0; rerun after each accepted Write FRU Data | IPMI Table 20-5, Rule 4.1.5.4.1-9, Rec 8-2 | `selftest.rs` |
 | FR-018 | Write FRU Data and an application port `SET` survive a reset (`IPMC_FRU_PERSIST true`); the FRU store is flash sector 2 alone | owner decisions 10-23-2026 and 10-25-2026 | `persist.rs`, `ipmc-runtime` `fru_log.rs`, `memory.x`, `link.x` |
-| FR-019 | No IPMC pull-ups on the IPMB lines | Rule 9.2.3-2 | `drivers/ipmb_pins.rs`, `i2c_hw.rs` |
+| FR-019 | No IPMC pull-ups on the IPMB lines (`IPMB_PULL_UPS false`; section 17) | Rule 9.2.3-2 | `drivers/ipmb_pins.rs`, `i2c_hw.rs` |
 | FR-020 | A (netFn, cmd) the Tier-1 table does not own goes to the extension hook; the Tier-1 build has none and answers C1h | Rules 4.2-2, 4.1.1-16 | `ext.rs`, `dispatch.rs` |
 | FR-021 | A Tier-2/3 build sends requests one at a time: a response wait of `IPMB_REQ_TIMEOUT_MS` (T3), up to `IPMB_REQ_RETRIES` retries with the same sequence number, a failed transmission retried on the other bus after T6 (60 ms minimum), T4 between new requests, T9 before a sequence number is reused; a Tier-1 build sends none | Rules 4.1.1-9, 4.1.1-10, 7-4, Table 4.1.1-1 | `requester.rs`, `link.rs` |
 | FR-022 | A Cold Reset request restarts the processor once its response has left the egress queue, the application port output has left and an accepted FRU write is saved, or after `IPMC_RESET_WAIT_MS` | IPMI v2.0 20.2 | `reset_gate.rs`, `ipmc-runtime` `link.rs` |
@@ -256,7 +256,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -377,7 +377,7 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -452,7 +452,7 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -509,7 +509,8 @@ decision 24).
 |---|---:|---|
 | `IPMB_MASTER_MODE` | `MasterMode::BitBang` | master method of both buses; `MasterMode::Hardware` selects the hardware I2C master |
 | `IPMB_BUS_A_ENABLE` | `true` | IPMB-A built in; must be true (Rule 4.1.1-1) |
-| `IPMB_BUS_B_ENABLE` | `false` | IPMB-B built in; 0 on the one-Aardvark bench (Get VSO Capabilities then reports one interface) |
+| `IPMB_BUS_B_ENABLE` | `true` | IPMB-B built in (Get VSO Capabilities reports two interfaces); `false` leaves its pins parked and reports one |
+| `IPMB_PULL_UPS` | `true` | the processor's internal pull-ups (about 40 k&Omega;) on the four IPMB pins in every pin mode, so an unwired bus reads idle-high; a bench deviation from Rule 9.2.3-2 (section 17); `false` for a module in a chassis |
 | `IPMB_I2C_HZ` | 100000 | IPMB clock, STANDARD-MODE |
 | `IPMB_I2C_FAST_HZ` | 400000 | IPMB FAST-MODE clock (Rule 4.1.1-4.4; Tier-3, entered with the Set IPMB State speed byte); fixed at 400000, the hardware master derives its CCR and TRISE from it (RM0368 18.6.8, 18.6.9) |
 | `IPMB_MSG_MAX` | 32 | whole frame, rsSA to the second checksum |
@@ -632,7 +633,7 @@ Pin assignments are not in `defs.rs`: they live in the owning board-support modu
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1094,7 +1095,7 @@ compile-time assertion (the associated const `Console::TABLES_VALID`, evaluated 
 | `src/drivers/i2c_bitbang.rs` | `BitbangMaster`: START, bits, ACK, STOP on open-drain GPIO with DWT timing at the phases of the bus speed (`BitPhases`), clock-stretch read-back, arbitration check, bus recovery (9 clocks and a STOP, always at 100 kHz) |
 | `src/drivers/ipmb_master.rs` | the `IpmbMaster` trait (with `speed` and `set_speed`), `MasterError`, counters, `SelectedMaster` chosen at compile time by `IPMB_MASTER_MODE` |
 | `src/drivers/ipmb_common.rs` | the cycle-counter use (`now` and `start_cycle_counter` come from `bsp/cycles.rs`), `Deadline`, `wait_for`, `wait_bus_free` (tBUF, slave idle, stuck-BUSY signature), `write_retrying` (arbitration retries inside one T2 + T1 budget) |
-| `src/drivers/ipmb_pins.rs` | claims PB8, PB9, PA8, PB4 and parks them as floating inputs (PB4 resets with a pull-up that would load IPMB-B SDA) |
+| `src/drivers/ipmb_pins.rs` | claims PB8, PB9, PA8, PB4 and parks them as inputs; `BusPins` owns their three modes (`idle`, `drive`, `alternate`), each with the pull `IPMB_PULL_UPS` selects |
 | `src/drivers/flash.rs` | the FRU store driver (`Flash`, the `FlashLog` implementation): sector 2 only, the range `map`, at start-up compares the linker symbols with the sector (`store_region_ok`) and refuses to start the store unless the region is exactly sector 2, the bootloader ends before it and the runtime starts after it; built over `FlashRegs` |
 | `src/bsp/flash_regs.rs` | `FlashRegs`, the FLASH peripheral's owner: `erase_sector` (sectors 2 to 7), `program_words` (PSIZE x32), `program_bytes` (PSIZE x8), `read`; refuses sectors 0 and 1 and every address below `0x0800_8000` (`Err(Range)`) so no caller can reach the bootloader sectors; refuses erase and program while NVMRO is asserted; bounded BSY polls per sector size |
 | `src/bsp/cycles.rs` | the DWT cycle counter: `now`, `start_cycle_counter` |
@@ -1307,7 +1308,7 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1525,7 +1526,7 @@ The Tier-2/3 values live in the private configuration file `defs_tier23.rs` (gua
 | `IPMC_PAYLOAD_MODES` | `defs.rs` | 3 | Modes Get Payload Mode Capabilities answers and Set Payload Mode accepts (modes 0 and 1). |
 | `IPMC_FRU_PERSIST` | `defs.rs` | true | A Tier-3 build needs it true: DAL and CDI are stored with the FRU image. |
 | `IPMB_NVMRO_SOURCE`, `IPMB_NVMRO_FORCED` | `defs.rs` | forced, false | NVMRO asserted makes Set FRU State Policy Bits answer D5h for a DAL or CDI change. |
-| `IPMB_BUS_B_ENABLE` | `defs.rs` | false | Enables IPMB-B, which the FAST-MODE events of offset 5 need. |
+| `IPMB_BUS_B_ENABLE` | `defs.rs` | true | Enables IPMB-B, which the FAST-MODE events of offset 5 need. |
 
 ### 7.3 Console
 
@@ -1663,8 +1664,8 @@ ASCII, one message per line, at most `IPMC_EMU_VECTOR_LINE_MAX` characters, on 1
 
 | Signal | Pin | Header | Owner | Direction |
 |---|---|---|---|---|
-| IPMB-A SCL / SDA | PB8 / PB9 (I2C1, AF4) | D15 / D14 | `ipmb_pins.rs`, `i2c_hw.rs` | open-drain, no pull-up |
-| IPMB-B SCL / SDA | PA8 (I2C3, AF4) / PB4 (I2C3, AF9) | D7 / D5 | `ipmb_pins.rs`, `i2c_hw.rs` | open-drain, no pull-up; parked when not fitted |
+| IPMB-A SCL / SDA | PB8 / PB9 (I2C1, AF4) | D15 / D14 | `ipmb_pins.rs`, `i2c_hw.rs` | open-drain; internal pull-up with `IPMB_PULL_UPS` |
+| IPMB-B SCL / SDA | PA8 (I2C3, AF4) / PB4 (I2C3, AF9) | D7 / D5 | `ipmb_pins.rs`, `i2c_hw.rs` | open-drain; internal pull-up with `IPMB_PULL_UPS`; parked when not fitted |
 | GA0..GA4, GAP, NVMRO | PC0..PC4, PC5, PC6 | morpho | `ga.rs` | input, pull-up |
 | Console TX / RX | PA2 / PA3 (USART2, AF7) | ST-LINK VCP | `uart.rs` | |
 | APP_UART TX / RX | PB6 / PB7 (USART1, AF7) | CN5-3 (D10) / CN7-21 | `uart.rs` (claim "app_uart") | TX output; RX input, pull-up |
@@ -2030,7 +2031,7 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2076,7 +2077,7 @@ flash and, after a software reset, the request sequence words described below.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2143,7 +2144,7 @@ emulator models the board.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2222,7 +2223,7 @@ runtime clears and reports the reset cause itself.
    application port other than a pin-claim conflict does not stop the board: the console prints
    `APP UART not started: <reason>` after the banner. The evaluation image starts its TIM2
    run-time counter after the UARTs (section 8.4).
-4. IPMB pins parked as floating inputs.
+4. IPMB pins parked as inputs, with the internal pull-up when `IPMB_PULL_UPS` is true.
 5. Sensor hardware for the groups whose source is hardware (ADC1, board GPIO).
 6. Strap pins (`ga::init`).
 7. DWT cycle counter, then `F401Ipmb::new`: the selected master takes the pins and the DWT
@@ -2291,7 +2292,7 @@ switch and its mechanism are public code; section 7.2 lists the commands of the 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2451,7 +2452,7 @@ event enable).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2593,7 +2594,7 @@ enables cannot disagree.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2698,7 +2699,7 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2765,7 +2766,7 @@ the payload off at boot.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2839,7 +2840,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2887,7 +2888,7 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2937,7 +2938,7 @@ saves it after the quiet time.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3016,7 +3017,7 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3147,7 +3148,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3246,7 +3247,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3375,7 +3376,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3493,7 +3494,7 @@ The numbered tests are in `Documentation/ipmc_boot_plan.md`, section 13.3.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3570,7 +3571,7 @@ The numbered tests are in `Documentation/ipmc_boot_plan.md`, section 13.3.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3824,7 +3825,7 @@ PWR_EN, PAYLOAD_RST_OUT_N, the ADC, I2C1, I2C3 or the FRU store.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -4027,7 +4028,7 @@ sections 13.2 and 13.3):
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 10-27-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -4084,7 +4085,13 @@ sections 13.2 and 13.3):
 - **Straps forced on the bench.** GA and NVMRO come from `defs.rs`; the pin paths are built but
   not exercised end to end, and the NVMRO electrical polarity is not yet confirmed against VITA 46.0.
 - **Manufacturer ID 000000h** (unspecified) until an IANA enterprise number is registered.
-- **IPMB-B** is built and tested in the emulator only; the one-Aardvark bench drives IPMB-A.
+- **IPMB-B** is built in and enabled. On the board its start-up and idle state are checked; traffic on
+  IPMB-B, both buses together and failover are tested in the emulator until a device drives IPMB-B.
+- **IPMC pull-ups on the IPMB (bench deviation).** `IPMB_PULL_UPS true` turns on the internal
+  pull-ups (about 40 k&Omega;) of PB8, PB9, PA8 and PB4 so an unwired bus reads idle-high; Rule 9.2.3-2
+  forbids IPMC pull-ups on the System IPMB. On a 2.49 k&Omega; backplane they lower each line to about
+  2.34 k&Omega; and add about 80 &micro;A of sink current. They are too weak to be a bus's only pull-up; a
+  device on the bench still brings its own. A module for a chassis builds with `false`.
 - **Duplicate window 3000 ms**, not the VITA 5 s sequence expiry: a Chassis Manager that reuses a
   sequence number with identical data inside 3 s gets the cached response.
 - **Emulator flash is RAM.** Flash persistence is tested in `ipmc-fru` against `RamFlash` and on
