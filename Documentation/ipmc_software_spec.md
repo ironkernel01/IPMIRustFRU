@@ -610,7 +610,7 @@ decision 24).
 | `IPMC_SENSOR_PERIOD_MS` | 1000 | sensor sample period |
 | `IPMC_ADC_AVERAGE` | 8 | conversions averaged per ADC read |
 | `IPMC_SENSOR_TRACE` | `TraceLevel::Events` | sensor console lines at start-up |
-| `IPMC_RAIL0..4_*`, `IPMC_RAIL_NONCRIT_PCT`, `IPMC_RAIL_CRIT_PCT` | 5 rails, 5 %, 10 % | rail names, nominal mV, dividers, windows; rail 4 is `+3.3V_AUX` (3300 mV, divider 2:1, A3 on PB0) |
+| `IPMC_RAIL0..4_*`, `IPMC_RAIL_NONCRIT_PCT`, `IPMC_RAIL_CRIT_PCT` | 5 rails, 5 %, 10 % | rail names, nominal mV, dividers, windows; rail 4 is `3V3_AUX` (3300 mV, divider 2:1, A3 on PB0) |
 | `IPMC_TEMP_*_C` | LNC 0, LC -10, UNC 70, UC 85, UNR 100 | temperature thresholds |
 | `IPMC_SIM_*` | 25 C, every input pin high | simulator start values: PGOOD asserted, FAULT_N, OVERTEMP_N and PAYLOAD_RESET_N deasserted |
 | `IPMC_EMU_PORT`, `IPMC_EMU_SERVE_POLL_MS`, `IPMC_EMU_TX_DONE_DELAY_MS` | 5470, 1, 1 | emulator TCP port, step period, delay of the Event Receiver's answer in the replay |
@@ -2512,7 +2512,7 @@ analog sensors follow the compact records:
 
 | Record ID | Type | Content |
 |---:|---|---|
-| 0007h..000Bh (0008h..000Ch at Tier-3) | 01h Full sensor (IPMI v2.0 Table 43-1) | sensors 08h..0Ch, one per rail of the board table (VDDA, 12V payload, 5V, 3V3 payload, +3.3V_AUX), ID strings `IPMC_RAILn_NAME`, sensor type 02h (voltage), unit Volts, unsigned |
+| 0007h..000Bh (0008h..000Ch at Tier-3) | 01h Full sensor (IPMI v2.0 Table 43-1) | sensors 08h..0Ch, one per rail of the board table (VDDA, 12V payload, 5V, 3V3 payload, 3V3_AUX), ID strings `IPMC_RAILn_NAME`, sensor type 02h (voltage), unit Volts, unsigned |
 | 000Ch (000Dh at Tier-3) | 01h Full sensor | sensor 0Dh, the die temperature, ID string `IPMC_SDR_DIE_TEMP_NAME`, sensor type 01h, unit degrees C, 2's complement |
 
 Every analog record has the entity and owner of the compact records, sensor initialization 01h

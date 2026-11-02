@@ -291,7 +291,7 @@ pub(crate) mod tests {
             lines.lines,
             [
                 "sample: VDDA=3300mV in range, 12V payload=12000mV in range, 5V=5000mV in range, \
-              3V3 payload=3300mV in range, +3.3V_AUX=3300mV in range; temp 34.8 C flags 00h; \
+              3V3 payload=3300mV in range, 3V3_AUX=3300mV in range; temp 34.8 C flags 00h; \
               asserted PGOOD; power On; health good voltage good"
             ]
         );

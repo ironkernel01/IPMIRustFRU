@@ -17,7 +17,7 @@
 //! | 12V payload (rail 1) | external input 0 | pin mV = reading x VDDA / 4095, rail mV = pin mV x 4 / 1 |
 //! | 5V (rail 2) | external input 1 | pin mV x 2 / 1 |
 //! | 3V3 payload (rail 3) | external input 2 | pin mV x 2 / 1 |
-//! | +3.3V_AUX (rail 4) | external input 3 | pin mV x 2 / 1 |
+//! | 3V3_AUX (rail 4) | external input 3 | pin mV x 2 / 1 |
 //! | PGOOD | digital input | asserted when high; unreadable counts as not good |
 //! | FAULT_N | digital input | asserted when low (a jumper to GND); unreadable makes health bad |
 //! | OVERTEMP_N | digital input | asserted when low; unreadable makes health bad |
@@ -316,7 +316,7 @@ mod tests {
         let names: Vec<&str> = RAILS.iter().map(|r| r.name).collect();
         assert_eq!(
             names,
-            ["VDDA", "12V payload", "5V", "3V3 payload", "+3.3V_AUX"]
+            ["VDDA", "12V payload", "5V", "3V3 payload", "3V3_AUX"]
         );
         let nominal: Vec<u32> = RAILS.iter().map(|r| r.nominal_mv).collect();
         assert_eq!(nominal, [3300, 12000, 5000, 3300, 3300]);

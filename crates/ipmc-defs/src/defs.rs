@@ -564,7 +564,7 @@ pub const IPMC_SENSOR_TRACE: TraceLevel = TraceLevel::Events;
 /// range, at most 1000
 pub const IPMC_SDR_RAIL_SPAN_PCT: u32 = 170;
 /// rails in the board rail table (ipmc-sensors board_sensors.rs RAILS; a guard there checks the
-/// two agree): VDDA, 12V payload, 5V, 3V3 payload, +3.3V_AUX
+/// two agree): VDDA, 12V payload, 5V, 3V3 payload, 3V3_AUX
 pub const IPMC_RAIL_COUNT: usize = 5;
 /// capacity of the sensor snapshot rail array; the board rail table must fit
 pub const IPMC_RAILS_MAX: usize = 8;
@@ -601,7 +601,7 @@ pub const IPMC_RAIL3_DIV_NUM: u32 = 2;
 /// rail 3 divider denominator
 pub const IPMC_RAIL3_DIV_DEN: u32 = 1;
 /// rail 4: A3, PB0, ADC1 channel 8
-pub const IPMC_RAIL4_NAME: &str = "+3.3V_AUX";
+pub const IPMC_RAIL4_NAME: &str = "3V3_AUX";
 /// rail 4 nominal, millivolts
 pub const IPMC_RAIL4_NOMINAL_MV: u32 = 3300;
 /// rail 4 divider numerator (3.3 V -> 1.65 V at the pin, headroom for the +10 % window)

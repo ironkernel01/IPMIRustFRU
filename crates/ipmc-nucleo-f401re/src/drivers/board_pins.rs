@@ -21,7 +21,7 @@ const fn pin(port: PortId, pin: u8) -> PinId {
 
 /// ADC -- ADC1 assignment. External input 0 is A0 (PA0, channel 0, rail "12V payload"), 1 is A1
 /// (PA1, channel 1, "5V"), 2 is A2 (PA4, channel 4, "3V3 payload"), 3 is A3 (PB0, channel 8,
-/// "+3.3V_AUX").
+/// "3V3_AUX").
 pub const ADC: AdcMap = AdcMap {
     vrefint_channel: 17,
     temperature_channel: 18,
@@ -48,7 +48,7 @@ pub const ADC: AdcMap = AdcMap {
 /// RAIL_WIRING -- which channel carries each rail of the sensor table (`ipmc_sensors::board_sensors::RAILS`,
 /// same order) and the divider in front of it. Rail 0 is VDDA, measured from the internal
 /// reference. Rails 1..4 are external inputs 0..3 (`ADC.external`): 12V payload on A0 behind the
-/// defs.rs IPMC_RAIL1_DIV divider, 5V on A1, 3V3 payload on A2 and +3.3V_AUX on A3 behind
+/// defs.rs IPMC_RAIL1_DIV divider, 5V on A1, 3V3 payload on A2 and 3V3_AUX on A3 behind
 /// IPMC_RAIL2..4_DIV. The sensor table and the SDR records are board neutral; a board that
 /// wires a rail differently edits this table only.
 pub const RAIL_WIRING: [RailWiring; RAIL_COUNT] = [
