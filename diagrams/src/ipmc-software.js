@@ -208,7 +208,7 @@ const cy = (y, h) => y + h / 2;
   box(s, tx, 2.15, tw, 0.6, "chassis_manager.py", ["discovery, FRU, SDR, polling"], B);
   box(s, tx, 3.35, tw, 0.6, "run_conformance.py", ["spec-only Tier-1 suite,", "adapter.py"], B);
   box(s, 7.75, 2.7, 1.6, 0.7, "ipmc-emu serve", ["TCP 127.0.0.1:5470,", "IPMB-A and B"], B);
-  box(s, 7.75, 4.2, 1.6, 0.7, "ipmc-emu replay", ["captured traffic,", "vectors/sbc_ab.vec"], B);
+  box(s, 7.75, 4.2, 1.6, 0.7, "ipmc-emu replay", ["captured traffic,", "local_only/vectors/sbc_ab.vec"], B);
   box(s, 10.95, 0.95, 1.8, 0.6, "Aardvark", ["USB to I2C, pull-ups on"]);
   box(s, 10.95, 2.7, 1.8, 0.8, "NUCLEO-F401RE", ["IPMC firmware,", "IPMB 82h"], G);
   box(s, 10.95, 4.5, 1.8, 0.7, "ST-LINK", ["USB: COM3 console,", "NOD_F401RE drive"]);
@@ -239,7 +239,7 @@ const cy = (y, h) => y + h / 2;
   notes(s, 0.6, 5.7, 12.0, 0.95, [
     "One Aardvark drives IPMB-A only, so IPMB-B on hardware is not tested on this bench. chassis_manager.py and run_conformance.py also reach the Aardvark through their aardvark transport (not drawn).",
     "The conformance tests are written from the specification texts only and reach the IPMC through adapter.py.",
-    "vectors/sbc_ab.vec is local only and not in the repository.",
+    "local_only/vectors/sbc_ab.vec is local only and not in the repository.",
     "White blocks on this sheet are bench hardware, not code from this repository.",
     "The firmware update tool (fwupdate.py) and the application port client (app_cli.py) are on sheets 6 and 7.",
   ]);

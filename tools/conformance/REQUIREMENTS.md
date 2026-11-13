@@ -1,6 +1,6 @@
 # Independent Tier-1 requirement traceability
 
-The only source material used is `.scratch/vita4611_tier1.md`, `.scratch/standards/ipmi.txt`, `.scratch/standards/fru.txt`, and `TRANSPORT.md`. VITA pages are printed page numbers. References labeled IPMI or FRU use the printed page numbers of the respective text. No implementation sources, reference vectors, or adapter implementation are used.
+The only source material used is `local_only/.scratch/vita4611_tier1.md`, `local_only/.scratch/standards/ipmi.txt`, `local_only/.scratch/standards/fru.txt`, and `TRANSPORT.md`. VITA pages are printed page numbers. References labeled IPMI or FRU use the printed page numbers of the respective text. No implementation sources, reference vectors, or adapter implementation are used.
 
 Run `python tools/conformance/run_conformance.py --transport emu --report tools/conformance/results.md`, optionally with `--port N`. Other transport names are passed unchanged to `adapter.connect(transport, port)` as specified in `TRANSPORT.md`. Supply the separately authored `adapter.py` beside the runner. Only the documented Target methods and metadata, plus the adapter framing/checksum helpers and NoResponse exception, are used. A live target has not been exercised during authorship.
 

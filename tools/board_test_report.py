@@ -39,7 +39,7 @@ REPORT = ROOT / "Documentation" / "board_test_report.md"
 FIRMWARE_DIR = ROOT / "crates" / "ipmc-nucleo-f401re"
 FIRMWARE_BIN = FIRMWARE_DIR / "target" / "thumbv7em-none-eabihf" / "release" / "ipmc-nucleo-f401re.bin"
 GEN_PS1 = FIRMWARE_DIR / "gen.ps1"
-SCRATCH = ROOT / ".scratch"
+SCRATCH = ROOT / "local_only" / ".scratch"
 CM_SCRIPT = ROOT / "tools" / "chassis-manager" / "chassis_manager.py"
 CROSSCHECK_SCRIPT = ROOT / "tools" / "chassis-manager" / "crosscheck.py"
 CONFORMANCE_SCRIPT = ROOT / "tools" / "conformance" / "run_conformance.py"
@@ -316,7 +316,7 @@ def snapshot_health(report: Report, tag: str, check_traffic: bool):
 def section_c(report: Report, duration_s: float):
     """Chassis Manager on the Aardvark, then its cross-check. Returns (log text, summary dict)."""
     rows = report.section("C", "Chassis Manager (Phase 7)")
-    SCRATCH.mkdir(exist_ok=True)
+    SCRATCH.mkdir(parents=True, exist_ok=True)
     summary_path = SCRATCH / "board_report_cm.json"
     summary_path.unlink(missing_ok=True)
     cm_cmd = [VENV_PYTHON, CM_SCRIPT, "--transport", "aardvark", "--slots", "1", "--duration-s", duration_s,
@@ -358,7 +358,7 @@ def section_c(report: Report, duration_s: float):
     rc, text = run([VENV_PYTHON, CROSSCHECK_SCRIPT, summary_path], CHILD_TIMEOUT_MARGIN_S)
     result = re.search(r"RESULT: (\d+) unexpected difference\(s\)", text)
     rows.append(Row(f"C{len(checks) + 1:02d}", "Cross-check against the captured Chassis Manager",
-                    "crosscheck.py .scratch/board_report_cm.json", "RESULT: 0 unexpected difference(s)",
+                    "crosscheck.py local_only/.scratch/board_report_cm.json", "RESULT: 0 unexpected difference(s)",
                     result.group(0) if result else f"no result (rc {rc})", verdict(bool(result) and result.group(1) == "0" and rc == 0)))
     return log, summary
 

@@ -26,7 +26,7 @@
 
 1. Host tests and the emulator, from the repository root (Rust 1.99.1 from `rust-toolchain.toml`, GNU host):
    `cargo test --workspace`, then
-   `cargo run -p ipmc-emu -- replay vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet`
+   `cargo run -p ipmc-emu -- replay local_only/vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet`
    (the capture file is local only; on a fresh clone the capture tests skip with a message).
 2. Firmware build and flash (NUCLEO-F401RE on USB):
    `powershell -ExecutionPolicy Bypass -File crates/ipmc-nucleo-f401re/gen.ps1 flash`.
@@ -1202,7 +1202,7 @@ reader); `main` (`replay`, `serve`, `sdr`).
 | File | Role |
 |---|---|
 | `src/emulator.rs` | `Emulator`: the started `Runtime<Sim, Box<IpmbLink<Sim>>>` and the handles of its `Sim`; `rx` puts a frame in the queue of a bus, `poll` runs the main loop, `take_sent` hands over the frames the master wrote |
-| `src/vectors.rs` | the one reader of the vector format (`vectors/sbc_ab.vec`: time, bus tag, hex bytes) |
+| `src/vectors.rs` | the one reader of the vector format (`local_only/vectors/sbc_ab.vec`: time, bus tag, hex bytes) |
 | `src/replay.rs` | feeds each captured request at its capture time, takes the frames the board wrote, compares each response with the captured one: Match, SameCC, CCDiff, NotImpl, Unans, NoCap, NoBus |
 | `src/serve.rs` | `Board`, the emulator in real time behind the TCP line protocol (section 7.4); one client at a time; a new client or `#reset` starts a fresh board |
 | `src/trace.rs`, `src/main.rs` | stdout trace sink and hex formatter; command line `replay`, `serve`, `sdr`, `help` |
@@ -1297,9 +1297,9 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 
 | Path | Role |
 |---|---|
-| `tools/trace2vec.py` | merges the two logic-analyser I2C exports (IPMB-A and IPMB-B, one time base) into `vectors/sbc_ab.vec` with bus tags, redacted |
+| `tools/trace2vec.py` | merges the two logic-analyser I2C exports (IPMB-A and IPMB-B, one time base) into `local_only/vectors/sbc_ab.vec` with bus tags, redacted |
 | `tools/sync_ipmi_commands.py` | rewrites the implemented column of `Documentation/ipmi_commands.md` from `COMMANDS`; `--check` for the gate |
-| `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `Documentation/captured_sdr.md` (local only) |
+| `tools/captured_sdr.py` | decodes the 40 captured SDRs next to ours into `local_only/Documentation/captured_sdr.md` (local only) |
 | `tools/dupcheck.py` | scores every pair of Rust function bodies with identifiers normalised; fails on a production pair at or above 0.85 or a test pair at or above 0.92 |
 | `tools/capture/` | `capture2pcap.py` turns a saved `DEBUG DUMP` into a pcap file (LINKTYPE 260) and a CSV file (section 10.11); `test_capture2pcap.py` |
 | `tools/fwupdate/` | `fwupdate.py`, the host update tool of the bootloader (section 16.5): wake, pre-check, erase, stop-and-wait `LOAD`, `VERIFY`, `RUN`; `fwu_settings.py`; `test_fwupdate.py` with a fake bootloader |
@@ -3282,7 +3282,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File crates/ipmc-nucleo-f401re/ge
 (cd crates/ipmc-nucleo-f401re && cargo clippy --release -- -D warnings && cargo clippy --profile boot --bin ipmc-boot -- -D warnings)
 powershell -NoProfile -ExecutionPolicy Bypass -File crates/ipmc-nucleo-f401re/gen.ps1 console "ipmb stats"
 # emulator
-cargo run -p ipmc-emu -- replay vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet
+cargo run -p ipmc-emu -- replay local_only/vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet
 cargo run -p ipmc-emu -- serve --b-fitted 1
 cargo run -p ipmc-emu -- sdr
 ```

@@ -1,7 +1,7 @@
 // Drawing set: product-brief (1 sheet: the IPMC and what it connects to) for
-// Documentation/ipmc_product_brief.md.
-// Build: node diagrams/src/product-brief.js  ->  diagrams/out/product-brief.pptx
-// Render: powershell -File diagrams\tools\render.ps1 diagrams\out\product-brief.pptx
+// demos/nucleo-f401re/ipmc_product_brief.md.
+// Build: node diagrams/src/product-brief.js
+// Render: powershell -File diagrams/tools/render.ps1 demos/nucleo-f401re/assets/product-brief.pptx
 // Fills: white = Tier-1 IPMC crates (STM32 and x86), gray = board support (STM32 only),
 // blue = Tier-2/3 extension, yellow = outside the IPMC.
 const path = require("path");
@@ -16,7 +16,7 @@ const xe = 0.6, ew = 2.2;                 // external column
 const c = [3.5, 6.45, 9.4], w = 2.6, h = 0.95;
 const r = [1.0, 2.6, 4.2];
 const cmx = (i) => c[i] + w / 2, cmy = (j) => r[j] + h / 2;
-container(s, 3.2, 0.5, 9.5, 4.95, "IronKernel IPMC: one Arm Cortex-M4F microcontroller");
+container(s, 3.2, 0.5, 9.5, 4.95, "NUCLEO-F401RE: Tier-1 demo and separately licensed extension");
 box(s, xe, r[0], ew, h, "Chassis Manager", ["IPMB-A and IPMB-B", "100 kHz, 400 kHz at Tier-3"], Y);
 box(s, xe, r[1], ew, h, "Payload", ["supply rails, power enable,", "power good, fault, reset"], Y);
 box(s, xe, r[2], ew, h, "Payload CPU, service PC", ["application port", "console, firmware update"], Y);
@@ -25,7 +25,7 @@ box(s, c[1], r[0], w, h, "Link layer", ["frame codec, checksums, retries,", "dup
 box(s, c[2], r[0], w, h, "Command handlers", ["14 Tier-1 commands", "FRU state machine, self test"], W);
 box(s, c[0], r[1], w, h, "Board I/O", ["ADC, GPIO, die temperature", "geographic address straps"], G);
 box(s, c[1], r[1], w, h, "Sensors and SDR", ["VITA 46.11 sensors", "rails in volts, temperature in C"], W);
-box(s, c[2], r[1], w, h, "Tier-2/3 extension", ["events, SEL, activation,", "payload modes, policy bits"], B);
+box(s, c[2], r[1], w, h, "Paid Tier-2/3 extension", ["full source under license,", "not in the Tier-1 demo"], B);
 box(s, c[0], r[2], w, h, "Console and app port", ["two UARTs, command line,", "IPMB capture log"], G);
 box(s, c[1], r[2], w, h, "Bootloader", ["SHA-256 image check,", "Intel HEX firmware update"], W);
 box(s, c[2], r[2], w, h, "FRU inventory", ["512-byte FRU image,", "writes kept in flash"], W);
@@ -59,4 +59,4 @@ notes(s, 0.6, 5.6, 12.1, 1.0, [
 legend(s, 0.6, 6.8, [["Tier-1 IPMC", W], ["Board support", G], ["Tier-2/3 extension", B], ["Outside the IPMC", Y]], 2.6);
 frame(s);
 
-pres.writeFile({ fileName: path.join(__dirname, "..", "out", "product-brief.pptx") });
+pres.writeFile({ fileName: path.join(__dirname, "..", "..", "demos", "nucleo-f401re", "assets", "product-brief.pptx") });

@@ -9,7 +9,7 @@
 //!
 //! chk1 covers bytes 0..1 (sum of bytes 0..2 is 0 mod 256). chk2 covers bytes 3..n-2
 //! (sum of bytes 3..n-1 is 0 mod 256). A message is a response when its netFn is odd.
-//! Verified against the captured vectors (vectors/sbc_ab.vec) by tests/trace_vectors.rs.
+//! Verified against the captured vectors (local_only/vectors/sbc_ab.vec) by tests/trace_vectors.rs.
 
 /// IPMB_MIN_REQUEST_LEN -- smallest request: 6 header bytes plus chk2 (IPMI v2.0 IPMB message format).
 pub const IPMB_MIN_REQUEST_LEN: usize = 7;

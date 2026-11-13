@@ -1,6 +1,6 @@
 """crosscheck.py - compares a Chassis Manager run with the captured Chassis Manager.
 
-Validation stage of PLAN decision 5. Inputs: `vectors/sbc_ab.vec` (the capture; local only, when it
+Validation stage of PLAN decision 5. Inputs: `local_only/vectors/sbc_ab.vec` (the capture; local only, when it
 is absent the tool prints "skipped" and exits 0) and the JSON summary of a run
 (`chassis_manager.py --json`). It compares
 
@@ -37,7 +37,7 @@ from cm_commands import CC_OK, command_name, ipmb_interfaces
 from cm_link import IPMB_DATA_INDEX, frame_payload
 
 ROOT = Path(__file__).resolve().parents[2]
-CAPTURE = ROOT / "vectors" / "sbc_ab.vec"
+CAPTURE = ROOT / "local_only" / "vectors" / "sbc_ab.vec"
 IPMC_ADDRESS = 0x82  # the captured IPMC and ours (strap 1)
 IDX_NETFN, IDX_SEQ, IDX_CMD = 1, 4, 5
 NETFN_SHIFT, SEQ_SHIFT = 2, 2
@@ -640,7 +640,7 @@ def crosscheck(capture: list, summary: dict) -> tuple:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("summary", help="JSON summary of a chassis_manager.py run")
-    parser.add_argument("--vec", default=str(CAPTURE), help="the capture (default vectors/sbc_ab.vec)")
+    parser.add_argument("--vec", default=str(CAPTURE), help="the capture (default local_only/vectors/sbc_ab.vec)")
     args = parser.parse_args(argv)
     if not Path(args.vec).exists():
         print(f"skipped: {args.vec} is absent (the capture is local only)")

@@ -52,7 +52,7 @@ const WORD_PROGRAM_MAX_US: u32 = 100;
 /// tERASE16KB, the datasheet maximum).
 const SECTOR_ERASE_16K_MAX_US: u32 = 500_000;
 /// SECTOR_ERASE_LARGE_MAX_US -- longest 128 KB sector erase at PSIZE x32, 2 s (DS10086 Table 45
-/// tERASE128KB). The 64 KB sector (sector 4) uses the same bound: DS10086 is not in References/,
+/// tERASE128KB). The 64 KB sector (sector 4) uses the same bound: DS10086 is not in local_only/References/,
 /// and the 128 KB maximum bounds the smaller sector.
 const SECTOR_ERASE_LARGE_MAX_US: u32 = 2_000_000;
 /// POLLS_PER_US_MAX -- most BSY polls one microsecond can hold: one poll per core cycle at the

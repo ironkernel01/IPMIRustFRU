@@ -164,7 +164,7 @@ to the Chassis Manager that are not Platform Events, answered C1h) and the count
 
 ## Cross-check (`crosscheck.py`)
 
-Reads `vectors/sbc_ab.vec` (local only; absent: prints `skipped`, exit 0) and a
+Reads `local_only/vectors/sbc_ab.vec` (local only; absent: prints `skipped`, exit 0) and a
 JSON summary. It compares the command mix and first-appearance order, the bus
 of the responses, and the IPMC's responses to the same requests. Every
 difference prints as `expected:<reason>` (the tables at the top of the file name

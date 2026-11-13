@@ -1,4 +1,4 @@
-// link_vectors.rs - replays the captured IPMB traffic (vectors/sbc_ab.vec) through the link layer
+// link_vectors.rs - replays the captured IPMB traffic (local_only/vectors/sbc_ab.vec) through the link layer
 // with IPMB-B fitted and enabled, the way the bench build cannot (one Aardvark, B not fitted).
 
 mod common;

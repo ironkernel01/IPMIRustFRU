@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""captured_sdr.py - Documentation/captured_sdr.md: the SDR records of the captured live system.
+"""captured_sdr.py - local_only/Documentation/captured_sdr.md: the SDR records of the captured live system.
 
 Reassembles every Device SDR record the captured SBC IPMC returned to the Chassis Manager from
 the two Saleae exports (IPMB-A, IPMB-B), decodes each field per the IPMI v2.0 tables and the
@@ -9,9 +9,9 @@ first seven sensors and the locator with the records of this project's IPMC
 the document compares the captured system with the public Tier-1 records, whatever extension
 folder sits beside this repository.
 
-Inputs (read only):  References/CodeReferences/ipmi-pic32/traces/sbca.csv and sbcb.csv
-Output:              Documentation/captured_sdr.md
-Name list:           .scratch/banned_names.txt (local only, one term per line). Every match inside
+Inputs (read only):  local_only/References/CodeReferences/ipmi-pic32/traces/sbca.csv and sbcb.csv
+Output:              local_only/Documentation/captured_sdr.md
+Name list:           local_only/.scratch/banned_names.txt (local only, one term per line). Every match inside
                      a decoded string becomes REDACTED. A missing list is exit 2: the tool never
                      writes unredacted output.
 
@@ -35,10 +35,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TRACE_A = ROOT / "References" / "CodeReferences" / "ipmi-pic32" / "traces" / "sbca.csv"
-TRACE_B = ROOT / "References" / "CodeReferences" / "ipmi-pic32" / "traces" / "sbcb.csv"
-NAMES = ROOT / ".scratch" / "banned_names.txt"
-DOC = ROOT / "Documentation" / "captured_sdr.md"
+TRACE_A = ROOT / "local_only" / "References" / "CodeReferences" / "ipmi-pic32" / "traces" / "sbca.csv"
+TRACE_B = ROOT / "local_only" / "References" / "CodeReferences" / "ipmi-pic32" / "traces" / "sbcb.csv"
+NAMES = ROOT / "local_only" / ".scratch" / "banned_names.txt"
+DOC = ROOT / "local_only" / "Documentation" / "captured_sdr.md"
 TRACE2VEC = ROOT / "tools" / "trace2vec.py"
 
 CM_ADDR = 0x10  # Chassis Manager, 8-bit IPMB address
@@ -1139,8 +1139,8 @@ def build_document(redact):
     w("This document records the %d Device SDR records that the captured SBC IPMC returned to "
       "the live Chassis Manager. The capture is a live VPX chassis: the Chassis Manager at IPMB "
       "address 10h (8-bit form) and an SBC IPMC at 82h in slot 1, on both IPMB buses, exported "
-      "from a Saleae logic analyzer (`References/CodeReferences/ipmi-pic32/traces/sbca.csv` for IPMB-A, "
-      "`sbcb.csv` for IPMB-B; `vectors/sbc_ab.vec` comes from the same capture). The records "
+      "from a Saleae logic analyzer (`local_only/References/CodeReferences/ipmi-pic32/traces/sbca.csv` for IPMB-A, "
+      "`sbcb.csv` for IPMB-B; `local_only/vectors/sbc_ab.vec` comes from the same capture). The records "
       "are real-world SDR examples next to the IPMI v2.0 and VITA 46.11-2022 tables." % nrec)
     w("")
     w("`python -I tools/captured_sdr.py` regenerates this file from the two CSV files and from "
@@ -1571,6 +1571,7 @@ def main(argv):
         for line in diff[:20]:
             print(line)
         return 1
+    DOC.parent.mkdir(parents=True, exist_ok=True)
     DOC.write_text(text, encoding="utf-8", newline="\n")
     print("wrote %s: %d records (%s)" % (DOC.relative_to(ROOT), nrec, ", ".join(
         "%02Xh x%d" % (t, len(v)) for t, v in sorted(by_type.items()))))

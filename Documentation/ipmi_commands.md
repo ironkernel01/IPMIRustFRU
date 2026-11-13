@@ -5,7 +5,7 @@ for a Chassis Manager (ChMC) and an IPMC, whether each tier must support it,
 and where its definition lives, so an implementer knows which page to open.
 The last column records the decision for this repository's Tier-1 IPMC.
 
-Source: ANSI/VITA 46.11-2022 (`References/IPMI_VITA_46_11_SPEC_AV46DOT11-2022.pdf`,
+Source: ANSI/VITA 46.11-2022 (`local_only/References/IPMI_VITA_46_11_SPEC_AV46DOT11-2022.pdf`,
 licensed, local only), Table 10.1.1-1 (IPMI commands, printed p.172-176),
 Table 10.1.2-1 (VITA 46.11 VSO commands, p.177-180) and Table 10.1.2-2
 (minimum privilege, p.181-182). The M/O/NA cells are generated from the
@@ -70,7 +70,7 @@ Sensor Records (IPMI v2.0 Table 43-1), numbers after the mandatory sensors (`IPM
 
 "IPMI ref" is the reference as printed in the VITA table: `1.5:17.1` is
 IPMI v1.5 section 17.1, `2.0:35.17` is IPMI v2.0 section 35.17. The IPMI
-specification is not in `References/`; section 5 maps the v1.5 chapters to
+specification is not in `local_only/References/`; section 5 maps the v1.5 chapters to
 IPMI v2.0.
 
 <!-- generated: sync_ipmi_commands.py -->

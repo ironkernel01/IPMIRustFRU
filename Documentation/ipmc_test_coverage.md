@@ -1437,7 +1437,7 @@ The Ignored column counts ignored Rust tests, skipped Python tests, bench rows d
 
 ## 16. Emulator replay
 
-The replay of the captured Chassis Manager traffic (`vectors/sbc_ab.vec`, local only) through the emulator, compared with the numbers of CLAUDE.md gate 9.
+The replay of the captured Chassis Manager traffic (`local_only/vectors/sbc_ab.vec`, local only) through the emulator, compared with the numbers of CLAUDE.md gate 9.
 
 | Build | Summary line | Against the expected numbers | Result |
 |---|---|---|---|
@@ -1628,7 +1628,7 @@ Public cases in the extension run: 800, 0 failed.
 
 ## 21. Emulator replay
 
-The replay of the captured Chassis Manager traffic (`vectors/sbc_ab.vec`, local only) through the emulator, compared with the numbers of CLAUDE.md gate 9.
+The replay of the captured Chassis Manager traffic (`local_only/vectors/sbc_ab.vec`, local only) through the emulator, compared with the numbers of CLAUDE.md gate 9.
 
 | Build | Summary line | Against the expected numbers | Result |
 |---|---|---|---|

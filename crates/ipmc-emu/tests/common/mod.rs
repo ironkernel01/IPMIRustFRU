@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 // Each integration test binary uses a different subset.
 #[allow(dead_code)]
-/// capture_path -- vectors/sbc_ab.vec in the repository.
+/// capture_path -- local_only/vectors/sbc_ab.vec in the repository.
 pub fn capture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors/sbc_ab.vec")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local_only/vectors/sbc_ab.vec")
 }
 
 // Each integration test binary uses a different subset.

@@ -15,3 +15,7 @@ diagrams/.venv/
 
 # Local editor workspace (lists sibling folders on this PC)
 *.code-workspace
+
+# Personal workspaces, machine settings, scratch files and private inputs
+/local_only/
+.claude/settings.json

@@ -40,7 +40,7 @@ PUBLIC_DOC = ROOT / "Documentation" / "ipmc_test_coverage.md"
 BOOT_PLAN = ROOT / "Documentation" / "ipmc_boot_plan.md"
 BOARD_REPORT = ROOT / "Documentation" / "board_test_report.md"
 PLAN = ROOT / ".claude" / "PLAN.md"
-REPLAY_VECTOR = ROOT / "vectors" / "sbc_ab.vec"
+REPLAY_VECTOR = ROOT / "local_only" / "vectors" / "sbc_ab.vec"
 VENV_PYTHON = ROOT / "tools" / "python-ipmi" / ".venv" / "Scripts" / "python.exe"
 CARGO_BIN = Path.home() / ".cargo" / "bin"
 CARGO = str(CARGO_BIN / "cargo.exe")
@@ -54,7 +54,7 @@ CONFORMANCE_REPORTS = (
 CARGO_TIMEOUT_S = 3600
 PYTHON_TIMEOUT_S = 900
 REPLAY_TIMEOUT_S = 900
-REPLAY_ARGS = ["replay", "vectors/sbc_ab.vec", "--b-fitted", "1", "--b-enabled", "1",
+REPLAY_ARGS = ["replay", "local_only/vectors/sbc_ab.vec", "--b-fitted", "1", "--b-enabled", "1",
                "--policy", "alternate", "--quiet"]
 # CLAUDE.md gate 9: the replay summary of each build (match, same_cc, cc_diff, not_implemented)
 REPLAY_EXPECTED = {"tier1": (44, 61, 115, 89), "tier23": (78, 64, 167, 0)}
@@ -414,7 +414,7 @@ def python_section(number: int, suites: list[Suite]) -> list[str]:
 
 def replay_section(number: int, replays: list[Replay]) -> list[str]:
     lines = section(f"{number}. Emulator replay")
-    lines += ["The replay of the captured Chassis Manager traffic (`vectors/sbc_ab.vec`, local only) "
+    lines += ["The replay of the captured Chassis Manager traffic (`local_only/vectors/sbc_ab.vec`, local only) "
               "through the emulator, compared with the numbers of CLAUDE.md gate 9.", ""]
     rows = [(r.label, f"`{r.summary}`" if r.summary else "none", r.detail, r.status) for r in replays]
     return lines + md_table(("Build", "Summary line", "Against the expected numbers", "Result"), rows)
@@ -538,7 +538,7 @@ def python_suite(title: str, directory: str, which: str, pattern: str) -> Suite:
 
 def replay(label: str, key: str, env: dict[str, str]) -> Replay:
     if not REPLAY_VECTOR.exists():
-        return Replay(label, "", IGNORED, "skipped: vectors/sbc_ab.vec is absent (local only)")
+        return Replay(label, "", IGNORED, "skipped: local_only/vectors/sbc_ab.vec is absent (local only)")
     code, text = run_merged([CARGO, "run", "-q", "-p", "ipmc-emu", "--", *REPLAY_ARGS], REPLAY_TIMEOUT_S, env)
     return parse_replay(text, REPLAY_EXPECTED[key], label)
 

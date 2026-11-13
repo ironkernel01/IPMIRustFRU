@@ -1,4 +1,4 @@
-// tier1_replay.rs - replays vectors/sbc_ab.vec through the Link (IPMB-B fitted and enabled, the
+// tier1_replay.rs - replays local_only/vectors/sbc_ab.vec through the Link (IPMB-B fitted and enabled, the
 // response policy of the capture: the bus the request arrived on) with all Tier-1 commands
 // implemented, and checks every captured request against the captured controller's response:
 //

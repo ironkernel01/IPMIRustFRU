@@ -11,7 +11,7 @@
 //!
 //! | Module | Holds |
 //! |---|---|
-//! | `vectors` | the one reader of the vector file format (`vectors/sbc_ab.vec`) |
+//! | `vectors` | the one reader of the vector file format (`local_only/vectors/sbc_ab.vec`) |
 //! | `emulator` | `Emulator`, the board in software (the firmware's runtime on the simulated board), and `EmuConfig` |
 //! | `replay` | replay of a vector list through an `Emulator`, the comparison with the captured responses and `ReplayReport` |
 //! | `serve` | `Board`, the emulator in real time, and the TCP line protocol of `ipmc-emu serve` |

@@ -6,7 +6,7 @@ use common::capture_path;
 use ipmc_core::queue::Bus;
 use ipmc_emu::vectors::{self, VectorError, VectorErrorKind, FRAME_MAX_BYTES};
 
-/// Frames in vectors/sbc_ab.vec: 309 requests to the IPMC and 310 responses.
+/// Frames in local_only/vectors/sbc_ab.vec: 309 requests to the IPMC and 310 responses.
 const CAPTURE_FRAMES: usize = 619;
 
 fn err(text: &str) -> VectorError {

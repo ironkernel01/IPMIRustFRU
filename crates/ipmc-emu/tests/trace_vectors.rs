@@ -1,4 +1,4 @@
-// trace_vectors.rs - replays the captured IPMB traffic (vectors/sbc_ab.vec) through the codec and dispatcher.
+// trace_vectors.rs - replays the captured IPMB traffic (local_only/vectors/sbc_ab.vec) through the codec and dispatcher.
 
 use ipmc_core::addr;
 use ipmc_core::commands;

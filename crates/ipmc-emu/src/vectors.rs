@@ -1,4 +1,4 @@
-//! vectors.rs - the one reader of the vector file format (vectors/sbc_ab.vec).
+//! vectors.rs - the one reader of the vector file format (local_only/vectors/sbc_ab.vec).
 //!
 //! One frame per line: `time_s bus hex...`. `time_s` is the capture time in seconds (decimal),
 //! `bus` is `A` or `B`, and the hex bytes are one whole IPMB frame starting with the 8-bit

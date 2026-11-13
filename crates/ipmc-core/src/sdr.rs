@@ -12,7 +12,7 @@
 //!
 //! Layouts are from IPMI v2.0 rev 1.1 (E7 markup): Table 43-2 (type 02h), Table 43-8 (type 12h),
 //! section 43.15 (type/length byte); byte numbers below are 0-based from the first byte of the
-//! record, so Table 43-2 "byte 6" is index 5. The captured SBC IPMC (vectors/sbc_ab.vec) is the
+//! record, so Table 43-2 "byte 6" is index 5. The captured SBC IPMC (local_only/vectors/sbc_ab.vec) is the
 //! second oracle; every place this file differs from its records is listed here:
 //!
 //! - Entity instance 60h (device-relative, Rule 6.4.3-5); the capture has 00h.
