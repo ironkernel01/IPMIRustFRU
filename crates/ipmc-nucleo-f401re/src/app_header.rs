@@ -1,4 +1,4 @@
-// app_header.rs - the runtime image header (Documentation/ipmc_boot_plan.md section 4): 64 bytes
+// app_header.rs - the runtime image header (local_only/Documentation/ipmc_boot_plan.md section 4): 64 bytes
 // at 0x0800_C200 (link.x puts the `.app_header` section at `__app_header`, link.x asserts the
 // address and the size). The bootloader checks the image against it at every reset.
 //

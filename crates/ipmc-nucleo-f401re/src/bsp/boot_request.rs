@@ -1,4 +1,4 @@
-// boot_request.rs - the four NOINIT words of the boot request (Documentation/ipmc_boot_plan.md
+// boot_request.rs - the four NOINIT words of the boot request (local_only/Documentation/ipmc_boot_plan.md
 // 7.1): raw access only. The meaning of the words (magic, interface, check) is
 // `ipmc_boot::request`; the callers use that.
 //

@@ -8,7 +8,7 @@ runtime firmware sectors, loads an Intel HEX file record by record, verifies it 
     python fwupdate.py --port COM5 --enter app --enter-port COM5 update app.hex
     python fwupdate.py --port COM5 --field update app.hex
 
-Protocol (design Documentation/ipmc_boot_plan.md, brief 12f): lines end in CR LF; before the port
+Protocol (design local_only/Documentation/ipmc_boot_plan.md, brief 12f): lines end in CR LF; before the port
 choice the bootloader answers only WAKEUP; in command mode it echoes what is typed and every
 command ends with one status line that starts with `OK` or `ERR`; in record mode each `:` line is
 answered by one status line. Exit codes: 0 success, 1 a refusal or an ERR answer, 2 usage,

@@ -395,7 +395,7 @@ pub fn cmd_debug_cache<B: Board, L: LinkHome<B>>(
 // ---- BOOTLOADER ----
 
 /// cmd_debug_bootloader -- `DEBUG BOOTLOADER {CONFIRM}` restarts the processor into the bootloader
-/// (Documentation/ipmc_boot_plan.md 7.1). While PWR_EN is asserted the payload loses power at the
+/// (local_only/Documentation/ipmc_boot_plan.md 7.1). While PWR_EN is asserted the payload loses power at the
 /// reset (the reset releases PWR_EN), so the command only warns and waits for `CONFIRM` (any
 /// letter case); with power off, or with `CONFIRM`, it prints the restart line and restarts. The
 /// reset is the one Cold Reset path (`IpmbLink::request_bootloader`): the console is flushed, an

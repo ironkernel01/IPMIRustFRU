@@ -79,10 +79,11 @@ or IPMB adapter; the application UART needs a separate 3.3 V USB-to-UART adapter
 | Application UART | PB6 TX / PB7 RX | Separate adapter RX / TX and common ground |
 | Ground | GND | Common ground with the IPMB or UART adapter |
 
-Use open-drain I2C wiring and suitable pull-ups. Do not apply a payload rail directly to
-an ADC pin: the rail inputs need the dividers specified in the
-[pinout](../../Documentation/nucleo_f401re_pinout.md). The full connection, jumper and
-startup instructions are in the [usage guide](../../Documentation/stm32f401_usage_guide.md).
+Use open-drain I2C wiring and suitable pull-ups. Keep Aardvark target power off and
+connect only SCL, SDA and GND for this IPMB-A test. Do not apply payload rail voltage
+directly to an ADC pin: A0 needs a 4:1 divider and A1/A2/A3 need 2:1 dividers, with
+ADC inputs kept within the MCU supply range. External rail wiring is separate from
+the basic USB-and-IPMB demonstration.
 
 ### Image files
 
@@ -216,8 +217,7 @@ binary and application HEX file into this demo. It does not flash a connected bo
 For firmware design details and independent checks, see the
 [software specification](../../Documentation/ipmc_software_spec.md),
 [command list](../../Documentation/ipmi_commands.md),
-[test-coverage report](../../Documentation/ipmc_test_coverage.md),
-[board-test report](../../Documentation/board_test_report.md) and
+[test-coverage report](../../Documentation/ipmc_test_coverage.md) and
 [Chassis Manager tools](../../tools/chassis-manager/README.md).
 Historical test results describe their recorded builds; they are not a test certificate for
 newly rebuilt demo images. On-board dual-bus checks need the corresponding hardware setup.

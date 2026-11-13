@@ -2,7 +2,7 @@
 //! four inputs. Implements `DigitalInputs`, `PowerSwitch` and `ResetOutput`.
 //!
 //! The pins are the board's choice: the board support hands them in as a `GpioMap` (ipmc-nucleo-f401re
-//! drivers/board_pins.rs, listed in Documentation/nucleo_f401re_pinout.md); this module holds no
+//! drivers/board_pins.rs, listed in local_only/Documentation/nucleo_f401re_pinout.md); this module holds no
 //! board pin.
 //!
 //! Ownership: the pins are claimed through `ports` (owner name "board_io"), one handle per pin;

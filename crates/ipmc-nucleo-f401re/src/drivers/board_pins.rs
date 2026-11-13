@@ -2,7 +2,7 @@
 // that says which MCU pin carries which sensor signal. The drivers of this crate take these
 // tables at construction and hold no board pin of their own. `RAIL_WIRING` says which channel
 // and divider serve each rail of the sensor table, naming the external rails by abstract input
-// number (entry n of `ADC.external`). The same assignment is listed for people in Documentation/nucleo_f401re_pinout.md; a pin change edits this file
+// number (entry n of `ADC.external`). The same assignment is listed for people in local_only/Documentation/nucleo_f401re_pinout.md; a pin change edits this file
 // and that table together.
 //
 // Pin names and ADC1 channels follow DS10086 Table 9; the internal channels follow RM0368 11.9

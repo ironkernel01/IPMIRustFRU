@@ -1,7 +1,7 @@
 //! flash_map - `crates/ipmc-nucleo-f401re/flash_map.x` (the linker's one place of every address)
 //! against `ipmc_boot::geometry` (the same numbers as Rust constants). A difference fails the
 //! test: a bootloader and a runtime built from drifted copies would disagree on the header or
-//! the request address (Documentation/ipmc_boot_plan.md section 2).
+//! the request address (local_only/Documentation/ipmc_boot_plan.md section 2).
 
 use ipmc_boot::geometry::{
     APP_END, APP_START, BOOT_END, BOOT_START, NOINIT_END, RAM_END, RAM_START, STORE_END,

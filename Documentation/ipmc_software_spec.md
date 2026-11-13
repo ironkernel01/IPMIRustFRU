@@ -39,7 +39,7 @@
    `tools\python-ipmi\.venv\Scripts\ipmitool.exe -I aardvark -t 0x82 raw 0x06 0x01`
    answers `00 01 80 00 01 02 09 00 00 00 4b 49 00 00 00 00`;
    `python tools/board_test_report.py` runs every bench check and writes
-   `Documentation/board_test_report.md`.
+   `local_only/Documentation/board_test_report.md`.
 4. Capture log and application port: `DEBUG DUMP` on the console prints the IPMB capture log
    (section 10.11); `python -I tools\capture\capture2pcap.py dump.txt -o dump` turns a saved dump
    into a file Wireshark opens. A USB-serial adapter on PB6/PB7 (COM5 on the bench) reaches the
@@ -630,7 +630,7 @@ defined in both files fails the build.
 
 Pin assignments are not in `defs.rs`: they live in the owning board-support module
 (`drivers/ipmb_pins.rs`, `bsp/ga.rs`, `drivers/board_pins.rs`, `bsp/uart.rs`) and in
-`Documentation/nucleo_f401re_pinout.md`. Python bench-tool settings live in
+`local_only/Documentation/nucleo_f401re_pinout.md`. Python bench-tool settings live in
 `tools/chassis-manager/cm_settings.py`; only values the IPMC and a tool must agree on (such as
 `IPMC_EMU_PORT`) are read by the tools from `defs.rs` through `tools/defs.py`.
 
@@ -1308,7 +1308,7 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 | `tools/chassis-manager/` | VITA 46.11 Chassis Manager on python-ipmi: `cm_link.py` (requester rules: T3 250 ms, retries with the same sequence, alternation, per-target IPMB-B), `cm_commands.py`, `chassis_manager.py`, `crosscheck.py` (compares a run with the captured Chassis Manager, every difference tagged), `ipmc_emu_interface.py` (TCP transport), `cm_settings.py` (tool settings), `cm_events.py` (the Chassis Manager as Event Receiver: answers each Platform Event request and records its decoded fields), `test_cm_link.py` |
 | `tools/chassis-manager/` options for events | `--cm-tier 1\|2` (2: Event Receiver, answers a Platform Event with 00h; 1: not an Event Receiver, answers C1h), `--withhold-events N` (the first N Platform Event frames get no answer, retries count, so a run shows the IPMC retrying with the same sequence number), `--set-event-receiver` (sends Set Event Receiver to each IPMC found after discovery; a Tier-1 IPMC answers C1h, which is not an error), `--cold-reset-at-s T` (sends Cold Reset once to each IPMC found, T seconds into the polling) |
 | `tools/conformance/` | spec-only Tier-1 suite: `TRANSPORT.md` (its only interface), `adapter.py` (maps it onto the Aardvark or the emulator), `run_conformance.py`, eight `tests_*.py` files, `REQUIREMENTS.md` |
-| `tools/board_test_report.py` | runs the command line, Chassis Manager, conformance, link-health and FRU persistence checks against the board and writes `Documentation/board_test_report.md` |
+| `tools/board_test_report.py` | runs the command line, Chassis Manager, conformance, link-health and FRU persistence checks against the board and writes `local_only/Documentation/board_test_report.md` |
 
 <div style="page-break-after: always;"></div>
 
@@ -1686,7 +1686,7 @@ ASCII, one message per line, at most `IPMC_EMU_VECTOR_LINE_MAX` characters, on 1
 | OVERTEMP_N | PC7 | D9 | `gpio.rs` | input, active low, pull-up |
 | PAYLOAD_RESET_N | PA6 | D12 | `gpio.rs` | input, active low, pull-up |
 
-`Documentation/nucleo_f401re_pinout.md` is the full pin table for people; a pin change edits the
+`local_only/Documentation/nucleo_f401re_pinout.md` is the full pin table for people; a pin change edits the
 owning module and that table together.
 
 ### 7.6 Application port protocol (`ipmc-app`)
@@ -3447,7 +3447,7 @@ The Phase 10 results are in section 13.6.
 ### 13.4 Board test report
 
 `python tools/board_test_report.py` runs against the board over I2C and writes
-`Documentation/board_test_report.md`: environment (7 checks), command line through python-ipmi (27),
+`local_only/Documentation/board_test_report.md`: environment (7 checks), command line through python-ipmi (27),
 Chassis Manager (12), conformance (157 tests and a totals row: 98 PASS with the totals row, 60
 NOT-TESTABLE), link health from the console
 counters (8) and FRU persistence across a reset with `FRU RESTORE` (8). The 10-23-2026 run on the
@@ -3456,10 +3456,10 @@ responses sent, every master and driver error counter at 0.
 
 ### 13.5 Checks not yet run on hardware
 
-The bench wiring of APP_UART uses no handshake (`Documentation/nucleo_f401re_pinout.md`, section 7), so RTS/CTS (`IPMC_APP_UART_FLOW` true) has not run on hardware. Scope measurement of SCL/SDA in both master modes, at 100 kHz and in FAST-MODE (the FAST-MODE periods of section 10.9 are DWT-counter measurements); clock-stretch timeout and stuck-line jumper
+The bench wiring of APP_UART uses no handshake (`local_only/Documentation/nucleo_f401re_pinout.md`, section 7), so RTS/CTS (`IPMC_APP_UART_FLOW` true) has not run on hardware. Scope measurement of SCL/SDA in both master modes, at 100 kHz and in FAST-MODE (the FAST-MODE periods of section 10.9 are DWT-counter measurements); clock-stretch timeout and stuck-line jumper
 tests; arbitration loss with a second master; start-up fault recovery with a line held low; IPMB-B
 on hardware, with failover, and FAST-MODE on both buses (needs a second Aardvark, one per IPMB); NVMRO from the
-strap pin (the NVMRO-asserted bench cases wait until the pin can be driven; host tests cover them); the BOOTLOADER pin jumper and power cuts during `LOAD`, `ERASE APP` and `ERASE FRU` (`Documentation/ipmc_boot_plan.md`, tests B11 to B15); heartbeat LED by eye; power and fault input jumpers; Broadcast Get Device ID through a
+strap pin (the NVMRO-asserted bench cases wait until the pin can be driven; host tests cover them); the BOOTLOADER pin jumper and power cuts during `LOAD`, `ERASE APP` and `ERASE FRU` (`local_only/Documentation/ipmc_boot_plan.md`, tests B11 to B15); heartbeat LED by eye; power and fault input jumpers; Broadcast Get Device ID through a
 second independent tool. `.claude/PLAN.md` section 7 lists the
 procedure and expected result of each.
 
@@ -3493,7 +3493,7 @@ procedure and expected result of each.
 | `ERASE FRU` and `RUN` | the runtime loads the built FRU image: `no stored image, built image in use` |
 | Not run yet | power cuts during `LOAD`, `ERASE APP` and `ERASE FRU`, and the BOOTLOADER pin jumper (owner-deferred bench tests B11 to B15) |
 
-The numbered tests are in `Documentation/ipmc_boot_plan.md`, section 13.3.
+The numbered tests are in `local_only/Documentation/ipmc_boot_plan.md`, section 13.3.
 
 <div style="page-break-after: always;"></div>
 
@@ -3591,7 +3591,7 @@ session on one of the two UARTs (PLAN decisions 31 and 33 to 37). Every decision
 (`crates/ipmc-nucleo-f401re/src/boot/`) is the glue that reads the pins, moves bytes between the UART
 rings and the session, programs the flash and performs the jump. The release image is 22 336 bytes
 (`.text` 22 272 B and `.data` 40 B) of the 32 768 bytes of sectors 0 and 1;
-`Documentation/ipmc_boot_plan.md` is the design of record and gives the open questions and their
+`local_only/Documentation/ipmc_boot_plan.md` is the design of record and gives the open questions and their
 answers. Section 16 covers the image header, the digest and the update procedure.
 
 ### 15.1 Modules and main functions of `ipmc-boot`
@@ -4016,7 +4016,7 @@ sequenceDiagram
 
 ### 16.7 Measured numbers
 
-Bench measurements of 10-26-2026 (release build, 115200 baud, 84 MHz; `Documentation/ipmc_boot_plan.md`
+Bench measurements of 10-26-2026 (release build, 115200 baud, 84 MHz; `local_only/Documentation/ipmc_boot_plan.md`
 sections 13.2 and 13.3):
 
 | Quantity | Value |

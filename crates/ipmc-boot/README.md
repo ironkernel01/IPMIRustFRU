@@ -1,6 +1,6 @@
 # ipmc-boot
 
-The library of the bootloader (sectors 0-1) (Documentation/ipmc_boot_plan.md): the flash geometry and
+The library of the bootloader (sectors 0-1) (local_only/Documentation/ipmc_boot_plan.md): the flash geometry and
 region policy, the runtime image header and its check, the boot request words, the start decision
 and countdown, the start-up trace text, the Intel HEX parser and the `LOAD` state machine. It is
 `no_std`, `forbid(unsafe_code)`, panic free and host-tested; it uses no `core::fmt`.

@@ -246,7 +246,7 @@ pub const IPMC_APP_BYTES_PER_POLL: usize = 32;
 /// application port prompt (USART1), printed after the banner and after every answer; the payload
 /// CPU skips every line that starts with it (1..=16 printable ASCII bytes, the last one a space)
 pub const IPMC_APP_PROMPT: &str = "APP> ";
-/// bootloader command-mode prompt (Phase 12, Documentation/ipmc_boot_plan.md); same rules as
+/// bootloader command-mode prompt (Phase 12, local_only/Documentation/ipmc_boot_plan.md); same rules as
 /// IPMC_APP_PROMPT (1..=16 printable ASCII bytes, the last one a space)
 pub const IPMC_BOOT_PROMPT: &str = "BOOT> ";
 /// wait after configuring the BOOTLOADER pin (PC10, pull-down) before the one read at reset, us (10..=10000); 100 us is over 100 RC time constants of the internal pull-down and the pin load

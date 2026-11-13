@@ -12,7 +12,7 @@
      output section sits in NOINIT (the boot request words and the runtime's .uninit live there
      and survive the bootloader), and .uninit is empty.
    - The image must end inside BOOT: the link fails with the region overflow, and the assert
-     below names the size budget of Documentation/ipmc_boot_plan.md 3.3 (design target 24 KB,
+     below names the size budget of local_only/Documentation/ipmc_boot_plan.md 3.3 (design target 24 KB,
      hard limit 32 KB; gen.ps1 also runs `fwimage size` on ipmc-boot.bin).
    - _stack_reserve: the RAM that must stay free for the stack above the statics (the UART rings
      are the largest statics).
@@ -248,7 +248,7 @@ ERROR(ipmc): the vector table is not at the start of BOOT (0x0800_0000)");
 
 ASSERT(__sidata + SIZEOF(.data) <= ORIGIN(BOOT) + LENGTH(BOOT), "
 ERROR(ipmc): the bootloader image does not fit sectors 0-1 (BOOT, 32 KB). The design target is 24 KB
-(75 %) and the hard limit 32 KB (Documentation/ipmc_boot_plan.md 3.3). Look at the sizes with
+(75 %) and the hard limit 32 KB (local_only/Documentation/ipmc_boot_plan.md 3.3). Look at the sizes with
 `arm-none-eabi-nm --size-sort -S` and remove code (no core::fmt, no panic path with a message).");
 
 ASSERT(__veneer_limit <= ORIGIN(BOOT) + LENGTH(BOOT), "

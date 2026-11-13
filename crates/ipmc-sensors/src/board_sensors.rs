@@ -31,7 +31,7 @@
 //!
 //! Pins and ADC channels are not named here: the board support chooses them once, in
 //! ipmc-nucleo-f401re `drivers/board_pins.rs` (external input n is the n-th entry of its ADC table). Which pin
-//! carries which signal is also listed in Documentation/nucleo_f401re_pinout.md.
+//! carries which signal is also listed in local_only/Documentation/nucleo_f401re_pinout.md.
 //!
 //! Each group has a source switch in defs.rs (IPMC_ADC_INTERNAL_SOURCE,
 //! IPMC_ADC_EXTERNAL_SOURCE, IPMC_FAULT_SOURCE, IPMC_POWER_SOURCE): hardware or simulation. On the

@@ -46,8 +46,8 @@ Copy the combined `.bin` to the NUCLEO's ST-LINK programming drive, normally
 `NOD_F401RE`. **This erases saved FRU inventory and settings.** Do not copy an
 application-only file to that drive. Open the console at 115200 baud, 8N1.
 The HEX file is for [fwupdate.py](../../tools/fwupdate/README.md), not drive copying.
-See the [pinout](../../Documentation/nucleo_f401re_pinout.md) and
-[usage guide](../../Documentation/stm32f401_usage_guide.md) for wiring and diagnostics.
+The demo brief includes the IPMB-A connection table and console firmware-update
+procedure. The detailed engineering and bench documents are kept locally.
 
 ## Rebuild the brief
 

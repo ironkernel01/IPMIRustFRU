@@ -2,7 +2,7 @@
 
     python tools/board_test_report.py [--duration-s 10] [--skip-persistence]
 
-Writes Documentation/board_test_report.md (generated, overwritten on every run) and exits 1 when
+Writes local_only/Documentation/board_test_report.md (generated, overwritten on every run) and exits 1 when
 any row is FAIL. The board sits on IPMB-A behind a Total Phase Aardvark; the firmware console is
 COM3 (one program at a time). Sections:
 
@@ -35,7 +35,7 @@ README = ROOT / "tools" / "python-ipmi" / "README.md"
 sys.path.insert(0, str(ROOT / "tools"))
 import trace2vec  # noqa: E402  (the one IPMB zero checksum)
 import defs as defs_reader  # noqa: E402  (tools/defs.py, the one reader of the configuration)
-REPORT = ROOT / "Documentation" / "board_test_report.md"
+REPORT = ROOT / "local_only" / "Documentation" / "board_test_report.md"
 FIRMWARE_DIR = ROOT / "crates" / "ipmc-nucleo-f401re"
 FIRMWARE_BIN = FIRMWARE_DIR / "target" / "thumbv7em-none-eabihf" / "release" / "ipmc-nucleo-f401re.bin"
 GEN_PS1 = FIRMWARE_DIR / "gen.ps1"
@@ -575,7 +575,7 @@ def main(argv=None) -> int:
         time.sleep(PHASE_GAP_S)
         section_f(report, defs)
     text = render(report, started)
-    REPORT.parent.mkdir(exist_ok=True)
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text(text, encoding="utf-8")
     failed = sum(r.status == "FAIL" for _, r in report.all_rows())
     print(text.split("## G. Summary")[1] if "## G. Summary" in text else "")

@@ -1,6 +1,6 @@
 # gen.ps1 - build, flash and console helper for the NUCLEO-F401RE images: the bootloader (sectors 0-1)
-# (ipmc-boot) and the runtime firmware (ipmc-nucleo-f401re). Layout and build: Documentation/
-# ipmc_boot_plan.md 2, 3.5 and 5.
+# (ipmc-boot) and the runtime firmware (ipmc-nucleo-f401re). Layout and build:
+# local_only/Documentation/ipmc_boot_plan.md 2, 3.5 and 5.
 #   .\gen.ps1 build                  build both images and the board image (steps below)
 #   .\gen.ps1 flash                  build, then copy ipmc-board.bin to the NOD_F401RE volume
 #   .\gen.ps1 flash -Drive           the same (forced)

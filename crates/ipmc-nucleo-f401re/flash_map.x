@@ -1,5 +1,5 @@
 /* flash_map.x - the one place of every flash and RAM address of the NUCLEO-F401RE images
-   (Documentation/ipmc_boot_plan.md section 2).
+   (local_only/Documentation/ipmc_boot_plan.md section 2).
 
    Both linker scripts include it: memory.x (the runtime, through link.x) and boot.x (the
    bootloader in sectors 0-1). The numbers are RM0368 Table 5 (STM32F401xE, 512 KB: sectors 0-3 are
