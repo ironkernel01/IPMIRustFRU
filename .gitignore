@@ -18,4 +18,4 @@ Documentation/diagrams/.venv/
 
 # Personal workspaces, machine settings, scratch files and private inputs
 /local_only/
-.claude/settings.json
+/.claude/
