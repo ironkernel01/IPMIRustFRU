@@ -17,7 +17,7 @@
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><img src="assets/ironkernel_logo.png" alt="IronKernel Embedded" style="width:231px; margin:0;"></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><img src="pdf/ironkernel_logo.png" alt="IronKernel Embedded" style="width:231px; margin:0;"></td>
 <td style="text-align:right; border:none; padding:0; width:50%; vertical-align:bottom;"><strong>NUCLEO-F401RE Demo Brief</strong><br>Revision 11-13-2026</td>
 </tr>
 </table>
@@ -88,7 +88,7 @@ the basic USB-and-IPMB demonstration.
 ### Image files
 
 The packaging command produces two checked Tier-1 images, hashes and a build manifest
-in `images/`. See [image availability](images/README.md) for this checkout.
+in `images/`. See [image availability](../demos/nucleo-f401re/images/README.md) for this checkout.
 
 | File | Use |
 |---|---|
@@ -114,11 +114,11 @@ The public Tier-1 release includes firmware update through the console CLI as we
 the application UART. From the runtime console, `DEBUG BOOTLOADER` enters the bootloader;
 when interrupting payload power requires confirmation, use `DEBUG BOOTLOADER CONFIRM`.
 The public host tool automates entry, application erase, Intel HEX loading, SHA-256
-verification and restart. From the repository root, replacing COM3 with the console port:
+verification and restart. From the repository root, replacing COM4 with the console port:
 
 ```powershell
-python tools/fwupdate/fwupdate.py --port COM3 --uart cli `
-  --enter cli --enter-port COM3 update `
+python tools/fwupdate/fwupdate.py --port COM4 --uart cli `
+  --enter cli --enter-port COM4 update `
   demos/nucleo-f401re/images/ipmc-nucleo-f401re-tier1.hex
 ```
 
@@ -172,9 +172,10 @@ restricts offering IPMIRustFRU or a work mainly based on it as a competing IPMC 
 product. A paid agreement must expressly cover any different rights you need.
 
 This is a source-available license with commercial conditions, rather than an OSI open
-source license. The [public LICENSE.md](../../LICENSE.md) is the governing text for Tier-1.
+source license. The [public LICENSE.md](../LICENSE.md) is the governing text for Tier-1.
 A signed commercial agreement governs the rights it grants and any differences from that text.
-Contact **ironkernel.com** for commercial licenses, maintenance and engineering services.
+Contact **support@ironkernel.com** for questions, commercial licenses, enterprise quotes,
+maintenance and engineering services.
 
 <div style="page-break-after: always;"></div>
 
@@ -215,16 +216,16 @@ It builds and checks the images, checks Tier-1 identity, and copies only the com
 binary and application HEX file into this demo. It does not flash a connected board.
 
 For firmware design details and independent checks, see the
-[software specification](../../Documentation/ipmc_software_spec.md),
-[command list](../../Documentation/ipmi_commands.md),
-[test-coverage report](../../Documentation/ipmc_test_coverage.md) and
-[Chassis Manager tools](../../tools/chassis-manager/README.md).
+[software specification](ipmc_software_spec.md),
+[command list](ipmi_commands.md),
+[test-coverage report](ipmc_test_coverage.md) and
+[Chassis Manager tools](../tools/chassis-manager/README.md).
 Historical test results describe their recorded builds; they are not a test certificate for
-newly rebuilt demo images. On-board dual-bus checks need the corresponding hardware setup.
+newly rebuilt demo images. The physical validation setup is NUCLEO-F401RE with one Aardvark on IPMB-A and console CLI reload.
 
 ### Architecture
 
-<img src="assets/png/product-brief-1.png" alt="NUCLEO-F401RE Tier-1 IPMC, board interfaces and separately licensed extension" style="width:72%;">
+<img src="diagrams/out/png/product-brief-1.png" alt="NUCLEO-F401RE Tier-1 IPMC, board interfaces and separately licensed extension" style="width:72%;">
 
 The IPMI logic also builds for a PC emulator. A port to another MCU replaces the board
 support and must be validated for that board; this demo makes no portability or certification
@@ -259,7 +260,7 @@ Tier-2/3 package includes both configurations; Tier-2 is not sold separately.
 IPMI references retain the source table's version and section notation.
 VSO references identify VITA 46.11-2022 sections; VSO requests use NetFn 2Ch
 and group identifier 03h. See the public
-[command document](../../Documentation/ipmi_commands.md) for further context.
+[command document](ipmi_commands.md) for further context.
 
 ### IPMI commands: VITA Table 10.1.1-1
 

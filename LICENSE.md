@@ -142,5 +142,4 @@ after the license ends.
 - This license is governed by the law of the State of Florida, without its conflict-of-law
   rules. The courts located in Florida have exclusive jurisdiction over disputes about it.
 - If a court finds one term unenforceable, the other terms stay in force.
-- Questions about this license and requests for a paid license go to the contact named on
-  ironkernel.com.
+- Questions about this license and requests for a paid license go to support@ironkernel.com.

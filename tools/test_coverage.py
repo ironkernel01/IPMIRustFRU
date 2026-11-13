@@ -50,6 +50,10 @@ CONFORMANCE_REPORTS = (
     TIER23_ROOT / "tools" / "conformance_t3" / "conformance_t3_emu.md",
     TIER23_ROOT / "tools" / "conformance_t3" / "conformance_t3_board.md",
 )
+TIER1_CONFORMANCE_REPORTS = (
+    ROOT / "tools" / "conformance" / "conformance_emu.md",
+    ROOT / "tools" / "conformance" / "conformance_board.md",
+)
 
 CARGO_TIMEOUT_S = 3600
 PYTHON_TIMEOUT_S = 900
@@ -347,7 +351,7 @@ def split_cases(extension: list[Case], tier1: list[Case]) -> tuple[list[Case], l
 # ------------------------------------------------------------------ Markdown writers
 
 BANNER = ('<table style="width:100%; border:none; margin:0; padding:0;">\n<tr>\n'
-          '<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>\n'
+          '<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC TEST COVERAGE</strong></td>\n'
           '<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision {rev}</strong></td>\n'
           '</tr>\n</table>\n<hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">\n')
 BREAK = '<div style="page-break-after: always;"></div>\n'
@@ -358,6 +362,16 @@ def md_cell(text: object) -> str:
 
 
 def md_table(headers: tuple[str, ...], rows: list[tuple]) -> list[str]:
+    # Customer reports show outcomes of executed checks only.
+    if headers[-1:] == ("Result",):
+        rows = [row for row in rows if row[-1] in (PASS, FAIL)]
+    if "Ignored" in headers:
+        rows = [(row[0], row[2] + row[3], row[2], row[3]) for row in rows]
+        headers = ("Suite", "Executed", "Passed", "Failed")
+    elif "NOT-TESTABLE" in headers:
+        keep = [i for i, name in enumerate(headers) if name != "NOT-TESTABLE"]
+        rows = [tuple(row[i] for i in keep) for row in rows]
+        headers = tuple(headers[i] for i in keep)
     lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     lines += ["| " + " | ".join(md_cell(v) for v in row) + " |" for row in rows]
     return lines + [""]
@@ -390,6 +404,7 @@ def by_key(cases: list[Case], key) -> dict:
 
 def rust_sections(cases: list[Case], first: int, title: str = "Rust tests") -> list[str]:
     """One `##` section per package, one `###` table per target."""
+    cases = [case for case in cases if case.result in (PASS, FAIL)]
     lines: list[str] = []
     for number, (package, in_package) in enumerate(by_key(cases, lambda c: c.package).items(), first):
         lines += section(f"{number}. {title}: {package}")
@@ -403,7 +418,7 @@ def rust_sections(cases: list[Case], first: int, title: str = "Rust tests") -> l
 def python_section(number: int, suites: list[Suite]) -> list[str]:
     lines = section(f"{number}. Python suites")
     for suite in suites:
-        lines += [f"### {suite.title} ({len(suite.cases)} cases)", ""]
+        lines += [f"### {suite.title} ({suite.count(PASS) + suite.count(FAIL)} executed cases)", ""]
         if suite.error:
             lines += [f"Suite error: {suite.error}", ""]
         lines += md_table(("Test", "Area", "Result"),
@@ -416,7 +431,7 @@ def replay_section(number: int, replays: list[Replay]) -> list[str]:
     lines = section(f"{number}. Emulator replay")
     lines += ["The replay of the captured Chassis Manager traffic (`local_only/vectors/sbc_ab.vec`, local only) "
               "through the emulator, compared with the numbers of CLAUDE.md gate 9.", ""]
-    rows = [(r.label, f"`{r.summary}`" if r.summary else "none", r.detail, r.status) for r in replays]
+    rows = [(r.label, f"`{r.summary}`", r.detail, r.status) for r in replays if r.status in (PASS, FAIL)]
     return lines + md_table(("Build", "Summary line", "Against the expected numbers", "Result"), rows)
 
 
@@ -430,7 +445,13 @@ def board_section(number: int, bench: list[tuple[str, str, str]], board: tuple) 
               "it and does not run it.", ""]
     rows = [(title, p, f, n) for title, p, f, n in sections]
     rows.append(("Total", sum(r[1] for r in rows), sum(r[2] for r in rows), sum(r[3] for r in rows)))
-    return lines + md_table(("Section", "PASS", "FAIL", "NOT-TESTABLE"), rows)
+    lines += md_table(("Section", "PASS", "FAIL", "NOT-TESTABLE"), rows)
+    lines += ["### Tier-1 conformance reports", "",
+              "Stored requirement-level results are separate from Rust/Python unit tests. "
+              "The strict emulator run uses alternate responses and strict IPMB-B power-up. "
+              "The physical board run uses one Aardvark on IPMB-A. Only executed checks are shown.", ""]
+    return lines + md_table(("Report", "Written", "PASS", "FAIL", "NOT-TESTABLE"),
+                            report_rows(TIER1_CONFORMANCE_REPORTS))
 
 
 def gaps_section(number: int, gaps: list[tuple[str, str, str]]) -> list[str]:
@@ -461,8 +482,8 @@ def totals_row(rows: list[tuple]) -> tuple:
 def overview(started: str, kind: str, extra: list[str]) -> list[str]:
     lines = section("1. Summary")
     lines += [f"Generated by `tools/test_coverage.py` on {started}; do not edit. {kind}", "",
-              "The Ignored column counts ignored Rust tests, skipped Python tests, bench rows deferred by the "
-              "owner and board report rows marked NOT-TESTABLE.", ""]
+              "This customer report lists PASS/FAIL results for executed tests. The physical setup is "
+              "NUCLEO-F401RE with one Aardvark on IPMB-A and serial CLI firmware reload.", ""]
     return lines + extra
 
 
@@ -478,7 +499,7 @@ def public_document(started, tier1, python, replays, bench, board, gaps, ext) ->
         rows.append(("Tier-2/3: emulator replay", len(ext_replays), sum(r.status == PASS for r in ext_replays),
                      sum(r.status == FAIL for r in ext_replays), 0))
     lines = title_page("IPMC Test Coverage",
-                       "IPMIRustFRU: every test case of the Tier-1 build and the Tier-2/3 extension, and its result")
+                       "IPMIRustFRU: executed Tier-1 and Tier-2/3 tests, with PASS/FAIL results")
     kind = ("This document covers the Tier-1 build and the Tier-2/3 extension." if ext
             else "This document covers the Tier-1 build; the Tier-2/3 extension was not built in this run.")
     lines += overview(started, kind,
@@ -486,9 +507,9 @@ def public_document(started, tier1, python, replays, bench, board, gaps, ext) ->
     lines += rust_sections(tier1, 2)
     first = 2 + len(by_key(tier1, lambda c: c.package))
     lines += python_section(first, python) + replay_section(first + 1, replays)
-    lines += board_section(first + 2, bench, board) + gaps_section(first + 3, gaps)
+    lines += board_section(first + 2, bench, board)
     if ext:
-        lines += extension_sections(first + 4, *ext)
+        lines += extension_sections(first + 3, *ext)
     return "\n".join(lines) + "\n"
 
 
@@ -547,9 +568,9 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def report_rows() -> list[tuple]:
+def report_rows(paths=CONFORMANCE_REPORTS) -> list[tuple]:
     rows = []
-    for path in CONFORMANCE_REPORTS:
+    for path in paths:
         if path.exists():
             written = datetime.datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
             rows.append((path.name, written, *parse_conformance_report(read_text(path))))
@@ -584,6 +605,9 @@ def main(argv=None) -> int:
     errors = [f"{s.title}: {s.error}" for s in suites + python if s.error]
     failed = sum(s.count(FAIL) for s in suites + python) + sum(r.status == FAIL for r in replays + ext_replays)
     failed += sum(r[2] == FAIL for r in bench)
+    failed += sum(row[2] for row in board[1])
+    # The board conformance failures are already included in the board report.
+    failed += parse_conformance_report(read_text(TIER1_CONFORMANCE_REPORTS[0]))[1]
     if not args.no_write:
         PUBLIC_DOC.write_text(public, encoding="utf-8")
     for suite in suites + python:

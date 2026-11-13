@@ -15,7 +15,8 @@ python -m venv tools\python-ipmi\.venv
 tools\python-ipmi\.venv\Scripts\python.exe -m pip install python-ipmi pyaardvark
 ```
 
-The Total Phase USB driver is installed on this PC. pyaardvark finds the
+Install the Total Phase USB driver before attaching the adapter. The current bench
+has the v4.0.0 driver package installed; the API is v6.00. pyaardvark finds the
 adapter as port 0, serial 2239-477438, firmware 3.51, API 6.00.
 
 ## How the `aardvark` interface works
@@ -37,6 +38,10 @@ $ipmi = "tools\python-ipmi\.venv\Scripts\ipmitool.exe"
 `-o` takes the interface options (`port`, `slave_address`, `serial_number`,
 `enable_i2c_pullups`, `enable_target_power`, `enable_fastmode` for
 400 kHz), as defined by `pyipmi/interfaces/aardvark.py`.
+The firmware advertises two IPMB interfaces; this single-Aardvark procedure tests
+IPMB-A only. The Chassis Manager leaves IPMB-B unused. The sensor-1 example below
+is read after that initialization.
+
 Keep target power off: the bench wiring carries only SCL, SDA and GND.
 
 ## Bench checks
@@ -70,16 +75,16 @@ duplicate cache.
 | C01 | Get Device ID (06h/01h) | `bmc info` | `raw 0x06 0x01` | IPMI 2.0 20.1; VITA Table 10.1.1-1 p.172 | raw `00 01 80 00 01 02 09 00 00 00 4b 49 00 00 00 00`; `bmc info` shows Device ID 1, Firmware Revision 0.1, IPMI Version 2.0, Product ID 18763 (0x494b), Sensor Device, FRU Inventory Device |
 | C02 | Get Self Test Results (06h/04h) | none | `raw 0x06 0x04` | IPMI 2.0 20.4; p.172 | `00 55 00` (55h no error) |
 | C03 | Broadcast Get Device ID (06h/01h) | none | none | IPMI 2.0 20.9; p.172 | No command-line form: python-ipmi has no broadcast request. The Chassis Manager sends it in its discovery step (`tools\chassis-manager\chassis_manager.py`, README step 1) |
-| C04 | Get Device SDR Info (04h/20h) | none | `raw 0x04 0x20` | IPMI 2.0 35.2; p.174 | `00 07 01` (7 sensors, static population) |
+| C04 | Get Device SDR Info (04h/20h) | none | `raw 0x04 0x20` | IPMI 2.0 35.2; p.174 | `00 0d 01` (13 sensors, static population) |
 | C05 | Reserve Device SDR Repository (04h/22h) | none | `raw 0x04 0x22` | IPMI 2.0 35.4; p.174 | `00 xx yy`, a non-zero 16-bit reservation ID that changes with every request |
-| C06 | Get Device SDR (04h/21h) | `sdr list`, `sdr showall` | `raw 0x04 0x21 0x00 0x00 0x07 0x00 0x00 0xff` (record 0007h, whole record) | IPMI 2.0 35.3; p.174 | raw `00 ff ff 07 00 51 12 0f 82 00 01 0b 00 00 00 a0 60 00 c4 49 50 4d 43` (the MC locator record, name `IPMC`); `sdr list` and `sdr showall` list the 7 Tier-1 sensors (FRU State, IPMB Link, FRU Health, FRU Voltage, FRU Temperature, Payload Results, Payload Status) and the `IPMC` locator |
-| C07 | Get Sensor Reading (04h/2Dh) | `sdr showall` (reads every sensor) | `raw 0x04 0x2d 0x01` (sensor 1, IPMB Link) | IPMI 2.0 35.14; VITA Table 10.2.2-1 p.241 | `00 08 40 02` (link A enabled, B not fitted) |
+| C06 | Get Device SDR (04h/21h) | `sdr list`, `sdr showall` | `raw 0x04 0x21 0x00 0x00 0x0d 0x00 0x00 0xff` (record 000Dh, whole record) | IPMI 2.0 35.3; p.174 | raw `00 ff ff 0d 00 51 12 0f 82 00 01 0b 00 00 00 a0 60 00 c4 49 50 4d 43` (the MC locator record, name `IPMC`); `sdr list` and `sdr showall` list the 7 mandatory Tier-1 sensors, 5 analog rail sensors, die temperature and the `IPMC` locator (14 records, 13 sensors) |
+| C07 | Get Sensor Reading (04h/2Dh) | `sdr showall` (reads every sensor) | `raw 0x04 0x2d 0x01` (sensor 1, IPMB Link) | IPMI 2.0 35.14; VITA Table 10.2.2-1 p.241 | `00 08 40 02` (single-bus bench state after Chassis Manager initialization) |
 | C08 | Get FRU Inventory Area Info (0Ah/10h) | none | `raw 0x0a 0x10 0x00` | IPMI 2.0 34.1; p.174 | `00 00 02 00` (512 bytes, accessed by bytes) |
-| C09 | Read FRU Data (0Ah/11h) | `fru print` | `raw 0x0a 0x11 0x00 0x00 0x00 0x08` (FRU 0, offset 0, 8 bytes) | IPMI 2.0 34.2; p.174 | raw `00 08 01 00 00 01 0b 00 00 f3` (the common header); `fru print` decodes the board and product areas with the `crates/ipmc-defs/src/defs.rs` strings (IronKernel, VPX Tier-1 IPMC, IK-T1-000001, IK-IPMC-T1-NUC, ipmc-fru-v1, Tier-1 IPMC Reference, IK-IPMC-T1, 0.1) |
+| C09 | Read FRU Data (0Ah/11h) | `fru print` | `raw 0x0a 0x11 0x00 0x00 0x00 0x08` (FRU 0, offset 0, 8 bytes) | IPMI 2.0 34.2; p.174 | raw `00 08 01 00 00 01 12 28 00 c4` (the common header); `fru print` decodes the board and product areas with the `crates/ipmc-defs/src/defs.rs` strings (IronKernel, VPX Tier-1 IPMC, IK-T1-000001, IK-IPMC-T1-NUC, ipmc-fru-v1, Tier-1 IPMC Reference, IK-IPMC-T1, 0.1) |
 | C10 | Write FRU Data (0Ah/12h) | none | `raw 0x0a 0x12 0x00 0x00 0x00 0x01 0x00` (FRU 0, offset 0, data `01 00`: the current first two header bytes) | IPMI 2.0 34.3; p.174 | `00 02` (2 bytes written) |
-| C11 | Get VSO Capabilities (2Ch/00h) | `vita properties` | `raw 0x2c 0x00 0x03` | VITA 10.1.3.1 p.182 | raw `00 03 00 00 00 22 00 00`; `vita properties` shows Tier 1, Layer 1, 100kHz, 1 IPMB interface supported, VITA 46.11, Max FRU Device ID 0x00 |
+| C11 | Get VSO Capabilities (2Ch/00h) | `vita properties` | `raw 0x2c 0x00 0x03` | VITA 10.1.3.1 p.182 | raw `00 03 00 01 00 22 00 00`; `vita properties` shows Tier 1, Layer 1, 100kHz, 2 IPMB interfaces supported, VITA 46.11, Max FRU Device ID 0x00 |
 | C12 | Set IPMB State (2Ch/09h) | none | `raw 0x2c 0x09 0x03 0xff 0xff` (no change to A or B) | VITA 10.1.3.7 p.189 | `00 03` |
-| C13 | Get Device Locator Record ID (2Ch/0Dh) | none | `raw 0x2c 0x0d 0x03 0x00` (FRU 0) | VITA 10.1.3.11 p.194 | `00 03 07 00` (record 0007h) |
+| C13 | Get Device Locator Record ID (2Ch/0Dh) | none | `raw 0x2c 0x0d 0x03 0x00` (FRU 0) | VITA 10.1.3.11 p.194 | `00 03 0d 00` (record 000Dh) |
 | C14 | Get FRU Address Info (2Ch/40h) | `vita addrinfo` | `raw 0x2c 0x40 0x03 0x00` (FRU 0) | VITA 10.1.3.3 p.186 | raw `00 03 41 82 ff 00 01 00`; `vita addrinfo` shows Hardware Address 0x41, IPMB-0 Address 0x82, FRU ID 0x00, Site ID 0x01 |
 
 ### Error probes

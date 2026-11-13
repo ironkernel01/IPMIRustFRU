@@ -1,0 +1,51 @@
+{
+  "board": "NUCLEO-F401RE",
+  "tier": 1,
+  "built_utc": "2026-11-13T17:09:13.6949167Z",
+  "source_revision": "7dd083d3c579849ee5785191747f45b5edd117e6",
+  "source_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "configuration_sha256": "952d196ff5dadc12d6cd93a7150393e02839f1ef31e5e3e92d448bd2a4b8a402",
+  "tier23_override": 0,
+  "evaluation": false,
+  "field": false,
+  "board_tested": true,
+  "license": "../../../LICENSE.md",
+  "images": [
+    {
+      "file": "ipmc-board-tier1.bin",
+      "bytes": 182272,
+      "sha256": "174535c1da82f61527bbe4b0837566d0fe2a943fae795c41189b43f47620a0d2"
+    },
+    {
+      "file": "ipmc-nucleo-f401re-tier1.hex",
+      "bytes": 374130,
+      "sha256": "41809b3936161c6add5ad40b9afc6e7ffee2063c9648ec5f9118e7ef83d737c2"
+    }
+  ],
+  "validation": {
+    "date": "2026-11-13",
+    "board": "NUCLEO-F401RE",
+    "physical_transport": "Aardvark IPMB-A",
+    "console": "COM4, 115200 8N1",
+    "board_checks": {
+      "pass": 160,
+      "fail": 0
+    },
+    "hardware_requirement_checks": {
+      "pass": 98,
+      "fail": 0
+    },
+    "strict_emulator_requirement_checks": {
+      "pass": 103,
+      "fail": 0
+    },
+    "cli_reload": {
+      "pass": true,
+      "duration_seconds": 38.1,
+      "verified_application_sha256": "182777d6d3055c3c37b6fa7b1bbd510cee6f933709bd36c8b4069a4f66347503"
+    },
+    "record": "../validation.md",
+    "results_scope": "Executed checks only"
+  }
+}

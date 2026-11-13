@@ -1,7 +1,7 @@
 // Drawing set: product-brief (1 sheet: the IPMC and what it connects to) for
-// demos/nucleo-f401re/ipmc_product_brief.md.
-// Build: node diagrams/src/product-brief.js
-// Render: powershell -File diagrams/tools/render.ps1 demos/nucleo-f401re/assets/product-brief.pptx
+// Documentation/ipmc_product_brief.md.
+// Build: node Documentation/diagrams/src/product-brief.js
+// Render: powershell -File Documentation/diagrams/tools/render.ps1 Documentation/diagrams/out/product-brief.pptx
 // Fills: white = Tier-1 IPMC crates (STM32 and x86), gray = board support (STM32 only),
 // blue = Tier-2/3 extension, yellow = outside the IPMC.
 const path = require("path");
@@ -59,4 +59,4 @@ notes(s, 0.6, 5.6, 12.1, 1.0, [
 legend(s, 0.6, 6.8, [["Tier-1 IPMC", W], ["Board support", G], ["Tier-2/3 extension", B], ["Outside the IPMC", Y]], 2.6);
 frame(s);
 
-pres.writeFile({ fileName: path.join(__dirname, "..", "..", "demos", "nucleo-f401re", "assets", "product-brief.pptx") });
+pres.writeFile({ fileName: path.join(__dirname, "..", "out", "product-brief.pptx") });

@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from sync_ipmi_commands import split_cells  # noqa: E402
 
 SOURCE = ROOT / "local_only" / "vita_commmands.md"
-BRIEF = ROOT / "demos" / "nucleo-f401re" / "ipmc_product_brief.md"
+BRIEF = ROOT / "Documentation" / "ipmc_product_brief.md"
 BEGIN = "<!-- generated: sync_demo_commands.py -->"
 END = "<!-- end generated: sync_demo_commands.py -->"
 HEADER = ["NetFn/Cmd", "Command", "Reference", "Req T1", "Req T2", "Req T3",
@@ -42,7 +42,7 @@ def appendix(source):
                 raise ValueError(f"invalid command code: {cells[0]}")
             if any(value not in SUPPORT for value in cells[6:]):
                 raise ValueError(f"invalid implementation status: {line}")
-            if any(not re.fullmatch(r"(?:M|O|O/M|NA|N/A)(?:\[[\d,]+\])?|—|-", value)
+            if any(not re.fullmatch(r"(?:M|O|O/M|NA|N/A)(?:\[[\d,]+\])?|â€”|-", value)
                    for value in cells[3:6]):
                 raise ValueError(f"invalid requirement status: {line}")
             key = (cells[0], cells[1])
@@ -83,7 +83,7 @@ def appendix(source):
         "IPMI references retain the source table's version and section notation.",
         "VSO references identify VITA 46.11-2022 sections; VSO requests use NetFn 2Ch",
         "and group identifier 03h. See the public",
-        "[command document](../../Documentation/ipmi_commands.md) for further context.", "",
+        "[command document](ipmi_commands.md) for further context.", "",
     ]
     return "\n".join(intro + output).rstrip() + "\n"
 

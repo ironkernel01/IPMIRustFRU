@@ -1,7 +1,8 @@
 # NUCLEO-F401RE Tier-1 demo
 
-Read the [PDF brief](ipmc_product_brief.pdf) for the demonstration, wiring,
-license choices and fees. Its editable source is [ipmc_product_brief.md](ipmc_product_brief.md).
+Read the [PDF brief](../../Documentation/ipmc_product_brief.pdf) for the demonstration, wiring,
+license choices and fees. Its editable source is [ipmc_product_brief.md](../../Documentation/ipmc_product_brief.md).
+See [validation.md](validation.md) for the current image checks and bench results.
 
 | License | One-time fee, USD per product/SKU | Maintenance |
 |---|---:|---|
@@ -48,27 +49,3 @@ application-only file to that drive. Open the console at 115200 baud, 8N1.
 The HEX file is for [fwupdate.py](../../tools/fwupdate/README.md), not drive copying.
 The demo brief includes the IPMB-A connection table and console firmware-update
 procedure. The detailed engineering and bench documents are kept locally.
-
-## Rebuild the brief
-
-Maintain `local_only/vita_commmands.md` as the editable VITA 46.11-2022 command
-catalog. Its mandatory/optional ratings and implementation columns generate the
-brief's full command appendix. The local source stays ignored; the generated
-customer appendix is included in the public brief. To update the appendix and PDF:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File demos/nucleo-f401re/build_brief.ps1
-```
-
-To rebuild drawing assets as well, or check the appendix without writing:
-
-```powershell
-python -I tools/sync_demo_commands.py
-python -I tools/sync_demo_commands.py --check
-node diagrams/src/product-brief.js
-powershell -NoProfile -ExecutionPolicy Bypass -File diagrams/tools/render.ps1 demos/nucleo-f401re/assets/product-brief.pptx
-powershell -NoProfile -ExecutionPolicy Bypass -File Documentation/build_pdf.ps1 -DocumentPath demos/nucleo-f401re/ipmc_product_brief.md
-```
-
-The drawing source stays in `diagrams/src/product-brief.js`; this demo holds its
-presentation and rendered PNG. The PDF command uses the shared document template.

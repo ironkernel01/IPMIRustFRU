@@ -1,9 +1,9 @@
 # build_pdf.ps1 - Markdown to PDF for the documents in this folder (headless Chrome, pdf_generator.md).
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Documentation\build_pdf.ps1 [ipmc_software_spec]
-#   powershell -File Documentation/build_pdf.ps1 -DocumentPath demos/nucleo-f401re/ipmc_product_brief.md
+#   powershell -File Documentation/build_pdf.ps1 -DocumentPath Documentation/ipmc_product_brief.md
 # The page is the Markdown between pdf\head.html and pdf\foot.html, rendered in the browser
 # (marked, mermaid 10.9.1, WaveDrom) and printed by Chrome. The CDN scripts need internet.
-# render.html is assembled next to the .md so the drawing paths (..\diagrams\out\png) resolve,
+# render.html is assembled next to the .md so the drawing paths (..\Documentation\diagrams\out\png) resolve,
 # and is deleted after the print. Mermaid 10.9.1 shows the label break &#10; as a space, so it
 # becomes <br/> inside mermaid fences only; the .md keeps &#10;.
 param([string]$Name = 'ipmc_software_spec', [string]$DocumentPath)

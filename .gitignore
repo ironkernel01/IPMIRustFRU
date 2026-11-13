@@ -10,8 +10,8 @@ References/
 Documentation/captured_sdr.md
 Documentation/product.md
 vectors/sbc_ab.vec
-diagrams/node_modules/
-diagrams/.venv/
+Documentation/diagrams/node_modules/
+Documentation/diagrams/.venv/
 
 # Local editor workspace (lists sibling folders on this PC)
 *.code-workspace

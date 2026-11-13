@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,15 +9,15 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 11-02-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 11-13-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -25,7 +25,8 @@
 ## Quick Start
 
 1. Host tests and the emulator, from the repository root (Rust 1.99.1 from `rust-toolchain.toml`, GNU host):
-   `cargo test --workspace`, then
+   set `$env:IPMC_TIER23 = "0"` in PowerShell for the public Tier-1 build, then
+   `cargo test --workspace`, followed by
    `cargo run -p ipmc-emu -- replay local_only/vectors/sbc_ab.vec --b-fitted 1 --b-enabled 1 --policy alternate --quiet`
    (the capture file is local only; on a fresh clone the capture tests skip with a message).
 2. Firmware build and flash (NUCLEO-F401RE on USB):
@@ -33,19 +34,21 @@
    `flash` builds the bootloader (sectors 0-1) and the runtime (from sector 3) and copies the board
    image `ipmc-board.bin` to the drive; `flash -Swd` programs the patched runtime ELF over SWD
    instead (section 12.1; the two paths treat the FRU store differently, section 9.1).
-   The console is COM3 at 115200 8N1; `gen.ps1 console "sys status"` sends one command and prints
-   the reply.
+   Select the actual ST-LINK virtual COM port at 115200 8N1 (COM4 on the current bench).
+   `gen.ps1 console -ComPort COM4 "sys status"` sends a command and prints the reply;
+   `-ComPort` defaults to COM3 for older bench setups.
 3. Bench check with an independent IPMI implementation (Aardvark on IPMB-A, PB8/PB9):
    `tools\python-ipmi\.venv\Scripts\ipmitool.exe -I aardvark -t 0x82 raw 0x06 0x01`
    answers `00 01 80 00 01 02 09 00 00 00 4b 49 00 00 00 00`;
-   `python tools/board_test_report.py` runs every bench check and writes
+   `python tools/board_test_report.py --com-port COM4` runs every bench check and writes
    `local_only/Documentation/board_test_report.md`.
 4. Capture log and application port: `DEBUG DUMP` on the console prints the IPMB capture log
    (section 10.11); `python -I tools\capture\capture2pcap.py dump.txt -o dump` turns a saved dump
    into a file Wireshark opens. A USB-serial adapter on PB6/PB7 (COM5 on the bench) reaches the
    application port (section 7.6):
    `tools\python-ipmi\.venv\Scripts\python.exe tools\app-port\app_cli.py --port COM5 INFO STATUS`.
-5. Firmware update over a UART (section 16): `gen.ps1 build` writes the patched runtime
+5. Firmware update over the console CLI or application UART is included in the public Tier-1 release
+   (section 16.5). For the onboard ST-LINK console, run the COM4 CLI procedure there. For APP, `gen.ps1 build` writes the patched runtime
    `ipmc-nucleo-f401re.hex`; `python tools\fwupdate\fwupdate.py --port COM5 --enter app --enter-port COM5
    update ipmc-nucleo-f401re.hex` asks the running firmware for the bootloader (`BOOTLOADER CONFIRM`
    on the application port), erases the runtime sectors, loads the file record by record, compares the
@@ -73,19 +76,19 @@
 
 The section 10 diagrams are Mermaid state and sequence diagrams and one WaveDrom timing diagram;
 the block drawings are the seven sheets of the `ipmc-software` drawing set
-(`diagrams/src/ipmc-software.js`, rendered to `diagrams/out/png/`): sheet 1 crate structure (Figure
+(`Documentation/diagrams/src/ipmc-software.js`, rendered to `Documentation/diagrams/out/png/`): sheet 1 crate structure (Figure
 4-1), sheet 2 request path (Figure 10-1), sheet 3 sensor data, FRU state and persistence (Figure
 10-2), sheet 4 build, test and bench setup (Figure 13-1), sheet 5 flash map and images (Figure 9-1),
 sheet 6 firmware update data path (Figure 16-1), sheet 7 payload processor integration (Figure 7-1).
-The Google Slides reference copies wait for the Drive folder (`diagrams/drive-config.json` holds
+The Google Slides reference copies wait for the Drive folder (`Documentation/diagrams/drive-config.json` holds
 `folder_id` TBD); until it is set, the source and the rendered sheets are the drawing set.
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -144,8 +147,8 @@ captured live Chassis Manager disagree, the code follows the specification.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -166,7 +169,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 - **Peers on the IPMB:** a Chassis Manager at 8-bit address 20h (`IPMB_CM_ADDR8`; the captured
   live Chassis Manager uses 10h). The IPMC answers at (40h + GA[4:0]) x 2: slot 1 is 82h.
 - **Bench:** an Aardvark I2C host adapter on IPMB-A with its pull-ups on, driven by python-ipmi
-  as the Chassis Manager; the ST-LINK USB port carries the console (COM3) and the drag-and-drop
+  as the Chassis Manager; the ST-LINK USB port carries the console (COM4 on the current bench) and the drag-and-drop
   flash drive (`NOD_F401RE`); a USB-serial adapter (COM5) on PB6 and PB7 carries the application
   port (`tools/app-port/app_cli.py`).
 - **Normative documents:** ANSI/VITA 46.11-2022 (local, licensed, not in the repository),
@@ -190,8 +193,8 @@ captured live Chassis Manager disagree, the code follows the specification.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -242,7 +245,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 | Bus-free wait | at least 60 ms (T2) | `IPMB_BUS_FREE_TIMEOUT_MS 60`; ends at the write budget |
 | One IPMB frame | at most 20 ms (T1) | `ipmb_common.rs` `T1_FRAME_NS` |
 | IPMB clock | 100 kHz maximum; 400 kHz maximum in FAST-MODE (Tier-3) | half bit 5000 ns; measured SCL period 12.0 us (83 kHz). FAST-MODE: bit-bang 6795 ns (about 147 kHz), hardware master 2981 ns (about 335 kHz) |
-| Runtime image check | 172 ms for the 139 456-byte image at 84 MHz | `header::check` SHA-256, once per reset; `Image check:` line of the bootloader trace; about 1.2 us per byte |
+| Runtime image check | 164 ms for the 133,120-byte Tier-1 image at 84 MHz (11-13-2026) | `header::check` SHA-256, once per reset; `Image check:` line of the bootloader trace; about 1.2 us per byte |
 | Flash sector erase | typical 250 ms, at most 500 ms (16 KB sector, x32 programming), core stalled; 198 ms measured on the bench | DS10086 Table 45; IPMB slaves off the bus meanwhile; one erase per 60 saves, and only when the bus is quiet |
 
 ### Compliance requirements
@@ -255,8 +258,8 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -267,9 +270,9 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 
 **Figure 4-1.** Crate structure and dependencies (ipmc-software, sheet 1)
 
-![Crate structure and dependencies](../diagrams/out/png/ipmc-software-1.png)
+![Crate structure and dependencies](diagrams/out/png/ipmc-software-1.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 1.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 1.
 
 The code is a Cargo workspace of eleven crates plus the firmware crate, which is its own
 workspace (it builds only for `thumbv7em-none-eabihf`). Dependencies point one way: the binaries at
@@ -376,8 +379,8 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -457,8 +460,8 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -638,8 +641,8 @@ Pin assignments are not in `defs.rs`: they live in the owning board-support modu
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1314,8 +1317,8 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1536,7 +1539,7 @@ The Tier-2/3 values live in the private configuration file `defs_tier23.rs` (gua
 
 ### 7.3 Console
 
-COM3, 115200 8N1 (`IPMC_CONSOLE_BAUD`), prompt `CLI> ` (`CLI/<group>> ` inside a group; `IPMC_CONSOLE_PROMPT`). `HELP` or `?` lists the groups;
+The selected ST-LINK COM port (COM4 on the current bench), 115200 8N1 (`IPMC_CONSOLE_BAUD`), prompt `CLI> ` (`CLI/<group>> ` inside a group; `IPMC_CONSOLE_PROMPT`). `HELP` or `?` lists the groups;
 `<GROUP> HELP` lists a group; a command is typed in full from the top level (`SENSORS SHOW`) or
 after entering its group, and `UP` or `..` leaves the group. A line holds at most 128 bytes and 40
 tokens. A syntax token in `[ ]` is required, in `{ }` optional, and a last `{NAME...}` takes every
@@ -1916,9 +1919,9 @@ APP>
 
 **Figure 7-1.** Payload processor integration through the application port (ipmc-software, sheet 7)
 
-![Payload processor integration through the application port](../diagrams/out/png/ipmc-software-7.png)
+![Payload processor integration through the application port](diagrams/out/png/ipmc-software-7.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 7.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 7.
 
 `ipmc-app` is a reference crate for a customer application (PLAN decision 27): it may repeat code of the
 other crates, and a customer application replaces or extends it. The protocol crate never touches
@@ -2036,8 +2039,8 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2082,8 +2085,8 @@ flash and, after a software reset, the request sequence words described below.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2149,8 +2152,8 @@ emulator models the board.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2297,8 +2300,8 @@ switch and its mechanism are public code; section 7.2 lists the commands of the 
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2309,9 +2312,9 @@ switch and its mechanism are public code; section 7.2 lists the commands of the 
 
 **Figure 9-1.** Flash map, writers of each region and the boot request (ipmc-software, sheet 5)
 
-![Flash map, writers of each region and the boot request](../diagrams/out/png/ipmc-software-5.png)
+![Flash map, writers of each region and the boot request](diagrams/out/png/ipmc-software-5.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 5.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 5.
 
 The STM32F401RE has 512 KB of flash in eight sectors (RM0368 Table 5). `flash_map.x` is the one
 place of every address; the runtime script (`link.x`, through `memory.x`) and the bootloader
@@ -2457,8 +2460,8 @@ event enable).
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2500,6 +2503,11 @@ built image runs, and the first save after NVMRO clears erases them. A flash by 
 the sector before the boot.
 
 ### 9.5 Device SDR repository
+
+The current default includes six analog sensors: **13 sensors and 14 records at
+Tier-1/2**, with the locator at **000Dh**; Tier-3 has 14 sensors, 15 records and
+locator **000Eh**. The first table below shows the mandatory-only layout before
+analog records are inserted ahead of the locator.
 
 | Record ID | Type | Content |
 |---:|---|---|
@@ -2564,8 +2572,8 @@ State M5), has the Payload Mode sensor (sensor 7, Rule 6.1-17) and supports FAST
 | Get Sensor Reading status bit 7 at power-up (all sensors) | 0 | 1 | 1 |
 | event generator, SEL device, per-state event enables | no, no, no | yes, no, no | yes, yes, yes |
 | activation control (M5), Payload Mode sensor, FAST-MODE | no, no, no | no, no, no | yes, yes, yes |
-| sensors, SDR records (Get Device SDR Info) | 7, 8 | 7, 8 | 8, 9 |
-| locator record ID (Get Device Locator Record ID) | 0007h | 0007h | 0008h |
+| sensors, SDR records with the default analog sensors (Get Device SDR Info) | 13, 14 | 13, 14 | 14, 15 |
+| locator record ID with the default analog sensors (Get Device Locator Record ID) | 000Dh | 000Dh | 000Eh |
 | Get VSO Capabilities, IPMB capabilities byte bits 5:4 (maximum frequency) | 00b, 100 kHz | 00b, 100 kHz | 01b, 400 kHz |
 | sensor 0 reading mask (FRU State) | 0053h | 0053h | 0073h |
 | sensor 1 reading mask (IPMB Link) | 000Fh | 000Fh | 003Fh |
@@ -2599,8 +2607,8 @@ enables cannot disagree.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2611,9 +2619,9 @@ enables cannot disagree.
 
 **Figure 10-1.** Firmware request path, receive to transmit (ipmc-software, sheet 2)
 
-![Firmware request path, receive to transmit](../diagrams/out/png/ipmc-software-2.png)
+![Firmware request path, receive to transmit](diagrams/out/png/ipmc-software-2.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 2.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 2.
 
 - On receive, the I2C EV interrupt (`i2c_hw.rs` `on_event`) clears ADDR, starts a frame with
   the matched address byte, appends each data byte, and at STOP posts the frame with the SysTick
@@ -2687,9 +2695,9 @@ IPMB-B or the first recorded fault of IPMB-B.
 
 **Figure 10-2.** Sensor data, FRU state and FRU persistence (ipmc-software, sheet 3)
 
-![Sensor data, FRU state and FRU persistence](../diagrams/out/png/ipmc-software-3.png)
+![Sensor data, FRU state and FRU persistence](diagrams/out/png/ipmc-software-3.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 3.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 3.
 
 Once per `IPMC_SENSOR_PERIOD_MS` the `Monitor` reads the inputs, steps the power state machine,
 drives PWR_EN, builds a `SensorSnapshot` and prints the change lines. `IpmbLink::feed_sensors`
@@ -2704,8 +2712,8 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2771,8 +2779,8 @@ the payload off at boot.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2845,8 +2853,8 @@ sequenceDiagram
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2893,8 +2901,8 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2943,8 +2951,8 @@ saves it after the quiet time.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3022,8 +3030,8 @@ sends at that moment is lost and recovered by the requester's retry.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3153,8 +3161,8 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3252,8 +3260,8 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3318,7 +3326,29 @@ drive copy, `-Drive` never uses OpenOCD (both together are refused), and a SWD p
 and fails is an error. SWD needs the WinUSB driver on the ST-LINK debug interface. The paths leave
 the FRU store in different states (section 9.1). `gen.ps1 console <command>` reads a reply until the console has been quiet for
 600 ms, up to 60 s and 131072 bytes, so a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud)
-comes back whole.
+comes back whole. For `SYS RESET`, the helper extends its quiet-read timeout using
+`IPMC_BOOT_COUNTDOWN_BENCH` plus one second, so the boot countdown does not truncate
+the captured runtime banner. `-ComPort` selects the actual serial port (COM4 on this
+bench, default COM3 for compatibility).
+
+### 12.1.1 Public demo package and engineering files
+
+`demos/nucleo-f401re/package.ps1` builds and checks Tier-1 explicitly with
+`IPMC_TIER23=0`, even when the private extension is present. It exports the combined
+`ipmc-board-tier1.bin`, UART-loadable `ipmc-nucleo-f401re-tier1.hex`, a SHA-256
+list and a build manifest to the demo's `images/` directory. The manifest identifies
+the source revision, dirty-worktree state, compiler, configuration hash and Tier.
+The packaging command does not program a board. Initial drive programming erases
+the saved FRU store; UART APP reload preserves it.
+
+The root `README.md` links all public PDF documentation, the demo firmware, scripts,
+license choices and per-product/SKU pricing. The detailed board, portability,
+bootloader planning and bench documents are retained under ignored
+`local_only/Documentation`; public users do not need those files to build or reload
+the Tier-1 demo. Edit `local_only/vita_commmands.md` to maintain the full command
+catalog, then run `Documentation/build_brief.ps1` to regenerate the public
+command appendix and brief PDF. The generator does not overwrite the local catalog.
+Questions and licensing: support@ironkernel.com.
 
 ### 12.2 Changing a tunable
 
@@ -3381,8 +3411,8 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3391,14 +3421,19 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 
 **Figure 13-1.** Build, test and bench setup (ipmc-software, sheet 4)
 
-![Build, test and bench setup](../diagrams/out/png/ipmc-software-4.png)
+![Build, test and bench setup](diagrams/out/png/ipmc-software-4.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 4.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 4.
 
-### 13.1 Host tests (776 tests in the build with the extension, 723 with `IPMC_TIER23=0`, 10-27-2026)
+### 13.1 Host and tool tests (11-13-2026)
 
 `Documentation/ipmc_test_coverage.md` lists every test case with its result; this section names what each
 crate covers.
+
+The current run uses rustc 1.99.1 (58cf8f9c3, 2026-10-13), the GNU Windows host and
+the repository lockfiles. Tier-1 has **800 Rust cases, all passed**; the extension
+build has **853 Rust cases, all passed**. The executed Python tool tests report **220 passed and 0 failed**. Both capture replay baselines pass.
+Hardware and serial-reload results are separate from these host results.
 
 | Crate | Covers |
 |---|---|
@@ -3432,75 +3467,62 @@ The differences are designed: the capture's IPMC is an earlier-revision controll
 commands the 2022 specification makes not applicable to Tier 1 (C1h here), and the Device ID, FRU
 and SDR contents are this IPMC's own.
 
-### 13.3 Conformance suite and Chassis Manager
+### 13.3 Executed requirement checks and Chassis Manager tests
 
-`tools/conformance/` holds one test per testable Tier-1 requirement (157 rows in
-`REQUIREMENTS.md`), written from the specification texts only, against `TRANSPORT.md`, by an author
-who did not read this code. A failure is fixed in the IPMC or disputed with a specification
-citation, never by editing a test. Results on 10-23-2026: emulator 102 PASS, 0 FAIL, 55
-NOT-TESTABLE; board 97 PASS, 0 FAIL, 60 NOT-TESTABLE (pins, electrical checks, second bus,
-optional features and NVMRO pin control cannot be observed on the one-Aardvark bench). The Chassis
-Manager emulator completes discovery, FRU and SDR reads, the locator check and polling on both
-targets, and its cross-check against the captured Chassis Manager reports 0 unexpected differences.
-The Phase 10 results are in section 13.6.
+Current validation, 11-13-2026:
 
-### 13.4 Board test report
+| Executed tests | PASS | FAIL |
+|---|---:|---:|
+| Tier-1 strict emulator requirement checks | 103 | 0 |
+| Tier-1 physical IPMB-A requirement checks | 98 | 0 |
+| Board report: environment | 7 | 0 |
+| Board report: command-line commands and error probes | 27 | 0 |
+| Board report: Chassis Manager | 11 | 0 |
+| Board report: requirement checks and totals check | 99 | 0 |
+| Board report: link and driver health | 8 | 0 |
+| Board report: FRU persistence and restoration | 8 | 0 |
+| Board report total executed checks | 160 | 0 |
 
-`python tools/board_test_report.py` runs against the board over I2C and writes
-`local_only/Documentation/board_test_report.md`: environment (7 checks), command line through python-ipmi (27),
-Chassis Manager (12), conformance (157 tests and a totals row: 98 PASS with the totals row, 60
-NOT-TESTABLE), link health from the console
-counters (8) and FRU persistence across a reset with `FRU RESTORE` (8). The 10-23-2026 run on the
-release image (81,360 bytes) records 160 PASS, 0 FAIL, 60 NOT-TESTABLE; 950 requests received and 950
-responses sent, every master and driver error counter at 0.
+The board report includes its requirement checks; these counts overlap and must
+not be added as independent hardware tests. This section lists executed checks.
+The tested physical setup is NUCLEO-F401RE with one Aardvark on IPMB-A and the
+onboard ST-LINK console on COM4. The strict emulator uses both simulated buses,
+`--policy alternate --b-power-up strict`; the capture cross-check reports zero
+unexpected differences. Host replay baselines are in section 13.2.
 
-### 13.5 Checks not yet run on hardware
+```powershell
+$env:IPMC_TIER23 = '0'
+cargo run -p ipmc-emu -- serve --port 49183 --b-fitted 1 `
+  --policy alternate --b-power-up strict
+# In another terminal:
+tools/python-ipmi/.venv/Scripts/python.exe tools/conformance/run_conformance.py `
+  --transport emu --port 49183 --report tools/conformance/conformance_emu.md
+```
 
-The bench wiring of APP_UART uses no handshake (`local_only/Documentation/nucleo_f401re_pinout.md`, section 7), so RTS/CTS (`IPMC_APP_UART_FLOW` true) has not run on hardware. Scope measurement of SCL/SDA in both master modes, at 100 kHz and in FAST-MODE (the FAST-MODE periods of section 10.9 are DWT-counter measurements); clock-stretch timeout and stuck-line jumper
-tests; arbitration loss with a second master; start-up fault recovery with a line held low; IPMB-B
-on hardware, with failover, and FAST-MODE on both buses (needs a second Aardvark, one per IPMB); NVMRO from the
-strap pin (the NVMRO-asserted bench cases wait until the pin can be driven; host tests cover them); the BOOTLOADER pin jumper and power cuts during `LOAD`, `ERASE APP` and `ERASE FRU` (`local_only/Documentation/ipmc_boot_plan.md`, tests B11 to B15); heartbeat LED by eye; power and fault input jumpers; Broadcast Get Device ID through a
-second independent tool. `.claude/PLAN.md` section 7 lists the
-procedure and expected result of each.
+The public PASS/FAIL results are generated from executed checks. Full raw reports
+remain local for engineering traceability. The default NonStrict bench policy uses
+arrival-bus responses; the strict dual-bus requirement checks use the explicit
+alternate/strict configuration above.
 
-### 13.6 Phase 10 acceptance (10-24-2026)
+### 13.4 Serial reload and persistence acceptance
 
-| Check | Build | Result |
-|---|---|---|
-| Tier-1 conformance suite on the emulator | public Tier-1 | 102 PASS, 0 FAIL |
-| Tier-2 and Tier-3 behaviour, Chassis Manager checks, evaluation image | commercial release build | section 7.2 and `Documentation/ipmc_test_coverage.md` (section "Tier-2/3 extension") |
+The public Tier-1 image was programmed through ST-LINK, exercised over IPMB-A,
+then reloaded through the console CLI in 38.1 seconds. The bootloader verified the
+application SHA-256 and returned `OK RUN`. Subsequent boot confirmed Tier-1 identity,
+self-test `55h 00h` and the expected image length/digest. Decoded FRU Board/Product
+fields remained unchanged across reload. The physical board report was then rerun,
+including write/reset/persistence/restoration checks, with 160 PASS and 0 FAIL.
+See section 16.5 for the exact procedure and section 16.7 for measured values.
 
-### 13.7 Phase 11 bench facts (10-25-2026)
-
-| Item | Result |
-|---|---|
-| Run-time sector erase of the FRU store | the IPMB was silent for 198 ms (console line `FRU log: erased the store sector at run time (IPMB paused 198 ms)`), against DS10086 Table 45 typical 250 ms and maximum 500 ms for a 16 KB sector at x32 programming; one erase per 60 saves, and only when the bus is quiet |
-| python-ipmi request sequence | every request goes out with sequence number 01h, so identical requests inside the duplicate-cache window (`IPMB_DUP_WINDOW_MS`) are answered from the cache, which is the IPMB rule; a bench loop varies the request |
-| `gen.ps1 console` reply | read until 600 ms of silence, at most 60 s and 131072 bytes per reply; a full `DEBUG DUMP` (about 25 KB, 2.3 s at 115200 baud) comes back whole |
-| Capture log | `IPMC_IPMI_TRACE` false removes the link and dispatcher lines from the log as well as from the console |
-
-### 13.8 Phase 12 bench facts (10-26-2026)
-
-| Item | Result |
-|---|---|
-| Start-up image check | 172 ms for the 139 456-byte runtime (171 ms for the earlier 138 524-byte image) |
-| `SYS RESET` to the runtime banner | 3.18 s in the bench build (3 s countdown), 187 ms in the field build |
-| `ERASE APP` | 3.5 s to 3.6 s |
-| Full update | about 75 s over APP (USART1) and about 40 s over CLI (USART2), 4 354 records, no record resent |
-| Entry commands | `DEBUG BOOTLOADER` and `BOOTLOADER` warn and do not restart while payload power is on; `CONFIRM` restarts |
-| Range refusal | records at `0x0800_0000` and `0x0800_8000` answer `ERR RANGE`; the bootloader is intact after a reset |
-| Damaged and wrong images | a damaged record checksum answers `ERR CHECKSUM` and the resend `OK`; an image with one changed data byte ends `ERR IMAGE digest mismatch`, the next reset stays in the bootloader, and a correct update recovers |
-| `ERASE FRU` and `RUN` | the runtime loads the built FRU image: `no stored image, built image in use` |
-| Not run yet | power cuts during `LOAD`, `ERASE APP` and `ERASE FRU`, and the BOOTLOADER pin jumper (owner-deferred bench tests B11 to B15) |
-
-The numbered tests are in `local_only/Documentation/ipmc_boot_plan.md`, section 13.3.
+The public validation record is `demos/nucleo-f401re/validation.md`; the root README
+links firmware downloads, operator instructions, license/pricing and the public PDFs.
 
 <div style="page-break-after: always;"></div>
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3576,8 +3598,8 @@ The numbered tests are in `local_only/Documentation/ipmc_boot_plan.md`, section 
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3589,8 +3611,9 @@ runtime firmware and either starts it, counts down for a `WAKEUP`, or stays and 
 session on one of the two UARTs (PLAN decisions 31 and 33 to 37). Every decision is the host-tested
 `ipmc-boot` crate (`crates/ipmc-boot`, `no_std`, `forbid(unsafe_code)`); the binary `ipmc-boot`
 (`crates/ipmc-nucleo-f401re/src/boot/`) is the glue that reads the pins, moves bytes between the UART
-rings and the session, programs the flash and performs the jump. The release image is 22 336 bytes
-(`.text` 22 272 B and `.data` 40 B) of the 32 768 bytes of sectors 0 and 1;
+rings and the session, programs the flash and performs the jump. The current bootloader
+BIN is 23,360 bytes (`.text` 23,320 B and `.data` 40 B), measured 11-13-2026,
+of the 32,768 bytes of sectors 0 and 1;
 `local_only/Documentation/ipmc_boot_plan.md` is the design of record and gives the open questions and their
 answers. Section 16 covers the image header, the digest and the update procedure.
 
@@ -3830,8 +3853,8 @@ PWR_EN, PAYLOAD_RST_OUT_N, the ADC, I2C1, I2C3 or the FRU store.
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3840,9 +3863,9 @@ PWR_EN, PAYLOAD_RST_OUT_N, the ADC, I2C1, I2C3 or the FRU store.
 
 **Figure 16-1.** Firmware update data path and start-up image check (ipmc-software, sheet 6)
 
-![Firmware update data path and start-up image check](../diagrams/out/png/ipmc-software-6.png)
+![Firmware update data path and start-up image check](diagrams/out/png/ipmc-software-6.png)
 
-Source: `diagrams/src/ipmc-software.js`, sheet 6.
+Source: `Documentation/diagrams/src/ipmc-software.js`, sheet 6.
 
 The runtime firmware in sectors 3 to 7 carries a header with its length and SHA-256 digest. The
 bootloader checks it at every reset and before every start, and a host tool replaces the runtime over
@@ -3940,6 +3963,64 @@ reset (section 15.4).
 
 ### 16.5 Update procedure
 
+#### 16.5.1 Public Tier-1: reload through the console CLI
+
+This feature, the bootloader and `tools/fwupdate/` are included in the public Tier-1
+software. No private Tier-2/3 source or commercial extension is required to use the
+CLI update mechanism. The applicable license still governs Product deployment.
+
+1. Obtain `demos/nucleo-f401re/images/ipmc-nucleo-f401re-tier1.hex` and verify its
+   file hash against `SHA256SUMS.txt`, or build it with the demo packaging script.
+   This is the application image, linked from `0x0800C000`; the combined board BIN
+   is for initial ST-LINK drive programming, not UART loading.
+2. Connect the NUCLEO ST-LINK USB connector and find its virtual COM port. The current
+   bench uses COM4; COM numbers are assigned by Windows. The console is 115200 baud,
+   8 data bits, no parity, one stop bit. Close other serial applications first.
+3. Install Python 3 and `pyserial` (`python -m pip install pyserial`). From the
+   repository root, replacing COM4 with the port found in step 2, run:
+
+```powershell
+python tools/fwupdate/fwupdate.py --port COM4 --uart cli `
+  --enter cli --enter-port COM4 update `
+  demos/nucleo-f401re/images/ipmc-nucleo-f401re-tier1.hex
+```
+
+4. The tool sends `DEBUG BOOTLOADER` to the running CLI and requests confirmation
+   if restarting interrupts payload power. The manual confirmed form is
+   `DEBUG BOOTLOADER CONFIRM`; `--confirm` on the host tool intentionally supplies
+   confirmation automatically. This resets the application and can drop payload power.
+5. The tool waits for `BOOT>`, checks the HEX/header/digest on the PC, sends
+   `ERASE APP` and `CONFIRM`, streams the Intel HEX records after `LOAD`, runs
+   `VERIFY`, compares the returned SHA-256 with the image header, and sends `RUN`.
+   A successful run exits 0. Ordinary APP update preserves bootloader sectors 0-1
+   and FRU-store sector 2; the application uses sectors 3-7.
+6. Reopen the CLI or run the helper below. Check the Tier-1 identity, self-test,
+   FRU checksums and IPMB-A response after the reload:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File crates/ipmc-nucleo-f401re/gen.ps1 console -ComPort COM4 `
+  "sys status" "fru show" "ipmb stats"
+```
+
+For manual loading, the bootloader accepts `WAKEUP`, `INFO`, `ERASE APP`,
+`CONFIRM`, `LOAD`, Intel HEX records, `VERIFY` and `RUN`. Follow the exact ordering
+and prompt handling below; the host tool is preferred for full images. Use
+`--no-run` when deliberately remaining in the bootloader after verification.
+The application UART is also supported with `--uart app --enter app` and a separate
+3.3 V UART connection on PB6/PB7; it is not required for console CLI loading.
+
+If the port cannot be opened, close its other user and recheck the COM number.
+If the running firmware cannot enter the bootloader, fit the documented boot-entry
+jumper PC10 to 3.3 V and use the field procedure in `tools/fwupdate/README.md`,
+or recover using the combined board image through ST-LINK. A failed or interrupted
+APP load is not a reason to erase the FRU store or overwrite the bootloader.
+SHA-256 validates integrity; this mechanism does not authenticate a publisher or
+verify a firmware signature. Preserve the supplied console log and exit status
+when recording an update test.
+
+#### 16.5.2 Host tool and wire sequence
+
 `tools/fwupdate/fwupdate.py` (settings in `fwu_settings.py`, README in `tools/fwupdate/`;
 `--port` is required, `--uart cli` or `app` names the port and picks the baud rate):
 
@@ -3996,7 +4077,7 @@ sequenceDiagram
     S-->>H: OK RUN, then the start sequence
 ```
 
-### 16.6 Never bricking
+### 16.6 Update recovery and protected regions
 
 - No bootloader command names sector 0 or 1: the erase targets are sector 2 and sectors 3 to 7, and
   `load_allowed` refuses any record below `0x0800_C000`.
@@ -4016,6 +4097,25 @@ sequenceDiagram
 
 ### 16.7 Measured numbers
 
+Current Tier-1 console reload, 11-13-2026, NUCLEO-F401RE, COM4 at 115200 baud:
+
+| Quantity | Current measured value |
+|---|---|
+| Application image / combined board image | 133,120 / 182,272 bytes |
+| Bootloader BIN | 23,360 bytes |
+| Host CLI update duration | 38.1 s, exit 0 |
+| Bootloader end-of-load response | `OK END 4157 records 133000 bytes, image valid` |
+| Verification | `OK VERIFY valid SHA-256 182777d6d3055c3c37b6fa7b1bbd510cee6f933709bd36c8b4069a4f66347503 164 ms` |
+| Restart | `OK RUN`; subsequent boot confirms Tier-1 FRU identity and self-test `55h 00h` |
+| Runtime sections | text 132,804 bytes; data 184 bytes; BSS 23,164 bytes |
+| Bootloader sections | text 23,320 bytes; data 40 bytes; BSS 6,176 bytes |
+
+The full application file includes its header and padding; the loader's programmed-byte
+count excludes records skipped or interpreted as addressing/termination metadata.
+See the demo image manifest for file hashes and build provenance. The following older
+measurements remain historical evidence for their stated image and date, not the current
+package's size or test result.
+
 Bench measurements of 10-26-2026 (release build, 115200 baud, 84 MHz; `local_only/Documentation/ipmc_boot_plan.md`
 sections 13.2 and 13.3):
 
@@ -4033,8 +4133,8 @@ sections 13.2 and 13.3):
 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
-<td style="text-align:left; border:none; padding:0; width:50%;"><strong>CONFIDENTIAL DOCUMENT &#8211; DO NOT DISCLOSE</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-02-2026</strong></td>
+<td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">

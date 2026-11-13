@@ -1,5 +1,5 @@
 // Drawing set: ipmc-software (7 sheets) for Documentation/ipmc_software_spec.md.
-// Build: node diagrams/src/ipmc-software.js  ->  diagrams/out/ipmc-software.pptx
+// Build: node Documentation/diagrams/src/ipmc-software.js  ->  Documentation/diagrams/out/ipmc-software.pptx
 // Fills: white = no_std code shared by firmware and host build, gray = firmware only (STM32),
 // blue = host only (PC), yellow = configuration or data file.
 const path = require("path");

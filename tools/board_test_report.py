@@ -4,7 +4,7 @@
 
 Writes local_only/Documentation/board_test_report.md (generated, overwritten on every run) and exits 1 when
 any row is FAIL. The board sits on IPMB-A behind a Total Phase Aardvark; the firmware console is
-COM3 (one program at a time). Sections:
+selected with --com-port (default COM3; one program at a time). Sections:
 
     A environment           D conformance suite          G summary
     B command line          E link and driver health
@@ -37,7 +37,7 @@ import trace2vec  # noqa: E402  (the one IPMB zero checksum)
 import defs as defs_reader  # noqa: E402  (tools/defs.py, the one reader of the configuration)
 REPORT = ROOT / "local_only" / "Documentation" / "board_test_report.md"
 FIRMWARE_DIR = ROOT / "crates" / "ipmc-nucleo-f401re"
-FIRMWARE_BIN = FIRMWARE_DIR / "target" / "thumbv7em-none-eabihf" / "release" / "ipmc-nucleo-f401re.bin"
+FIRMWARE_BIN = FIRMWARE_DIR / "target" / "thumbv7em-none-eabihf" / "release" / "ipmc-board.bin"
 GEN_PS1 = FIRMWARE_DIR / "gen.ps1"
 SCRATCH = ROOT / "local_only" / ".scratch"
 CM_SCRIPT = ROOT / "tools" / "chassis-manager" / "chassis_manager.py"
@@ -57,7 +57,8 @@ CHILD_TIMEOUT_MARGIN_S = 120
 FRU_READ_CHUNK = 16           # Read FRU Data bytes per request (the Chassis Manager uses the same size)
 OBSERVED_MAX = 220            # characters of observed text kept in a table cell
 SELF_TEST_OK = "00 55 00"
-LINK_SENSOR_OK = "08 40 02"   # sensor 1, IPMB-A enabled, B not fitted (VITA Table 10.2.2-1)
+LINK_SENSOR_OK = "08 40 02"   # sensor 1 after A-only Chassis Manager setup (VITA Table 10.2.2-1)
+CONSOLE_PORT = "COM3"
 STATUSES = ("PASS", "FAIL", "NOT-TESTABLE")
 
 NOT_COVERED = (
@@ -143,7 +144,8 @@ def ipmitool(arguments: str):
 
 def console(*commands: str) -> str:
     """Send each command to the firmware console through gen.ps1 and return the whole reply text."""
-    rc, text = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", GEN_PS1, "console", *commands],
+    rc, text = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", GEN_PS1,
+                    "console", "-ComPort", CONSOLE_PORT, *commands],
                    CONSOLE_TIMEOUT_S)
     return text if rc == 0 else f"console failed (rc {rc}): {text}"
 
@@ -226,7 +228,7 @@ def named_checks(defs: dict) -> dict:
         "fru print": lambda t: need(t, "Board Info Area:", "Product Info Area:", *fru_fields),
         "sdr list": sdr_list,
         "sdr showall": sdr_showall,
-        "vita properties": lambda t: need(t, "Tier 1", "Layer 1", "100kHz", "1 IPMB interface supported",
+        "vita properties": lambda t: need(t, "Tier 1", "Layer 1", "100kHz", "2 IPMB interfaces supported",
                                           "VITA 46.11", "Max FRU Device ID : 0x00"),
         "vita addrinfo": lambda t: need(t, "Hardware Address : 0x41", "IPMB-0 Address : 0x82", "FRU ID : 0x00",
                                         "Site ID : 0x01"),
@@ -258,7 +260,7 @@ def section_a(report: Report, defs: dict) -> str:
               "Self test": r"Self test:\s+55h 00h \(passed\)"}
     for n, (label, pattern) in enumerate(wanted.items(), start=4):
         found = re.search(pattern, banner)
-        rows.append(Row(f"A{n:02d}", f"Console banner: {label}", "gen.ps1 console 'sys reset', read COM3",
+        rows.append(Row(f"A{n:02d}", f"Console banner: {label}", f"gen.ps1 console 'sys reset', read {CONSOLE_PORT}",
                         pattern, found.group(0) if found else "not found", verdict(bool(found))))
     master = "bit-bang" if defs["IPMB_MASTER_MODE"] == "BitBang" else "hardware I2C"
     rows.append(Row("A07", "Build configuration", "defs.rs IPMB_MASTER_MODE, IPMB_BUS_A_ENABLE, IPMB_BUS_B_ENABLE",
@@ -335,16 +337,16 @@ def section_c(report: Report, duration_s: float):
         ("Discovery: Broadcast Get Device ID answered", "broadcast ... -> ok",
          "answered" if re.search(r"broadcast Get Device ID .* -> ok", log) else "no answer",
          bool(re.search(r"broadcast Get Device ID .* -> ok", log))),
-        ("Get VSO Capabilities", "ok, Layer 1 IPMC, Tier-1, one IPMB interface",
+        ("Get VSO Capabilities", "ok, Layer 1 IPMC, Tier-1, two IPMB interfaces",
          (re.search(r"Get VSO Capabilities .* -> (ok .*)", log) or [None, "no response"])[1],
-         bool(re.search(r"Get VSO Capabilities .* -> ok Layer 1 IPMC, Tier-1, ipmb interfaces 1", log))),
+         bool(re.search(r"Get VSO Capabilities .* -> ok Layer 1 IPMC, Tier-1, ipmb interfaces 2", log))),
         ("FRU read", f"{fru_size} of {fru_size} bytes", (re.search(r"read \d+ of \d+ FRU bytes", log) or ["no read"])[0],
          f"read {fru_size} of {fru_size} FRU bytes" in log),
         ("FRU board area decoded", "manufacturer and serial from defs.rs",
          f"{board.get('manufacturer')}, {board.get('serial')}",
          bool(board.get("manufacturer")) and bool(board.get("serial"))),
-        ("SDR walk", "8 SDR records, 7 sensors", (re.search(r"\d+ SDR records read and decoded, \d+ sensors", log) or ["no walk"])[0],
-         "8 SDR records read and decoded, 7 sensors" in log),
+        ("SDR walk", "14 SDR records, 13 sensors", (re.search(r"\d+ SDR records read and decoded, \d+ sensors", log) or ["no walk"])[0],
+         "14 SDR records read and decoded, 13 sensors" in log),
         ("Locator record ID matches the MC locator SDR", "match", "match" if "matches the MC locator" in log else "no match",
          "matches the MC locator" in log),
         ("Polling cycles", f">= {cycles_wanted}", poll.get("cycles"), (poll.get("cycles") or 0) >= cycles_wanted),
@@ -356,10 +358,18 @@ def section_c(report: Report, duration_s: float):
         rows.append(Row(f"C{n:02d}", what, how, expected, observed, verdict(bool(ok))))
     time.sleep(PHASE_GAP_S)
     rc, text = run([VENV_PYTHON, CROSSCHECK_SCRIPT, summary_path], CHILD_TIMEOUT_MARGIN_S)
+    (SCRATCH / "board_report_crosscheck.log").write_text(text, encoding="utf-8")
     result = re.search(r"RESULT: (\d+) unexpected difference\(s\)", text)
+    single_bus_bench = summary.get("transport") == "aardvark" and summary.get("buses_enabled") == ["A"]
+    dual_interface_ipmc = "ipmb interfaces 2" in log
+    capture_status = verdict(bool(result) and result.group(1) == "0" and rc == 0)
+    observed = result.group(0) if result else f"no result (rc {rc})"
+    if single_bus_bench and dual_interface_ipmc:
+        capture_status = "NOT-TESTABLE"
+        observed = "dual-bus capture comparison requires both buses; this bench transport has only IPMB-A"
     rows.append(Row(f"C{len(checks) + 1:02d}", "Cross-check against the captured Chassis Manager",
                     "crosscheck.py local_only/.scratch/board_report_cm.json", "RESULT: 0 unexpected difference(s)",
-                    result.group(0) if result else f"no result (rc {rc})", verdict(bool(result) and result.group(1) == "0" and rc == 0)))
+                    observed, capture_status))
     return log, summary
 
 
@@ -554,10 +564,13 @@ def render(report: Report, started: str) -> str:
 
 
 def main(argv=None) -> int:
+    global CONSOLE_PORT
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--duration-s", type=float, default=10.0, help="Chassis Manager polling length")
     parser.add_argument("--skip-persistence", action="store_true", help="skip section F (FRU write and reset)")
+    parser.add_argument("--com-port", default=CONSOLE_PORT, help="NUCLEO console port")
     args = parser.parse_args(argv)
+    CONSOLE_PORT = args.com_port
     started = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     defs = read_defs()
     report = Report()

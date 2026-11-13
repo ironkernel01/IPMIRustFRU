@@ -64,6 +64,7 @@ param(
     [switch]$Drive,
     [switch]$Swd,
     [switch]$Bootloader,
+    [string]$ComPort = 'COM3',
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)][string[]]$Commands
 )
 
@@ -90,7 +91,6 @@ $headerBin = Join-Path $releaseDir "app_header$suffix.bin"
 $programElf = Join-Path $releaseDir "ipmc-nucleo-f401re$suffix.elf"
 $hex = Join-Path $releaseDir "ipmc-nucleo-f401re$suffix.hex"
 $bin = Join-Path $releaseDir "ipmc-board$suffix.bin"
-$ComPort = 'COM3'
 # The baud rate is IPMC_CONSOLE_BAUD of crates\ipmc-defs\src\defs.rs, the same define the firmware
 # reads; tools\defs.py is the one reader of that file outside the Rust build.
 $DefsReader = Join-Path $root '..\..\tools\defs.py'
@@ -318,6 +318,13 @@ function Invoke-Console {
     try {
         $port.DiscardInBuffer()
         foreach ($cmd in $Commands) {
+            $port.ReadTimeout = $ReplyQuietMs
+            if ($cmd.Trim() -match '^sys\s+reset$') {
+                $countdownText = (& python -I $DefsReader IPMC_BOOT_COUNTDOWN_BENCH)
+                if ($LASTEXITCODE -ne 0) { throw 'boot countdown not read from defs.rs' }
+                # The reset reply has quiet gaps while the bootloader counts down.
+                $port.ReadTimeout = [Math]::Max($ReplyQuietMs, ([int]$countdownText + 1) * 1000)
+            }
             $port.Write("$cmd`r")
             Start-Sleep -Milliseconds $CommandSettleMs
             $out = New-Object System.Text.StringBuilder
