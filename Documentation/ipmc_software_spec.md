@@ -1,7 +1,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -9,7 +9,7 @@
 <div style="height: 8.2in; display: flex; flex-direction: column; justify-content: center; text-align: center;">
 <h1 style="border: none;">VITA 46.11 Tier-1 IPMC Software Specification</h1>
 <p style="font-size: 16px;">IPMIRustFRU: Rust IPMC firmware for the NUCLEO-F401RE, x86 emulator and bench tools</p>
-<p style="font-size: 16px;"><strong>Revision 11-13-2026</strong></p>
+<p style="font-size: 16px;"><strong>Revision 11-21-2026</strong></p>
 </div>
 
 <div style="page-break-after: always;"></div>
@@ -17,7 +17,7 @@
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -88,7 +88,7 @@ The Google Slides reference copies wait for the Drive folder (`Documentation/dia
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -138,7 +138,8 @@ by the Chassis Manager, FRU activation policy; they belong to the commercial rel
 optional Tier-1 commands (Get Mandatory Sensor Numbers,
 FRU Control Capabilities, Get IPMB Link Info, Get FRU Hash, Get Device GUID, Set SEL Time:
 all answer C1h), subsidiary FRUs, and IPMI bridging. The built FRU image has no Internal Use
-or MultiRecord area; `verify` still checks those areas when a written image contains them.
+area; `verify` still checks that area when a written image contains one. Its MultiRecord area
+holds one record, the VITA 46.11 Alternate Manufacturing Date/Time record.
 
 The code is the authority for every statement here. Where the VITA 46.11-2022 text and the
 captured live Chassis Manager disagree, the code follows the specification.
@@ -148,7 +149,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -194,7 +195,7 @@ captured live Chassis Manager disagree, the code follows the specification.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -259,7 +260,7 @@ The spec-only suite in `tools/conformance/` (section 13) checks the IPMC against
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -380,7 +381,7 @@ logic and the binaries; it is the only place the private Tier-2/3 extension ente
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -461,7 +462,7 @@ first (`PowerOnRefused::DeactivationInProgress` in M6), then `power_on_allowed`
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -642,7 +643,7 @@ Pin assignments are not in `defs.rs`: they live in the owning board-support modu
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -1318,7 +1319,7 @@ firmware glue in section 15.7); the image header, the digest and the update proc
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2040,7 +2041,7 @@ rule above, tags every request, keeps in step with the prompt, and exits 0 when 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2086,7 +2087,7 @@ flash and, after a software reset, the request sequence words described below.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2153,7 +2154,7 @@ emulator models the board.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2301,7 +2302,7 @@ switch and its mechanism are public code; section 7.2 lists the commands of the 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2461,7 +2462,7 @@ event enable).
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2608,7 +2609,7 @@ enables cannot disagree.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2713,7 +2714,7 @@ released and PGOOD read deasserted) and, at Tier-3 only, the standing deactivati
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2780,7 +2781,7 @@ the payload off at boot.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2854,7 +2855,7 @@ sequenceDiagram
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2902,7 +2903,7 @@ master runs at it. Bus recovery at start-up runs at 100 kHz.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -2952,7 +2953,7 @@ saves it after the quiet time.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3031,7 +3032,7 @@ sends at that moment is lost and recovered by the requester's retry.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3162,7 +3163,7 @@ frame from rsSA or the ASCII line. A failed `OUT` frame is the frame followed by
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3261,7 +3262,7 @@ for a given Tier; `out` holds `sensor::READING_LEN_MAX` = 4 bytes), `warm_reset(
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3412,7 +3413,7 @@ name check, and lints the evaluation code with `IPMC_EVAL=1` in the firmware cli
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3522,7 +3523,7 @@ links firmware downloads, operator instructions, license/pricing and the public 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3599,7 +3600,7 @@ links firmware downloads, operator instructions, license/pricing and the public 
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -3854,7 +3855,7 @@ PWR_EN, PAYLOAD_RST_OUT_N, the ADC, I2C1, I2C3 or the FRU store.
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
@@ -4134,7 +4135,7 @@ sections 13.2 and 13.3):
 <table style="width:100%; border:none; margin:0; padding:0;">
 <tr>
 <td style="text-align:left; border:none; padding:0; width:50%;"><strong>PUBLIC SOFTWARE SPECIFICATION</strong></td>
-<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-13-2026</strong></td>
+<td style="text-align:right; border:none; padding:0; width:50%;"><strong>Revision 11-21-2026</strong></td>
 </tr>
 </table>
 <hr style="border:none; border-top:2px solid #000; margin:4px 0 12px 0;">
