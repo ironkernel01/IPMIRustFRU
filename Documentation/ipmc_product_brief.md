@@ -565,3 +565,14 @@ The bootloader supports `INFO`, `ERASE APP`, `LOAD`, `VERIFY` and `RUN`; the pub
 `tools/fwupdate/fwupdate.py` automates entry, erase, HEX loading, verification and
 restart. Ordinary APP update preserves the bootloader and stored FRU data.
 <!-- end generated: sync_demo_commands.py -->
+
+## Contact IronKernel
+
+IronKernel can review your VPX board design, help bring up the System IPMB and
+adapt the Rust IPMC firmware to your board's FRU data, sensors and payload
+controls.
+
+To discuss IPMC integration, a reference design or custom development, send
+your target board, project goal and required VITA 46.11 tier.
+
+[IronKernel.com](https://ironkernel.com/) | [support@ironkernel.com](mailto:support@ironkernel.com)

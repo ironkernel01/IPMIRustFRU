@@ -4206,3 +4206,15 @@ sections 13.2 and 13.3):
 - **No custom registers.** The firmware uses the STM32F401 peripherals through the `stm32f4` PAC;
   each driver names the RM0368 section of every register field it writes (I2C chapter 18, flash
   section 3.5, RCC chapter 6, ADC chapter 11, GPIO chapter 8).
+
+## Contact IronKernel
+
+IronKernel provides board design review, bring-up and bare-metal firmware
+development for VPX management controllers. We can help port the Rust IPMC,
+integrate the IPMB and adapt FRU records, sensor definitions and payload controls.
+
+To discuss firmware integration, a reference design or custom development, send
+your target board, project goal, required VITA 46.11 tier and Chassis Manager
+interface requirements.
+
+[IronKernel.com](https://ironkernel.com/) | [support@ironkernel.com](mailto:support@ironkernel.com)
